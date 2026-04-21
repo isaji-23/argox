@@ -8,7 +8,7 @@ Argox is an SDK that gives engineering teams full visibility into what their AI 
 
 ## Why this exists
 
-AI agents are moving from demos to production. Once they run autonomously - calling tools, spending money, making decisions - you need answers to questions that logging alone can't solve:
+AI agents are moving from demos to production. Once they run autonomously (calling tools, spending money, making decisions) you need answers to questions that logging alone can't solve:
 
 - **What did the agent actually do?** Full traces of every step, not just the final output.
 - **Was it allowed to do that?** Real-time policy evaluation that can log, alert or block actions before they happen.
@@ -36,13 +36,13 @@ A web interface for exploring agent timelines, monitoring costs, reviewing polic
 
 ## Design principles
 
-**Low overhead.** The SDK lives in your agent's process and is engineered to add minimal latency. Policy evaluation happens against a local cache - no network round-trips in the hot path.
+**Low overhead.** The SDK lives in your agent's process and is engineered to add minimal latency. Policy evaluation happens against a local cache, no network round-trips in the hot path.
 
 **Fail-open by default.** If the monitoring infrastructure degrades, your agents keep running. Strict enforcement is opt-in and explicit, never a surprise.
 
 **Self-hosted first.** The entire stack runs on your infrastructure. No data leaves your environment unless you explicitly configure it to. No SaaS dependency, no phone-home, no telemetry by default.
 
-**Data sovereignty by design.** Sensitive data can be redacted at the edge before it ever leaves the agent process. Audit logs are append-only with cryptographic integrity. This isn't a feature - it's an architectural constraint.
+**Data sovereignty by design.** Sensitive data can be redacted at the edge before it ever leaves the agent process. Audit logs are append-only with cryptographic integrity. This isn't a feature, it's an architectural constraint.
 
 ## EU AI Act compliance
 
@@ -70,16 +70,18 @@ Please read [CONTRIBUTING.md](CONTRIBUTING.md) before submitting a pull request.
 | Iñigo S. Jiménez Montoro | Developer | [@isaji-23](https://github.com/isaji-23) |
 | Marcos Calvo Sánchez | Developer | [@MarcosCS2004](https://github.com/MarcosCS2004) |
 | Ángel Toledo Rodelgo | Developer | [@Negerty48](https://github.com/Negerty48) |
-| Daniel Andrés Castillo Olivares | Technical Advisor | ... |
-| Jose Vicente Sáez Ibáñez | Technical Advisor | ... |
+| Daniel Andrés Castillo Olivares | Technical Advisor | [@DanielAndresCastillo](https://github.com/DanielAndresCastillo) |
+| Jose Vicente Sáez Ibáñez | Technical Advisor | [@jovisaib](https://github.com/jovisaib) |
 
 ## License
 
-This project is licensed under the [Apache License 2.0](LICENSE) - you're free to use, modify and distribute it, including in commercial products.
+This project is licensed under the [Apache License 2.0](LICENSE), you're free to use, modify and distribute it, including in commercial products.
 
 ## Acknowledgments
 
-Argox is a Final Master's Thesis (TFM) project developed as part of the Master's in Artificial Intelligence and Big Data at **Tajamar Tech**. Built in collaboration with **Aliando**, the project bridges academic research and real-world engineering needs, applying what we've learned about AI systems, data pipelines and large-scale architectures to a problem that the industry is actively trying to solve: how to monitor, govern and audit autonomous AI agents in production.
+Argox is a Final Master's Thesis (TFM) project developed as part of the Master's in Artificial Intelligence and Big Data at **Tajamar Tech** with the support of **Microsoft**.
+
+Built in collaboration with **Aliando**, the project bridges academic research and real-world engineering needs, applying what we've learned about AI systems, data pipelines and large-scale architectures to a problem that the industry is actively trying to solve: how to monitor, govern and audit autonomous AI agents in production.
 
 ---
 
