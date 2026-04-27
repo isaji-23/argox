@@ -13,6 +13,8 @@ Thank you for your interest in contributing to **Argox**! This document outlines
 	- [Development Environment](#development-environment)
 	- [Branching Strategy](#branching-strategy)
 		- [Branch Naming Conventions](#branch-naming-conventions)
+		- [Pushing a Branch for the First Time](#pushing-a-branch-for-the-first-time)
+		- [Deleting a Branch After Merging](#deleting-a-branch-after-merging)
 	- [Commit Guidelines](#commit-guidelines)
 	- [Pull Request Process](#pull-request-process)
 	- [Project Board \& Issue Tracking](#project-board--issue-tracking)
@@ -75,6 +77,49 @@ Argox follows a **simplified GitHub Flow**:
 git checkout main
 git pull origin main
 git checkout -b feat/your-feature-name
+```
+
+### Pushing a Branch for the First Time
+
+The first time you push a new branch, Git doesn't yet know which remote branch it should track. Run:
+
+```bash
+git push --set-upstream origin feat/your-feature-name
+# or equivalently
+git push -u origin feat/your-feature-name
+```
+
+The `-u` flag links your local branch to `origin/feat/your-feature-name`. From that point on, a plain `git push` is enough.
+
+If you want this to happen automatically for every new branch without having to think about it, enable the following global option:
+
+```bash
+git config --global push.autoSetupRemote true
+```
+
+### Deleting a Branch After Merging
+
+Once your PR has been merged, delete the branch both remotely and locally to keep the repository tidy.
+
+**Delete the remote branch:**
+
+```bash
+git push origin --delete feat/your-feature-name
+```
+
+**Delete the local branch** (switch to `main` first):
+
+```bash
+git checkout main
+git branch -d feat/your-feature-name
+```
+
+The `-d` flag is safe: it only deletes the branch if it has already been merged. Use `-D` (uppercase) only if you need to force-delete an unmerged branch.
+
+Finally, bring your local `main` up to date:
+
+```bash
+git pull origin main
 ```
 
 ---
