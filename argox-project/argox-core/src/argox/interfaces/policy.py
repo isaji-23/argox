@@ -1,26 +1,26 @@
 """
 IFACE-03 — PolicyClient
 ========================
-Contrato que abstrae la comunicación con el servicio externo de políticas.
+Contract that abstracts communication with the external policy service.
 
-Desacopla el SDK del transporte concreto: el stub local (para desarrollo sin
-red) y el cliente SSE real (para producción) son implementaciones distintas
-del mismo contrato. El ArgoxManager solo conoce esta interfaz.
+It decouples the SDK from the concrete transport: the local stub (for development without
+network) and the real SSE client (for production) are distinct implementations
+of the same contract. The ArgoxManager only knows this interface.
 
-Modelo de evaluación
+Evaluation Model
 --------------------
-Toda evaluación devuelve un ``PolicyResult``: un objeto inmutable con el
-veredicto (``passed``), un motivo legible (``reason``) y el nombre de la
-regla que lo generó (``rule_id``). Esto permite al Manager loguear y auditar
-sin depender del formato interno de cada implementación.
+Every evaluation returns a ``PolicyResult``: an immutable object with the
+verdict (``passed``), a readable reason (``reason``), and the name of the
+rule that generated it (``rule_id``). This allows the Manager to log and audit
+without depending on the internal format of each implementation.
 
-Puntos de evaluación
+Evaluation Points
 --------------------
-El ciclo de vida de una ejecución tiene tres puntos donde se aplican políticas:
+The lifecycle of an execution has three points where policies are applied:
 
-  1. ``check_input``  — antes de enviar el prompt al agente.
-  2. ``is_tool_allowed``   — antes de permitir que el agente llame a una tool.
-  3. ``check_output`` — después de recibir la respuesta final del agente.
+  1. ``check_input``  — before sending the prompt to the agent.
+  2. ``is_tool_allowed``   — before allowing the agent to call a tool.
+  3. ``check_output`` — after receiving the final response from the agent.
 """
 
 from __future__ import annotations
@@ -32,49 +32,49 @@ from dataclasses import dataclass
 @dataclass(frozen=True)
 class PolicyResult:
     """
-    Resultado inmutable de una evaluación de política.
+    Immutable result of a policy evaluation.
 
     Attributes:
-        passed:  ``True`` si la evaluación no encontró violaciones.
-        reason:  Descripción legible del motivo del veredicto.
-                 Vacío cuando ``passed`` es ``True``.
-        rule_id: Identificador de la regla que generó el veredicto.
-                 Útil para correlacionar con el servicio externo de políticas.
-                 Vacío cuando ``passed`` es ``True``.
+        passed:  ``True`` if the evaluation found no violations.
+        reason:  Readable description of the reason for the verdict.
+                 Empty when ``passed`` is ``True``.
+        rule_id: Identifier of the rule that generated the verdict.
+                 Useful for correlating with the external policy service.
+                 Empty when ``passed`` is ``True``.
     """
     passed: bool
     reason: str = ""
     rule_id: str = ""
 
-    # Constructores semánticos para mayor legibilidad en las implementaciones.
+    # Semantic constructors for better readability in implementations.
 
     @classmethod
     def ok(cls) -> "PolicyResult":
-        """Veredicto positivo sin información adicional."""
+        """Positive verdict without additional information."""
         return cls(passed=True)
 
     @classmethod
     def block(cls, reason: str, rule_id: str = "") -> "PolicyResult":
-        """Veredicto negativo con motivo obligatorio."""
+        """Negative verdict with a mandatory reason."""
         return cls(passed=False, reason=reason, rule_id=rule_id)
 
 
 class PolicyClient(ABC):
     """
-    Interfaz abstracta para clientes del servicio de políticas.
+    Abstract interface for policy service clients.
 
-    Implementaciones previstas:
-        - ``LocalPolicyClient``  — reglas hardcodeadas, sin red. Stub de desarrollo.
-        - ``SsePolicyClient``    — consume el servicio externo vía SSE con caché local.
+    Planned implementations:
+        - ``LocalPolicyClient``  — hardcoded rules, no network. Development stub.
+        - ``SsePolicyClient``    — consumes the external service via SSE with local cache.
 
-    Todas las implementaciones deben:
-        - Ser seguras ante fallos de red: si el servicio no responde, aplicar
-          la política de fallback configurada (por defecto: permitir con warning).
-        - No lanzar excepciones hacia el Manager — capturar y devolver
-          ``PolicyResult.block(reason="...")`` si algo falla internamente.
-        - Ser stateless por llamada: el estado de caché es interno a la implementación.
+    All implementations must:
+        - Be fail-safe against network errors: if the service does not respond, apply
+          the configured fallback policy (by default: allow with warning).
+        - Not raise exceptions to the Manager — catch and return
+          ``PolicyResult.block(reason="...")`` if something fails internally.
+        - Be stateless per call: the cache state is internal to the implementation.
 
-    Ejemplo de uso en ArgoxManager::
+    Usage example in ArgoxManager::
 
         result = await self.policy.check_input(prompt)
         if not result.passed:
@@ -85,43 +85,44 @@ class PolicyClient(ABC):
     @abstractmethod
     async def check_input(self, text: str) -> PolicyResult:
         """
-        Evalúa el prompt del usuario antes de enviarlo al agente.
+        Evaluates the user prompt before sending it to the agent.
 
         Args:
-            text: El prompt completo tal como lo introduce el usuario.
+            text: The full prompt as entered by the user.
 
         Returns:
-            ``PolicyResult.ok()`` si el input es aceptable.
-            ``PolicyResult.block(...)`` si debe bloquearse la ejecución.
+            ``PolicyResult.ok()`` if the input is acceptable.
+            ``PolicyResult.block(...)`` if the execution should be blocked.
         """
         ...
 
     @abstractmethod
     async def is_tool_allowed(self, tool_name: str) -> PolicyResult:
         """
-        Determina si una tool puede ser expuesta al agente.
-        Se evalúa en pre-flight: el Manager filtra la lista ANTES
-        de que el agente la reciba.
+        Determines if a tool can be exposed to the agent.
+        It is evaluated in pre-flight: the Manager filters the list BEFORE
+        the agent receives it.
 
         Args:
-            tool_name: Nombre de la tool tal como está registrada en el agente.
+            tool_name: Name of the tool as registered in the agent.
 
         Returns:
-            ``PolicyResult.ok()`` si la tool puede ejecutarse.
-            ``PolicyResult.block(...)`` si debe deshabilitarse.
+            ``PolicyResult.ok()`` if the tool can be executed.
+            ``PolicyResult.block(...)`` if it should be disabled.
         """
         ...
 
     @abstractmethod
     async def check_output(self, text: str) -> PolicyResult:
         """
-        Evalúa la respuesta final del agente antes de devolverla al usuario.
+        Evaluates the final response of the agent before returning it to the user.
 
         Args:
-            text: El output final del agente como string puro.
+            text: The final output of the agent as a pure string.
 
         Returns:
-            ``PolicyResult.ok()`` si el output es aceptable.
-            ``PolicyResult.block(...)`` si debe marcarse como violación.
+            ``PolicyResult.ok()`` if the output is acceptable.
+            ``PolicyResult.block(...)`` if it should be marked as a violation.
         """
         ...
+        
