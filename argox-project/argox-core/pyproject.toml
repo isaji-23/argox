@@ -6,7 +6,6 @@ build-backend = "hatchling.build"
 name = "argox-core"
 version = "0.1.0"
 description = "Core SDK for Argox: interfaces, manager, and telemetry foundation."
-readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
 dependencies = [
