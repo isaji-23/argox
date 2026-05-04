@@ -124,5 +124,4 @@ class PolicyClient(ABC):
             ``PolicyResult.ok()`` if the output is acceptable.
             ``PolicyResult.block(...)`` if it should be marked as a violation.
         """
-        ...
-        
+        ...        
