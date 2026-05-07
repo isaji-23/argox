@@ -2,7 +2,7 @@ from dataclasses import dataclass, field
 from typing import Dict, Any
 
 
-@dataclass
+@dataclass(frozen=True)
 class RunContext:
     """
     Lightweight context object carried through the SDK pipelines.
@@ -22,4 +22,8 @@ class RunContext:
     """The name of the agent currently running."""
     
     metadata: Dict[str, Any] = field(default_factory=dict)
-    """Dictionary to hold any additional contextual data."""
+    """Dictionary to hold any additional contextual data.
+    
+    Note: Processors should treat this dictionary as read-only to ensure 
+    execution integrity and prevent side effects across the pipeline.
+    """
