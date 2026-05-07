@@ -18,7 +18,7 @@ def test_init_telemetry_defaults():
     attributes = provider.resource.attributes
     assert attributes["service.name"] == "argox-agent"
     assert attributes["service.version"] == "0.1.0"
-    assert attributes["telemetry.sdk.name"] == "argox"
+    assert attributes["telemetry.distro.name"] == "argox"
 
 
 def test_init_telemetry_custom_attributes():

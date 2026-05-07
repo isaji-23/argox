@@ -25,7 +25,7 @@ def init_telemetry(
         {
             "service.name": service_name,
             "service.version": service_version,
-            "telemetry.sdk.name": "argox",
+            "telemetry.distro.name": "argox",
         }
     )
 
