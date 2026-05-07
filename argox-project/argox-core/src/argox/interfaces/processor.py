@@ -1,7 +1,7 @@
 """Abstract base class for Argox processors that transform agent data in-flight."""
 
 from abc import ABC, abstractmethod
-from typing import Any
+from argox.core.context import RunContext
 
 
 class ArgoxProcessor(ABC):
@@ -19,7 +19,7 @@ class ArgoxProcessor(ABC):
     """
 
     @abstractmethod
-    async def process_input(self, text: str, ctx: Any) -> str:
+    async def process_input(self, text: str, ctx: RunContext) -> str:
         """
         Transform the user prompt before sending it to the LLM.
         
@@ -38,7 +38,7 @@ class ArgoxProcessor(ABC):
         pass
 
     @abstractmethod
-    async def process_tool_args(self, tool_name: str, args: dict, ctx: Any) -> dict:
+    async def process_tool_args(self, tool_name: str, args: dict, ctx: RunContext) -> dict:
         """
         Transform or validate tool call arguments before tool execution.
         
@@ -58,7 +58,7 @@ class ArgoxProcessor(ABC):
         pass
 
     @abstractmethod
-    async def process_output(self, text: str, ctx: Any) -> str:
+    async def process_output(self, text: str, ctx: RunContext) -> str:
         """
         Transform, clean, or audit the LLM response before returning to the user.
         
