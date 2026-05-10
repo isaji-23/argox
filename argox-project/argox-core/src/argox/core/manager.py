@@ -112,7 +112,6 @@ class ArgoxManager:
             # 4. Instrument agent and execute
             instrumented = plugin.instrument(agent, metrics)
             raw_result = await runner(instrumented, processed_prompt)
-            metrics.end_time = time.time()
 
             # 5. Extract tokens and raw output
             plugin.extract_tokens(raw_result, metrics)
