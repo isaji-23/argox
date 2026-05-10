@@ -196,6 +196,16 @@ class TestRun:
         assert exp.exports[0].agent_name == "test-agent"
 
     @pytest.mark.asyncio
+    async def test_raw_prompt_stored_in_metrics(self):
+        mgr = ArgoxManager()
+        mgr.register_plugin(_FakePlugin())
+        mgr.register_processor(_PrefixProcessor())
+        exp = _CapturingExporter()
+        mgr.register_exporter(exp)
+        await mgr.run(_FakeAgent(), "original prompt", "fake", _fake_runner)
+        assert exp.exports[0].prompt == "original prompt"
+
+    @pytest.mark.asyncio
     async def test_final_output_stored(self):
         mgr = ArgoxManager()
         mgr.register_plugin(_FakePlugin())

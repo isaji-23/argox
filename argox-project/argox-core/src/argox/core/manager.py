@@ -75,6 +75,7 @@ class ArgoxManager:
         """
         plugin = self._plugins[plugin_name]
         metrics = AgentRunMetrics(agent_name=agent.name if hasattr(agent, "name") else plugin_name)
+        metrics.prompt = prompt
         ctx = RunContext(run_id=metrics.run_id, agent_name=metrics.agent_name, metadata=metadata or {})
 
         original_tools = _snapshot_tools(agent)
