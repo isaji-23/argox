@@ -138,7 +138,12 @@ class ArgoxManager:
             if metrics.end_time is None:
                 metrics.end_time = time.time()
             for exporter in self._exporters:
-                exporter.export(metrics)
+                try:
+                    exporter.export(metrics)
+                except Exception as exc:
+                    metrics.exporter_errors.append(
+                        f"{type(exporter).__name__}: {exc}"
+                    )
 
 
 def _extract_tool_names(agent: Any) -> list[str]:

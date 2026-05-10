@@ -107,6 +107,9 @@ class AgentRunMetrics:
     output_policy_passed: bool = True
     policy_violations: list[str] = field(default_factory=list)
 
+    # Export tracking
+    exporter_errors: list[str] = field(default_factory=list)
+
     @property
     def duration(self) -> float:
         """Elapsed seconds from start to end. Returns 0.0 if still running."""
@@ -171,4 +174,5 @@ class AgentRunMetrics:
                 "output_passed": self.output_policy_passed,
                 "violations": self.policy_violations,
             },
+            "exporter_errors": self.exporter_errors,
         }

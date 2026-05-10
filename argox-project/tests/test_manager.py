@@ -385,6 +385,53 @@ class TestPolicy:
         assert exp.exports[0].tools_available == []
 
     @pytest.mark.asyncio
+    async def test_failing_exporter_does_not_mask_run_result(self):
+        """A raising exporter must not propagate and must not suppress the return value."""
+
+        class _BrokenExporter(ExporterBase):
+            def export(self, metrics: AgentRunMetrics) -> None:
+                raise RuntimeError("disk full")
+
+        mgr = ArgoxManager()
+        mgr.register_plugin(_FakePlugin())
+        mgr.register_exporter(_BrokenExporter())
+        result = await mgr.run(_FakeAgent(), "hello", "fake", _fake_runner)
+        assert "response to: hello" in result
+
+    @pytest.mark.asyncio
+    async def test_failing_exporter_error_collected_in_metrics(self):
+        """Exporter errors must be recorded in metrics.exporter_errors."""
+
+        class _BrokenExporter(ExporterBase):
+            def export(self, metrics: AgentRunMetrics) -> None:
+                raise RuntimeError("disk full")
+
+        capturing = _CapturingExporter()
+        mgr = ArgoxManager()
+        mgr.register_plugin(_FakePlugin())
+        mgr.register_exporter(_BrokenExporter())
+        mgr.register_exporter(capturing)
+        await mgr.run(_FakeAgent(), "hello", "fake", _fake_runner)
+        assert len(capturing.exports[0].exporter_errors) == 1
+        assert "disk full" in capturing.exports[0].exporter_errors[0]
+
+    @pytest.mark.asyncio
+    async def test_subsequent_exporters_run_after_failure(self):
+        """A raising exporter must not prevent later exporters from running."""
+
+        class _BrokenExporter(ExporterBase):
+            def export(self, metrics: AgentRunMetrics) -> None:
+                raise RuntimeError("network error")
+
+        capturing = _CapturingExporter()
+        mgr = ArgoxManager()
+        mgr.register_plugin(_FakePlugin())
+        mgr.register_exporter(_BrokenExporter())
+        mgr.register_exporter(capturing)
+        await mgr.run(_FakeAgent(), "hello", "fake", _fake_runner)
+        assert len(capturing.exports) == 1
+
+    @pytest.mark.asyncio
     async def test_exporter_called_even_on_input_block(self):
         mgr = ArgoxManager(policy=_BlockInputPolicy())
         mgr.register_plugin(_FakePlugin())
