@@ -325,6 +325,20 @@ class TestPolicy:
         assert metrics.tools_blocked == []
 
     @pytest.mark.asyncio
+    async def test_empty_tools_list_not_overridden_by_agent_tools(self):
+        """tools=[] must mean no tools, not fall back to agent.tools."""
+
+        class _AgentWithTools(_FakeAgent):
+            tools = ["injected_tool"]
+
+        mgr = ArgoxManager()
+        mgr.register_plugin(_FakePlugin())
+        exp = _CapturingExporter()
+        mgr.register_exporter(exp)
+        await mgr.run(_AgentWithTools(), "prompt", "fake", _fake_runner, tools=[])
+        assert exp.exports[0].tools_available == []
+
+    @pytest.mark.asyncio
     async def test_exporter_called_even_on_input_block(self):
         mgr = ArgoxManager(policy=_BlockInputPolicy())
         mgr.register_plugin(_FakePlugin())

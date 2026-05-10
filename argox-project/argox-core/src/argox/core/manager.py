@@ -92,7 +92,7 @@ class ArgoxManager:
                     raise PermissionError(f"[POLICY:{result.rule_id}] {result.reason}")
 
             # 3. Filter tools via policy
-            raw_tools = tools or _extract_tool_names(agent)
+            raw_tools = _extract_tool_names(agent) if tools is None else tools
             if self._policy is not None and raw_tools:
                 for tool_name in raw_tools:
                     tool_result = await self._policy.is_tool_allowed(tool_name)
