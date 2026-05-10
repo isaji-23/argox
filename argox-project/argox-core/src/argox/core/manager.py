@@ -77,6 +77,7 @@ class ArgoxManager:
         metrics = AgentRunMetrics(agent_name=agent.name if hasattr(agent, "name") else plugin_name)
         ctx = RunContext(run_id=metrics.run_id, agent_name=metrics.agent_name, metadata=metadata or {})
 
+        original_tools = _snapshot_tools(agent)
         try:
             # 1. Process input
             processed_prompt = prompt
@@ -133,6 +134,7 @@ class ArgoxManager:
             return output
 
         finally:
+            _restore_tools(agent, original_tools)
             if metrics.end_time is None:
                 metrics.end_time = time.time()
             for exporter in self._exporters:
@@ -149,6 +151,19 @@ def _extract_tool_names(agent: Any) -> list[str]:
         elif isinstance(tool, str):
             names.append(tool)
     return names
+
+
+def _snapshot_tools(agent: Any) -> list | None:
+    """Return a shallow copy of agent.tools, or None if the attribute is absent."""
+    if not hasattr(agent, "tools"):
+        return None
+    return list(agent.tools)
+
+
+def _restore_tools(agent: Any, snapshot: list | None) -> None:
+    """Restore agent.tools to its pre-run state."""
+    if snapshot is not None:
+        agent.tools = snapshot
 
 
 def _apply_tool_filter(agent: Any, allowed: list[str]) -> None:

@@ -344,6 +344,33 @@ class TestPolicy:
         assert tools_seen[0] == ["safe"]
 
     @pytest.mark.asyncio
+    async def test_agent_tools_restored_after_run(self):
+        """agent.tools must be back to its original state after run() returns."""
+
+        class _AgentWithTools(_FakeAgent):
+            tools = ["safe", "dangerous"]
+
+        agent = _AgentWithTools()
+        mgr = ArgoxManager(policy=_BlockToolPolicy("dangerous"))
+        mgr.register_plugin(_FakePlugin())
+        await mgr.run(agent, "prompt", "fake", _fake_runner, tools=["safe", "dangerous"])
+        assert agent.tools == ["safe", "dangerous"]
+
+    @pytest.mark.asyncio
+    async def test_agent_tools_restored_even_on_policy_error(self):
+        """agent.tools must be restored even when run() raises."""
+
+        class _AgentWithTools(_FakeAgent):
+            tools = ["safe", "dangerous"]
+
+        agent = _AgentWithTools()
+        mgr = ArgoxManager(policy=_BlockInputPolicy())
+        mgr.register_plugin(_FakePlugin())
+        with pytest.raises(PermissionError):
+            await mgr.run(agent, "bad", "fake", _fake_runner, tools=["safe", "dangerous"])
+        assert agent.tools == ["safe", "dangerous"]
+
+    @pytest.mark.asyncio
     async def test_empty_tools_list_not_overridden_by_agent_tools(self):
         """tools=[] must mean no tools, not fall back to agent.tools."""
 
