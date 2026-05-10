@@ -105,7 +105,6 @@ class ArgoxManager:
 
             # 4. Instrument agent and execute
             instrumented = plugin.instrument(agent, metrics)
-            metrics.start_time = time.time()
             raw_result = await runner(instrumented, processed_prompt)
             metrics.end_time = time.time()
 
