@@ -10,6 +10,7 @@ from typing import Any
 
 import pytest
 
+from argox.core.context import RunContext
 from argox.core.state import AgentRunMetrics, ApiCallRecord
 from argox.interfaces.exporter import ExporterBase
 from argox.interfaces.plugin import ArgoxPlugin
@@ -79,13 +80,13 @@ class StubPlugin(ArgoxPlugin):
 class StubProcessor(ArgoxProcessor):
     """Pass-through processor that returns data unchanged."""
 
-    async def process_input(self, text: str, ctx: Any) -> str:
+    async def process_input(self, text: str, ctx: RunContext) -> str:
         return text
 
-    async def process_tool_args(self, tool_name: str, args: dict, ctx: Any) -> dict:
+    async def process_tool_args(self, tool_name: str, args: dict, ctx: RunContext) -> dict:
         return args
 
-    async def process_output(self, text: str, ctx: Any) -> str:
+    async def process_output(self, text: str, ctx: RunContext) -> str:
         return text
 
 
