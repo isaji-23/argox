@@ -149,7 +149,7 @@ class ArgoxManager:
 def _extract_tool_names(agent: Any) -> list[str]:
     """Pull tool names from an agent object that exposes a ``.tools`` attribute."""
     raw = getattr(agent, "tools", [])
-    names = []
+    names: list[str] = []
     for tool in raw:
         if hasattr(tool, "name"):
             names.append(tool.name)
