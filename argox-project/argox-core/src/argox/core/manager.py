@@ -100,6 +100,10 @@ class ArgoxManager:
                         metrics.tools_available.append(tool_name)
                     else:
                         metrics.tools_blocked.append({"name": tool_name, "reason": tool_result.reason})
+                # Best-effort enforcement: rewrite agent.tools to the allowed set so the
+                # framework cannot access blocked tools at runtime. Relies on the framework
+                # reading agent.tools at call time rather than at construction.
+                _apply_tool_filter(agent, metrics.tools_available)
             else:
                 metrics.tools_available.extend(raw_tools)
 
@@ -145,3 +149,19 @@ def _extract_tool_names(agent: Any) -> list[str]:
         elif isinstance(tool, str):
             names.append(tool)
     return names
+
+
+def _apply_tool_filter(agent: Any, allowed: list[str]) -> None:
+    """Rewrite agent.tools in-place to only the allowed set.
+
+    No-op if the agent has no ``.tools`` attribute. Enforcement is best-effort:
+    frameworks that snapshot tools at construction will not be affected.
+    """
+    if not hasattr(agent, "tools"):
+        return
+    allowed_set = set(allowed)
+    original = agent.tools
+    if all(isinstance(t, str) for t in original):
+        agent.tools = [t for t in original if t in allowed_set]
+    else:
+        agent.tools = [t for t in original if getattr(t, "name", None) in allowed_set]

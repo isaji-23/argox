@@ -325,6 +325,25 @@ class TestPolicy:
         assert metrics.tools_blocked == []
 
     @pytest.mark.asyncio
+    async def test_blocked_tools_removed_from_agent_before_runner(self):
+        """Blocked tools must be stripped from agent.tools before runner is called."""
+
+        class _AgentWithTools(_FakeAgent):
+            tools = ["safe", "dangerous"]
+
+        agent = _AgentWithTools()
+        tools_seen: list[list] = []
+
+        async def spy_runner(ag: Any, prompt: str) -> _FakeResponse:
+            tools_seen.append(list(ag.tools))
+            return _FakeResponse()
+
+        mgr = ArgoxManager(policy=_BlockToolPolicy("dangerous"))
+        mgr.register_plugin(_FakePlugin())
+        await mgr.run(agent, "prompt", "fake", spy_runner, tools=["safe", "dangerous"])
+        assert tools_seen[0] == ["safe"]
+
+    @pytest.mark.asyncio
     async def test_empty_tools_list_not_overridden_by_agent_tools(self):
         """tools=[] must mean no tools, not fall back to agent.tools."""
 
