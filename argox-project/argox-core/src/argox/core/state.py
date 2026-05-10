@@ -76,6 +76,10 @@ class AgentRunMetrics:
         input_policy_passed: False if the input policy blocked or flagged the prompt.
         output_policy_passed: False if the output policy blocked or flagged the result.
         policy_violations: Human-readable messages for each policy violation.
+        exporter_errors: Error strings collected when an exporter raises during export.
+            Each entry is formatted as ``"ExporterClassName: <error message>"``.
+            A non-empty list means at least one exporter failed; the run outcome itself
+            is unaffected.
     """
 
     agent_name: str = ""
