@@ -17,12 +17,21 @@ Typical usage::
 The decorator supports both sync and async target functions and locates the
 agent instance from the function's closure or module globals when it is not
 passed explicitly via the ``agent`` keyword.
+
+When the wrapped function declares an ``agent`` parameter the decorator
+injects the agent returned by ``plugin.instrument(...)`` into that slot, so
+plugins that wrap the agent (rather than mutating it in place) keep their
+instrumentation active during execution. When the function only takes the
+prompt and the plugin returns a wrapper distinct from the original agent, a
+``RuntimeWarning`` is emitted to flag that instrumentation will be lost.
 """
 
 from __future__ import annotations
 
 import asyncio
 import functools
+import inspect
+import warnings
 from typing import Any, Callable, Iterable, List, Optional, Tuple, Union
 
 from argox.core.manager import ArgoxManager
@@ -145,6 +154,8 @@ def monitor(
 
     def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
         is_coro = asyncio.iscoroutinefunction(fn)
+        sig_params = inspect.signature(fn).parameters
+        inject_agent = "agent" in sig_params
 
         def _resolve_agent() -> Any:
             if explicit_agent is not None:
@@ -172,13 +183,35 @@ def monitor(
             agent_obj = _resolve_agent()
             prompt = _resolve_prompt(call_args, call_kwargs)
 
-            async def runner(_agent: Any, processed_prompt: str) -> Any:
-                bound_args: List[Any] = list(call_args)
+            async def runner(instrumented_agent: Any, processed_prompt: str) -> Any:
+                bound_args: List[Any]
                 bound_kwargs = dict(call_kwargs)
-                if bound_args:
-                    bound_args[0] = processed_prompt
-                else:
+                if inject_agent:
+                    # Pass agent and prompt as keywords to avoid a positional
+                    # collision with the agent slot in the target signature.
+                    # The user-supplied prompt positional (call_args[0]) is
+                    # replaced by ``processed_prompt`` and any remaining
+                    # positionals are forwarded unchanged.
+                    bound_args = list(call_args[1:])
                     bound_kwargs["prompt"] = processed_prompt
+                    bound_kwargs["agent"] = instrumented_agent
+                else:
+                    bound_args = list(call_args)
+                    if bound_args:
+                        bound_args[0] = processed_prompt
+                    else:
+                        bound_kwargs["prompt"] = processed_prompt
+                    if instrumented_agent is not agent_obj:
+                        warnings.warn(
+                            "Plugin returned an instrumented wrapper distinct "
+                            "from the original agent but the decorated "
+                            "function does not accept an `agent` parameter. "
+                            "The wrapper will be discarded and instrumentation "
+                            "lost. Declare an `agent` parameter so the "
+                            "decorator can inject it.",
+                            RuntimeWarning,
+                            stacklevel=2,
+                        )
                 if is_coro:
                     return await fn(*bound_args, **bound_kwargs)
                 return await asyncio.to_thread(fn, *bound_args, **bound_kwargs)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import warnings
 from typing import Any
 
 import pytest
@@ -231,6 +232,92 @@ class TestPolicyAndManager:
 # ---------------------------------------------------------------------------
 # Plugin entry-point lookup
 # ---------------------------------------------------------------------------
+
+
+class _WrappingAgent:
+    """Wrapper used by plugins that do not mutate the target in place."""
+
+    def __init__(self, inner: _FakeAgent) -> None:
+        self.inner = inner
+        self.name = inner.name
+        self.tools = inner.tools
+
+
+class _WrappingPlugin(_RecordingPlugin):
+    """Plugin that returns a brand-new wrapper instead of mutating."""
+
+    @property
+    def name(self) -> str:
+        return "wrapping"
+
+    def instrument(self, target: Any, metrics: AgentRunMetrics) -> Any:
+        return _WrappingAgent(target)
+
+
+class TestAgentInjection:
+    def test_agent_param_receives_instrumented_agent(self) -> None:
+        agent = _FakeAgent()
+        plugin = _WrappingPlugin()
+        seen: list[Any] = []
+
+        @monitor(plugin=plugin, agent=agent)
+        def run(agent: Any, prompt: str) -> _FakeResult:
+            seen.append(agent)
+            return _FakeResult(text="ok")
+
+        assert run("hi") == "ok"
+        assert len(seen) == 1
+        assert isinstance(seen[0], _WrappingAgent)
+        assert seen[0].inner is agent
+
+    def test_agent_param_with_async_function(self) -> None:
+        import asyncio as _asyncio
+
+        agent = _FakeAgent()
+        plugin = _WrappingPlugin()
+        seen: list[Any] = []
+
+        @monitor(plugin=plugin, agent=agent)
+        async def run(agent: Any, prompt: str) -> _FakeResult:
+            seen.append(agent)
+            return _FakeResult(text="ok")
+
+        assert _asyncio.run(run("hi")) == "ok"
+        assert isinstance(seen[0], _WrappingAgent)
+
+    def test_warns_when_plugin_wraps_and_signature_has_no_agent(self) -> None:
+        agent = _FakeAgent()
+        plugin = _WrappingPlugin()
+
+        @monitor(plugin=plugin, agent=agent)
+        def run(prompt: str) -> _FakeResult:
+            return _FakeResult()
+
+        with pytest.warns(RuntimeWarning, match="instrumentation lost"):
+            run("hi")
+
+    def test_no_warning_when_plugin_mutates_in_place(self) -> None:
+        agent = _FakeAgent()
+
+        @monitor(plugin=_RecordingPlugin(), agent=agent)
+        def run(prompt: str) -> _FakeResult:
+            return _FakeResult()
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", RuntimeWarning)
+            run("hi")  # must not raise — no warning expected
+
+    def test_agent_param_does_not_warn_even_when_wrapping(self) -> None:
+        agent = _FakeAgent()
+        plugin = _WrappingPlugin()
+
+        @monitor(plugin=plugin, agent=agent)
+        def run(agent: Any, prompt: str) -> _FakeResult:
+            return _FakeResult()
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", RuntimeWarning)
+            run("hi")
 
 
 class TestPluginLookup:
