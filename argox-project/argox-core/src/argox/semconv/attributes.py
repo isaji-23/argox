@@ -19,6 +19,25 @@ ARGOX_POLICY_RULE_ID: Final[str] = "argox.policy.rule_id"
 ARGOX_PROCESSOR_APPLIED: Final[str] = "argox.processor.applied"
 """A list of processor names that transformed the data in-flight."""
 
+ARGOX_PROCESSOR_NAME: Final[str] = "argox.processor.name"
+"""The class name of the processor associated with a span event."""
+
+ARGOX_PROCESSOR_PHASE: Final[str] = "argox.processor.phase"
+"""The lifecycle phase the processor ran in. Possible values: 'input', 'output'."""
+
+ARGOX_PROCESSOR_STRICT: Final[str] = "argox.processor.strict"
+"""True if the failing processor was registered with fail-closed (strict) semantics."""
+
+# Span / event names
+SPAN_AGENT_RUN: Final[str] = "argox.agent.run"
+"""Top-level span emitted by ArgoxManager.run() covering the full agent lifecycle."""
+
+EVENT_PROCESSOR_APPLIED: Final[str] = "argox.processor.applied"
+"""Span event marking a successful processor invocation."""
+
+EVENT_PROCESSOR_ERROR: Final[str] = "argox.processor.error"
+"""Span event marking a processor that raised during invocation."""
+
 # Agent Attributes
 ARGOX_AGENT_VERSION: Final[str] = "argox.agent.version"
 """The registered version of the agent being executed."""
