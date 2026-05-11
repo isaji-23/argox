@@ -13,7 +13,8 @@ Run from ``argox-project/``::
 
 Expected output is a single ``argox.agent.run`` span line printed by the
 ``ConsoleSpanExporter`` plus a metrics summary printed by the custom exporter
-defined below.
+defined below. The demo wires a toy ``PolicyClient`` that blocks
+``get_current_datetime`` so the LLM must answer using only ``get_weather``.
 """
 
 from __future__ import annotations
@@ -36,6 +37,7 @@ from argox.core import ArgoxManager, init_telemetry
 from argox.core.state import AgentRunMetrics
 from argox.exporters import ConsoleSpanExporter
 from argox.interfaces.exporter import ExporterBase
+from argox.interfaces.policy import PolicyClient, PolicyResult
 from argox_openai import ArgoxOpenAIPlugin
 
 
@@ -61,20 +63,47 @@ def get_current_datetime() -> str:
     return datetime.now().isoformat()
 
 
+class _InlinePolicy(PolicyClient):
+    """Toy in-memory policy used solely for the demo.
+
+    Blocks ``get_current_datetime`` to exercise the Manager's tool-filtering path.
+    All other inputs and outputs pass through unchanged.
+    """
+
+    BLOCKED_TOOLS = {"get_current_datetime"}
+
+    async def check_input(self, text: str) -> PolicyResult:
+        return PolicyResult.ok()
+
+    async def is_tool_allowed(self, tool_name: str) -> PolicyResult:
+        if tool_name in self.BLOCKED_TOOLS:
+            return PolicyResult.block(
+                reason=f"{tool_name} disabled by demo policy",
+                rule_id="DEMO-01",
+            )
+        return PolicyResult.ok()
+
+    async def check_output(self, text: str) -> PolicyResult:
+        return PolicyResult.ok()
+
+
 class _PrintMetricsExporter(ExporterBase):
     """Tiny exporter that prints a one-shot metrics summary at the end of the run."""
 
     def export(self, metrics: AgentRunMetrics) -> None:
-        tools = [t.name for t in metrics.tools_called]
+        tools_called = [t.name for t in metrics.tools_called]
+        blocked = [b["name"] for b in metrics.tools_blocked]
         print()
         print("[metrics] agent:        ", metrics.agent_name)
         print("[metrics] success:      ", metrics.success)
         print(f"[metrics] duration:     {metrics.duration:.2f}s")
         print(f"[metrics] tokens:       in={metrics.total_input_tokens} "
               f"out={metrics.total_output_tokens} total={metrics.total_tokens}")
-        print("[metrics] tools_called: ", tools)
+        print("[metrics] tools_available:", metrics.tools_available)
+        print("[metrics] tools_blocked:  ", blocked)
+        print("[metrics] tools_called:   ", tools_called)
         if metrics.policy_violations:
-            print("[metrics] policy:       ", metrics.policy_violations)
+            print("[metrics] violations:   ", metrics.policy_violations)
 
 
 async def openai_runner(agent: Agent, prompt: str):
@@ -84,7 +113,7 @@ async def openai_runner(agent: Agent, prompt: str):
 async def main() -> None:
     init_telemetry(exporters=[ConsoleSpanExporter()])
 
-    mgr = ArgoxManager()
+    mgr = ArgoxManager(policy=_InlinePolicy())
     mgr.register_plugin(ArgoxOpenAIPlugin())
     mgr.register_exporter(_PrintMetricsExporter())
 
