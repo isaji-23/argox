@@ -141,7 +141,7 @@ class TestRegistration:
         mgr = ArgoxManager()
         proc = _PrefixProcessor()
         mgr.register_processor(proc)
-        assert proc in mgr._processors
+        assert any(p is proc for p, _ in mgr._processors)
 
     def test_unknown_plugin_raises(self):
         mgr = ArgoxManager()
