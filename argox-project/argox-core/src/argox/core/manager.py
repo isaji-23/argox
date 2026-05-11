@@ -179,15 +179,14 @@ class ArgoxManager:
                 metrics.final_output = output
                 metrics.success = True
 
+                return output
+
+            finally:
                 if applied_processors:
                     span.set_attribute(
                         ARGOX_PROCESSOR_APPLIED,
                         list(dict.fromkeys(applied_processors)),
                     )
-
-                return output
-
-            finally:
                 _restore_tools(agent, original_tools)
                 if metrics.end_time is None:
                     metrics.end_time = time.time()

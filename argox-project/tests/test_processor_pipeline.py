@@ -242,6 +242,19 @@ class TestSpanEmission:
         assert span.attributes["gen_ai.usage.output_tokens"] == 11
 
     @pytest.mark.asyncio
+    async def test_applied_attribute_set_when_strict_processor_aborts(self, span_exporter):
+        """Processors that ran before a strict failure must still appear on the run span."""
+        mgr = ArgoxManager()
+        mgr.register_plugin(_FakePlugin())
+        mgr.register_processor(_PassThroughProcessor())  # runs successfully on input
+        mgr.register_processor(_RaisingProcessor(), strict=True)  # aborts input phase
+        with pytest.raises(RuntimeError):
+            await mgr.run(_FakeAgent(), "hi", "fake", _fake_runner)
+        span = _find_run_span(span_exporter)
+        applied = span.attributes[ARGOX_PROCESSOR_APPLIED]
+        assert list(applied) == ["_PassThroughProcessor"]
+
+    @pytest.mark.asyncio
     async def test_no_processor_applied_attribute_when_none_registered(self, span_exporter):
         mgr = ArgoxManager()
         mgr.register_plugin(_FakePlugin())
