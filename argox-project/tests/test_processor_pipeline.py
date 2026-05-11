@@ -37,17 +37,36 @@ from argox.semconv.attributes import (
 
 
 _TEST_EXPORTER = InMemorySpanExporter()
-_TEST_PROVIDER = TracerProvider(resource=Resource.create({"service.name": "test"}))
-_TEST_PROVIDER.add_span_processor(SimpleSpanProcessor(_TEST_EXPORTER))
-# Bypass OTel's set-once guard so we always install the in-memory provider for this module.
-trace._TRACER_PROVIDER_SET_ONCE._done = False  # type: ignore[attr-defined]
-trace._TRACER_PROVIDER = None  # type: ignore[attr-defined]
-trace.set_tracer_provider(_TEST_PROVIDER)
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _install_in_memory_tracer_provider():
+    """Install an in-memory TracerProvider for this module, restore previous state on exit.
+
+    OTel's ``set_tracer_provider`` is set-once globally, so we bypass the guard via private
+    attributes (``_TRACER_PROVIDER`` and ``_TRACER_PROVIDER_SET_ONCE._done``) and restore
+    them when the module's tests finish. This contains the mutation to this module instead
+    of leaking across the test session.
+    """
+    saved_provider = trace._TRACER_PROVIDER  # type: ignore[attr-defined]
+    saved_set_once = trace._TRACER_PROVIDER_SET_ONCE._done  # type: ignore[attr-defined]
+
+    provider = TracerProvider(resource=Resource.create({"service.name": "test"}))
+    provider.add_span_processor(SimpleSpanProcessor(_TEST_EXPORTER))
+    trace._TRACER_PROVIDER_SET_ONCE._done = False  # type: ignore[attr-defined]
+    trace._TRACER_PROVIDER = None  # type: ignore[attr-defined]
+    trace.set_tracer_provider(provider)
+
+    yield
+
+    trace._TRACER_PROVIDER = saved_provider  # type: ignore[attr-defined]
+    trace._TRACER_PROVIDER_SET_ONCE._done = saved_set_once  # type: ignore[attr-defined]
+    _TEST_EXPORTER.clear()
 
 
 @pytest.fixture
 def span_exporter() -> InMemorySpanExporter:
-    """Yield the module-level in-memory exporter, cleared at the start of each test."""
+    """Yield the in-memory exporter, cleared at the start of each test."""
     _TEST_EXPORTER.clear()
     yield _TEST_EXPORTER
     _TEST_EXPORTER.clear()
