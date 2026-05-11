@@ -158,9 +158,8 @@ class ArgoxManager:
                 plugin.extract_tokens(raw_result, metrics)
                 output = plugin.extract_output(raw_result)
 
-                if metrics.total_input_tokens:
+                if metrics.api_calls:
                     span.set_attribute(_GEN_AI_INPUT_TOKENS, metrics.total_input_tokens)
-                if metrics.total_output_tokens:
                     span.set_attribute(_GEN_AI_OUTPUT_TOKENS, metrics.total_output_tokens)
 
                 # 6. Process output

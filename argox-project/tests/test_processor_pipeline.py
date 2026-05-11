@@ -263,6 +263,39 @@ class TestSpanEmission:
         assert span.attributes["gen_ai.usage.output_tokens"] == 11
 
     @pytest.mark.asyncio
+    async def test_token_attributes_set_when_call_records_zero_tokens(self, span_exporter):
+        """A legitimate 0-token API call must still produce token span attributes."""
+
+        class _ZeroTokenPlugin(_FakePlugin):
+            def extract_tokens(self, raw_result, metrics):
+                metrics.api_calls.append(
+                    ApiCallRecord(call_number=1, input_tokens=0, output_tokens=0, total_tokens=0)
+                )
+
+        mgr = ArgoxManager()
+        mgr.register_plugin(_ZeroTokenPlugin())
+        await mgr.run(_FakeAgent(), "hi", "fake", _fake_runner)
+        span = _find_run_span(span_exporter)
+        assert span.attributes["gen_ai.usage.input_tokens"] == 0
+        assert span.attributes["gen_ai.usage.output_tokens"] == 0
+
+    @pytest.mark.asyncio
+    async def test_no_token_attributes_when_no_api_calls(self, span_exporter):
+        """Plugins that never record an API call must leave the token attributes unset."""
+
+        class _NoApiPlugin(_FakePlugin):
+            def extract_tokens(self, raw_result, metrics):
+                pass
+
+        mgr = ArgoxManager()
+        mgr.register_plugin(_NoApiPlugin())
+        await mgr.run(_FakeAgent(), "hi", "fake", _fake_runner)
+        span = _find_run_span(span_exporter)
+        attrs = span.attributes or {}
+        assert "gen_ai.usage.input_tokens" not in attrs
+        assert "gen_ai.usage.output_tokens" not in attrs
+
+    @pytest.mark.asyncio
     async def test_applied_attribute_set_when_strict_processor_aborts(self, span_exporter):
         """Processors that ran before a strict failure must still appear on the run span."""
         mgr = ArgoxManager()
