@@ -3,8 +3,13 @@ In-process local policy cache for hot-path policy evaluation.
 
 This module implements a high-performance policy cache that stores compiled policy rules
 indexed by trigger events, enabling O(1) lookups during the critical hot-path callbacks
-of tracing processors. Pre-compiled conditions are stored as Python callables to minimize
-latency and meet the sub-200 microsecond evaluation budget for native SDK integration.
+of tracing processors (e.g., OpenAI Agents SDK TracingProcessor). Pre-compiled conditions
+are stored as Python callables to minimize latency and meet the sub-200 microsecond
+evaluation budget for native SDK integration.
+
+**Design Note**: PolicyCache is the internal hot-path evaluation layer of the future
+async SsePolicyClient. The cache itself is synchronous to meet latency requirements.
+External policy evaluation continues via the async PolicyClient interface.
 """
 
 from typing import Any, Callable, Dict, List, Tuple
@@ -19,12 +24,7 @@ class PolicyCache:
 
     The cache stores policy rules indexed by their trigger events (e.g., 'on_llm_call',
     'on_tool_call') to achieve O(1) lookups during hot-path evaluation. Each rule's
-    condition is pre-compiled into a callable predicate, eliminating parsing overhead
-    and ensuring deterministic sub-200 microsecond latency in the evaluation path.
-
-    This design enables native SDK integration with tracing processors such as the
-    OpenAI Agents SDK's TracingProcessor, allowing synchronous policy evaluation
-    directly in the hot-path callbacks without introducing measurable latency overhead.
+    condition is pre-compiled into a callable predicate, eliminating parsing overhead.
 
     Attributes:
         _rules_by_trigger: Dictionary mapping trigger event names to lists of
@@ -32,12 +32,7 @@ class PolicyCache:
     """
 
     def __init__(self) -> None:
-        """
-        Initialize the policy cache with an empty rules index.
-
-        The rules dictionary is indexed by trigger event name for O(1) access during
-        evaluation.
-        """
+        """Initialize the policy cache with an empty rules index."""
         self._rules_by_trigger: Dict[
             str, List[Tuple[PolicyRule, Callable[[Dict[str, Any]], bool]]]
         ] = {}
@@ -46,26 +41,36 @@ class PolicyCache:
         """
         Load a policy document and compile rules into the cache.
 
-        Performs an atomic-like clear-and-rebuild of the cache from the provided
-        policy document. Each rule's condition expression is compiled into a callable
-        predicate and stored in the cache indexed by its trigger event. This ensures
-        all downstream evaluate() calls use the latest policy definitions.
+        Builds a new index in a local dictionary first, then performs an atomic
+        assignment to avoid race conditions during concurrent evaluate() calls.
+        All rule conditions are compiled before the swap to ensure cache coherency
+        if compilation fails.
 
         Args:
             policy: A PolicyDocument instance containing rules to be cached and indexed.
+
+        Raises:
+            ValueError: If any rule's condition compilation fails (e.g., unknown operator).
+                        The cache remains unchanged if this occurs.
         """
-        # Clear and rebuild the cache atomically
-        self._rules_by_trigger = {}
+        # Build new index locally before atomic swap
+        new_rules_by_trigger: Dict[
+            str, List[Tuple[PolicyRule, Callable[[Dict[str, Any]], bool]]]
+        ] = {}
 
         for rule in policy.rules:
             # Compile the condition expression into a callable predicate
+            # This may raise ValueError if the condition is malformed
             predicate = compile_condition(rule.condition)
 
             # Index the rule by its trigger event for O(1) lookup
-            if rule.trigger not in self._rules_by_trigger:
-                self._rules_by_trigger[rule.trigger] = []
+            if rule.trigger not in new_rules_by_trigger:
+                new_rules_by_trigger[rule.trigger] = []
 
-            self._rules_by_trigger[rule.trigger].append((rule, predicate))
+            new_rules_by_trigger[rule.trigger].append((rule, predicate))
+
+        # Atomic swap: if we reach here, compilation succeeded
+        self._rules_by_trigger = new_rules_by_trigger
 
     def evaluate(
         self, trigger: str, metrics: Dict[str, Any]
@@ -73,53 +78,38 @@ class PolicyCache:
         """
         Evaluate policies for a given trigger event against the provided metrics.
 
-        Retrieves pre-compiled rules for the trigger and evaluates each predicate
-        against the metrics. Blocks take precedence over alerts to ensure failed
-        policies are caught immediately.
-
-        Algorithm:
-        1. Retrieve all rules indexed by trigger (O(1) lookup).
-        2. Iterate rules and evaluate pre-compiled predicates against metrics.
-        3. Return PolicyResult.block() immediately if any rule action is "block".
-        4. Store the first alert encountered and continue checking for blocks.
-        5. Return PolicyResult.alert() if only alerts were triggered.
-        6. Return PolicyResult.ok() if no rules matched or no violations occurred.
+        Blocks take precedence over alerts. If any rule action is "block" and its
+        condition matches, evaluation stops immediately. Alerts are collected; if
+        no blocks are found, the first alert is returned. Rules with action "ok"
+        are skipped (no-op).
 
         Args:
             trigger: The trigger event name (e.g., 'on_llm_call', 'on_tool_call').
             metrics: Dictionary of span metrics to evaluate against policy conditions.
 
         Returns:
-            PolicyResult: One of:
-                - PolicyResult.block(...) if a blocking rule matched.
-                - PolicyResult.alert(...) if only alerting rules matched.
-                - PolicyResult.ok() if no rules matched or all evaluations passed.
+            PolicyResult with passed=False if a blocking rule matched, passed=True
+            with a warning reason if an alert matched, or PolicyResult.ok() otherwise.
         """
         rules_for_trigger = self._rules_by_trigger.get(trigger, [])
-
         alert_result = None
 
         for rule, predicate in rules_for_trigger:
-            # Evaluate the pre-compiled predicate against the metrics
-            if predicate(metrics):
-                if rule.action == "block":
-                    # Block rules have priority; return immediately
-                    return PolicyResult.block(
-                        reason=f"Policy violation: {rule.id}",
+            if not predicate(metrics):
+                continue
+
+            if rule.action == "block":
+                return PolicyResult.block(
+                    reason=f"Policy violation: {rule.id}",
+                    rule_id=rule.id,
+                )
+            elif rule.action == "alert":
+                if alert_result is None:
+                    alert_result = PolicyResult.alert(
+                        reason=f"Policy alert: {rule.id}",
                         rule_id=rule.id,
                     )
-                elif rule.action == "alert":
-                    # Store the first alert encountered but continue checking
-                    # for blocks, since blocks take precedence
-                    if alert_result is None:
-                        alert_result = PolicyResult.alert(
-                            reason=f"Policy alert: {rule.id}",
-                            rule_id=rule.id,
-                        )
+            # action == "ok" or unknown actions are no-ops
 
-        # If an alert was triggered and no block was found, return the alert
-        if alert_result is not None:
-            return alert_result
+        return alert_result if alert_result is not None else PolicyResult.ok()
 
-        # No violations or alerts; the action is allowed
-        return PolicyResult.ok()

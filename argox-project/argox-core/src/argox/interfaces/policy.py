@@ -58,6 +58,11 @@ class PolicyResult:
         """Negative verdict with a mandatory reason."""
         return cls(passed=False, reason=reason, rule_id=rule_id)
 
+    @classmethod
+    def alert(cls, reason: str, rule_id: str = "") -> "PolicyResult":
+        """Non-blocking warning verdict. Logged but does not prevent execution."""
+        return cls(passed=True, reason=reason, rule_id=rule_id)
+
 
 class PolicyClient(ABC):
     """
