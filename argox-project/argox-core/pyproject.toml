@@ -11,6 +11,8 @@ license = { text = "MIT" }
 dependencies = [
     "opentelemetry-api>=1.20.0",
     "opentelemetry-sdk>=1.20.0",
+    "pydantic>=2.0",
+    "pyyaml>=6.0"
 ]
 
 [project.optional-dependencies]
