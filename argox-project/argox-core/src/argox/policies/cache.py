@@ -10,12 +10,18 @@ evaluation budget for native SDK integration.
 **Design Note**: PolicyCache is the internal hot-path evaluation layer of the future
 async SsePolicyClient. The cache itself is synchronous to meet latency requirements.
 External policy evaluation continues via the async PolicyClient interface.
+
+**Fail-open behavior (MVP)**: When a metric is missing from the span data, conditions
+evaluate to False (rule not triggered). Strict enforcement (fail-closed) is pending.
 """
 
-from typing import Any, Callable, Dict, List, Tuple
+from typing import Any, Callable, Dict, List, Tuple, TypeAlias
 
 from argox.interfaces.policy import PolicyResult
 from argox.policies.parser import PolicyDocument, PolicyRule, compile_condition
+
+# Type alias for rule index: maps trigger events to (rule, predicate) pairs
+RuleIndex: TypeAlias = Dict[str, List[Tuple[PolicyRule, Callable[[Dict[str, Any]], bool]]]]
 
 
 class PolicyCache:
@@ -33,9 +39,7 @@ class PolicyCache:
 
     def __init__(self) -> None:
         """Initialize the policy cache with an empty rules index."""
-        self._rules_by_trigger: Dict[
-            str, List[Tuple[PolicyRule, Callable[[Dict[str, Any]], bool]]]
-        ] = {}
+        self._rules_by_trigger: RuleIndex = {}
 
     def load_policy(self, policy: PolicyDocument) -> None:
         """
@@ -54,9 +58,7 @@ class PolicyCache:
                         The cache remains unchanged if this occurs.
         """
         # Build new index locally before atomic swap
-        new_rules_by_trigger: Dict[
-            str, List[Tuple[PolicyRule, Callable[[Dict[str, Any]], bool]]]
-        ] = {}
+        new_rules_by_trigger: RuleIndex = {}
 
         for rule in policy.rules:
             # Compile the condition expression into a callable predicate
@@ -112,4 +114,5 @@ class PolicyCache:
             # action == "ok" or unknown actions are no-ops
 
         return alert_result if alert_result is not None else PolicyResult.ok()
+
 
