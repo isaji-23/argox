@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 from typing import Any, Awaitable, Callable
 
@@ -221,6 +222,10 @@ class ArgoxManager:
             name = type(processor).__name__
             try:
                 value = await getattr(processor, method_name)(value, ctx)
+            except asyncio.CancelledError:
+                # Cancellation is control-flow, not a processor failure — let it propagate
+                # regardless of strict mode so callers can shut down cleanly.
+                raise
             except Exception as exc:
                 span.add_event(
                     EVENT_PROCESSOR_ERROR,

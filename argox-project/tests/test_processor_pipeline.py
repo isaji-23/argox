@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import pytest
@@ -165,6 +166,26 @@ class TestProcessorFailureSemantics:
         mgr.register_plugin(_FakePlugin())
         mgr.register_processor(_RaisingProcessor(), strict=True)
         with pytest.raises(RuntimeError, match="input boom"):
+            await mgr.run(_FakeAgent(), "hi", "fake", _fake_runner)
+
+    @pytest.mark.asyncio
+    async def test_cancellation_propagates_in_fail_open_mode(self, span_exporter):
+        """CancelledError must propagate even when the processor is registered fail-open."""
+
+        class _CancellingProcessor(ArgoxProcessor):
+            async def process_input(self, text: str, ctx: RunContext) -> str:
+                raise asyncio.CancelledError()
+
+            async def process_tool_args(self, tool_name, args, ctx):
+                return args
+
+            async def process_output(self, text: str, ctx: RunContext) -> str:
+                return text
+
+        mgr = ArgoxManager()
+        mgr.register_plugin(_FakePlugin())
+        mgr.register_processor(_CancellingProcessor())  # strict=False
+        with pytest.raises(asyncio.CancelledError):
             await mgr.run(_FakeAgent(), "hi", "fake", _fake_runner)
 
     @pytest.mark.asyncio
