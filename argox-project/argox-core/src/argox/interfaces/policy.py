@@ -34,13 +34,20 @@ class PolicyResult:
     """
     Immutable result of a policy evaluation.
 
+    Three semantic states are represented by factory methods:
+
+    - **block()**: Execution blocked. ``passed=False``, reason and rule_id are set.
+    - **alert()**: Policy triggered but does not block. ``passed=True`` with reason and rule_id set.
+    - **ok()**: No policy violations. ``passed=True``, reason and rule_id are empty.
+
     Attributes:
-        passed:  ``True`` if the evaluation found no violations.
-        reason:  Readable description of the reason for the verdict.
-                 Empty when ``passed`` is ``True``.
-        rule_id: Identifier of the rule that generated the verdict.
+        passed:  ``False`` if the evaluation triggered a blocking rule; ``True`` otherwise
+                 (including alerts and no violations).
+        reason:  Readable description of the verdict (block reason or alert message).
+                 Empty only in the ok() case.
+        rule_id: Identifier of the rule that triggered the verdict.
                  Useful for correlating with the external policy service.
-                 Empty when ``passed`` is ``True``.
+                 Empty only in the ok() case.
     """
     passed: bool
     reason: str = ""
@@ -50,13 +57,18 @@ class PolicyResult:
 
     @classmethod
     def ok(cls) -> "PolicyResult":
-        """Positive verdict without additional information."""
+        """Positive verdict: no violations, no alerts."""
         return cls(passed=True)
 
     @classmethod
     def block(cls, reason: str, rule_id: str = "") -> "PolicyResult":
-        """Negative verdict with a mandatory reason."""
+        """Execution blocked due to policy violation."""
         return cls(passed=False, reason=reason, rule_id=rule_id)
+
+    @classmethod
+    def alert(cls, reason: str, rule_id: str = "") -> "PolicyResult":
+        """Policy alert (warning): does not block execution but should be logged."""
+        return cls(passed=True, reason=reason, rule_id=rule_id)
 
 
 class PolicyClient(ABC):
