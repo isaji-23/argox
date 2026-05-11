@@ -1,0 +1,108 @@
+"""Real-LLM demo for the Argox SDK using Azure OpenAI.
+
+Requires the following environment variables (load via ``.env`` at the
+``argox-project`` directory):
+
+- ``AZURE_OPENAI_API_KEY``
+- ``AZURE_OPENAI_ENDPOINT``
+- ``AZURE_OPENAI_DEPLOYMENT``
+
+Run from ``argox-project/``::
+
+    python examples/demo_azure_openai.py
+
+Expected output is a single ``argox.agent.run`` span line printed by the
+``ConsoleSpanExporter`` plus a metrics summary printed by the custom exporter
+defined below.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import os
+from datetime import datetime
+
+from agents import (
+    Agent,
+    Runner,
+    function_tool,
+    set_default_openai_client,
+    set_tracing_disabled,
+)
+from dotenv import load_dotenv
+from openai import AsyncOpenAI
+
+from argox.core import ArgoxManager, init_telemetry
+from argox.core.state import AgentRunMetrics
+from argox.exporters import ConsoleSpanExporter
+from argox.interfaces.exporter import ExporterBase
+from argox_openai import ArgoxOpenAIPlugin
+
+
+load_dotenv()
+set_tracing_disabled(True)
+set_default_openai_client(
+    AsyncOpenAI(
+        api_key=os.environ["AZURE_OPENAI_API_KEY"],
+        base_url=os.environ["AZURE_OPENAI_ENDPOINT"],
+    )
+)
+
+
+@function_tool
+def get_weather(city: str) -> str:
+    """Return the current weather for a city (fake data)."""
+    return f"It is sunny and 24C in {city}."
+
+
+@function_tool
+def get_current_datetime() -> str:
+    """Return the current date and time."""
+    return datetime.now().isoformat()
+
+
+class _PrintMetricsExporter(ExporterBase):
+    """Tiny exporter that prints a one-shot metrics summary at the end of the run."""
+
+    def export(self, metrics: AgentRunMetrics) -> None:
+        tools = [t.name for t in metrics.tools_called]
+        print()
+        print("[metrics] agent:        ", metrics.agent_name)
+        print("[metrics] success:      ", metrics.success)
+        print(f"[metrics] duration:     {metrics.duration:.2f}s")
+        print(f"[metrics] tokens:       in={metrics.total_input_tokens} "
+              f"out={metrics.total_output_tokens} total={metrics.total_tokens}")
+        print("[metrics] tools_called: ", tools)
+        if metrics.policy_violations:
+            print("[metrics] policy:       ", metrics.policy_violations)
+
+
+async def openai_runner(agent: Agent, prompt: str):
+    return await Runner.run(agent, prompt)
+
+
+async def main() -> None:
+    init_telemetry(exporters=[ConsoleSpanExporter()])
+
+    mgr = ArgoxManager()
+    mgr.register_plugin(ArgoxOpenAIPlugin())
+    mgr.register_exporter(_PrintMetricsExporter())
+
+    agent = Agent(
+        name="weather-assistant",
+        instructions="Use the available tools to answer the user's question.",
+        model=os.environ["AZURE_OPENAI_DEPLOYMENT"],
+        tools=[get_weather, get_current_datetime],
+    )
+
+    output = await mgr.run(
+        agent,
+        "What's the weather in Madrid right now and what time is it?",
+        "openai",
+        openai_runner,
+    )
+    print("\nFinal output:", output)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
