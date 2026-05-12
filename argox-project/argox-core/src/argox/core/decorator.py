@@ -156,6 +156,9 @@ def monitor(
         is_coro = asyncio.iscoroutinefunction(fn)
         sig_params = inspect.signature(fn).parameters
         inject_agent = "agent" in sig_params
+        first_param = next(iter(sig_params), None)
+        has_receiver = first_param in ("self", "cls")
+        prompt_idx = 1 if has_receiver else 0
 
         def _resolve_agent() -> Any:
             if explicit_agent is not None:
@@ -170,13 +173,14 @@ def monitor(
             return found
 
         def _resolve_prompt(call_args: tuple, call_kwargs: dict) -> str:
-            if call_args:
-                return call_args[0]
+            if len(call_args) > prompt_idx:
+                return call_args[prompt_idx]
             if "prompt" in call_kwargs:
                 return call_kwargs["prompt"]
             raise TypeError(
                 "@argox.monitor expects the prompt as the first positional "
-                "argument or as the `prompt` keyword."
+                "argument (after `self`/`cls` for methods) or as the "
+                "`prompt` keyword."
             )
 
         async def _invoke(call_args: tuple, call_kwargs: dict) -> str:
@@ -189,16 +193,19 @@ def monitor(
                 if inject_agent:
                     # Pass agent and prompt as keywords to avoid a positional
                     # collision with the agent slot in the target signature.
-                    # The user-supplied prompt positional (call_args[0]) is
-                    # replaced by ``processed_prompt`` and any remaining
-                    # positionals are forwarded unchanged.
-                    bound_args = list(call_args[1:])
+                    # The user-supplied prompt positional (``call_args[prompt_idx]``)
+                    # is dropped and ``processed_prompt`` is forwarded as a
+                    # keyword. Any receiver (``self``/``cls``) and remaining
+                    # positionals after the prompt are kept unchanged.
+                    bound_args = list(call_args[:prompt_idx]) + list(
+                        call_args[prompt_idx + 1 :]
+                    )
                     bound_kwargs["prompt"] = processed_prompt
                     bound_kwargs["agent"] = instrumented_agent
                 else:
                     bound_args = list(call_args)
-                    if bound_args:
-                        bound_args[0] = processed_prompt
+                    if len(bound_args) > prompt_idx:
+                        bound_args[prompt_idx] = processed_prompt
                     else:
                         bound_kwargs["prompt"] = processed_prompt
                     if instrumented_agent is not agent_obj:

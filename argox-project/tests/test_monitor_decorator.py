@@ -320,6 +320,45 @@ class TestAgentInjection:
             run("hi")
 
 
+class TestMethodSupport:
+    def test_instance_method_resolves_prompt_after_self(self) -> None:
+        agent = _FakeAgent()
+
+        class Service:
+            @monitor(plugin=_RecordingPlugin(), agent=agent)
+            def run(self, prompt: str) -> _FakeResult:
+                return _FakeResult(text=f"method:{prompt}")
+
+        assert Service().run("hi") == "method:hi"
+
+    def test_instance_method_with_agent_injection(self) -> None:
+        agent = _FakeAgent()
+        plugin = _WrappingPlugin()
+        seen: list[Any] = []
+
+        class Service:
+            @monitor(plugin=plugin, agent=agent)
+            def run(self, agent: Any, prompt: str) -> _FakeResult:
+                seen.append((self, agent))
+                return _FakeResult(text="ok")
+
+        service = Service()
+        assert service.run("hi") == "ok"
+        assert seen[0][0] is service
+        assert isinstance(seen[0][1], _WrappingAgent)
+
+    def test_classmethod_resolves_prompt_after_cls(self) -> None:
+        agent = _FakeAgent()
+
+        class Service:
+            @classmethod
+            @monitor(plugin=_RecordingPlugin(), agent=agent)
+            def run(cls, prompt: str) -> _FakeResult:
+                return _FakeResult(text=f"cls:{prompt}")
+
+        assert Service.run("hi") == "cls:hi"
+
+
 class TestPluginLookup:
     def test_unknown_plugin_name_raises(self) -> None:
         with pytest.raises(LookupError, match="No Argox plugin registered"):
