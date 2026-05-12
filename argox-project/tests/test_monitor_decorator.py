@@ -320,6 +320,19 @@ class TestAgentInjection:
             run("hi")
 
 
+class TestSyncWrapperUnderRunningLoop:
+    @pytest.mark.asyncio
+    async def test_sync_wrapper_called_from_loop_raises_clear_error(self) -> None:
+        agent = _FakeAgent()
+
+        @monitor(plugin=_RecordingPlugin(), agent=agent)
+        def run(prompt: str) -> _FakeResult:
+            return _FakeResult()
+
+        with pytest.raises(RuntimeError, match="running event loop"):
+            run("hi")
+
+
 class TestMethodSupport:
     def test_instance_method_resolves_prompt_after_self(self) -> None:
         agent = _FakeAgent()

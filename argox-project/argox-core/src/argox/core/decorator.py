@@ -242,7 +242,17 @@ def monitor(
 
         @functools.wraps(fn)
         def sync_wrapper(*args: Any, **kwargs: Any) -> str:
-            return asyncio.run(_invoke(args, kwargs))
+            try:
+                asyncio.get_running_loop()
+            except RuntimeError:
+                return asyncio.run(_invoke(args, kwargs))
+            raise RuntimeError(
+                "@argox.monitor wrapped a synchronous function but the "
+                "wrapper was called from a running event loop (e.g. "
+                "Jupyter, pytest-asyncio, or an async handler). Decorate "
+                "an `async def` target instead, or invoke this wrapper "
+                "from a synchronous context."
+            )
 
         sync_wrapper.argox_manager = mgr  # type: ignore[attr-defined]
         return sync_wrapper
