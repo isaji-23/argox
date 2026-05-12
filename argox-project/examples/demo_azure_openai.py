@@ -15,6 +15,9 @@ Expected output is a single ``argox.agent.run`` span line printed by the
 ``ConsoleSpanExporter`` plus a metrics summary printed by the custom exporter
 defined below. The demo wires a toy ``PolicyClient`` that blocks
 ``get_current_datetime`` so the LLM must answer using only ``get_weather``.
+
+This example uses the public ``@argox.monitor`` decorator, which replaces the
+manual ``ArgoxManager`` wiring with a single declaration on the runner.
 """
 
 from __future__ import annotations
@@ -33,7 +36,8 @@ from agents import (
 from dotenv import load_dotenv
 from openai import AsyncOpenAI
 
-from argox.core import ArgoxManager, init_telemetry
+import argox
+from argox.core import init_telemetry
 from argox.core.state import AgentRunMetrics
 from argox.exporters import ConsoleSpanExporter
 from argox.interfaces.exporter import ExporterBase
@@ -106,29 +110,29 @@ class _PrintMetricsExporter(ExporterBase):
             print("[metrics] violations:   ", metrics.policy_violations)
 
 
-async def openai_runner(agent: Agent, prompt: str):
+init_telemetry(exporters=[ConsoleSpanExporter()])
+
+agent = Agent(
+    name="weather-assistant",
+    instructions="Use the available tools to answer the user's question.",
+    model=os.environ.get("AZURE_OPENAI_DEPLOYMENT", ""),
+    tools=[get_weather, get_current_datetime],
+)
+
+
+@argox.monitor(
+    plugin=ArgoxOpenAIPlugin(),
+    agent=agent,
+    policy=_InlinePolicy(),
+    exporters=[_PrintMetricsExporter()],
+)
+async def run_agent(agent: Agent, prompt: str):
     return await Runner.run(agent, prompt)
 
 
 async def main() -> None:
-    init_telemetry(exporters=[ConsoleSpanExporter()])
-
-    mgr = ArgoxManager(policy=_InlinePolicy())
-    mgr.register_plugin(ArgoxOpenAIPlugin())
-    mgr.register_exporter(_PrintMetricsExporter())
-
-    agent = Agent(
-        name="weather-assistant",
-        instructions="Use the available tools to answer the user's question.",
-        model=os.environ["AZURE_OPENAI_DEPLOYMENT"],
-        tools=[get_weather, get_current_datetime],
-    )
-
-    output = await mgr.run(
-        agent,
-        "What's the weather in Madrid right now and what time is it?",
-        "openai",
-        openai_runner,
+    output = await run_agent(
+        "What's the weather in Madrid right now and what time is it?"
     )
     print("\nFinal output:", output)
 
