@@ -7,6 +7,14 @@ This client loads policy rules from a local YAML file and evaluates them
 using the in-process PolicyCache. It implements the PolicyClient interface
 and is suitable for development without network dependencies.
 
+Design Notes:
+- **Fail-closed behavior**: Exceptions during policy evaluation return a blocking
+  result. This is intentional and defensive: errors are treated as policy violations
+  rather than permits. This differs from the production SSE client which uses
+  fail-open (allow-with-warning) semantics for network errors.
+- **No hot-reload**: Policies are loaded once during ``__init__``. To reload
+  policies from disk, instantiate a new client.
+
 Example usage::
 
     client = LocalPolicyClient("policy.yaml")
@@ -21,14 +29,15 @@ import logging
 from pathlib import Path
 from typing import Union
 
-from argox.interfaces.policy import PolicyClient, PolicyResult
-from argox.policies.cache import PolicyCache
-from argox.policies.parser import PolicyParser
-from argox.policies.triggers import (
+from argox.interfaces.policy import (
+    PolicyClient,
+    PolicyResult,
     TRIGGER_ON_INPUT,
     TRIGGER_ON_OUTPUT,
     TRIGGER_ON_TOOL_CALL,
 )
+from argox.policies.cache import PolicyCache
+from argox.policies.parser import PolicyParser
 
 logger = logging.getLogger(__name__)
 
@@ -88,7 +97,7 @@ class LocalPolicyClient(PolicyClient):
             return self.cache.evaluate(
                 trigger=TRIGGER_ON_INPUT, metrics={"prompt": text}
             )
-        except Exception as e:
+        except Exception:
             logger.exception(
                 "Policy evaluation failed for trigger=%s", TRIGGER_ON_INPUT
             )
@@ -115,7 +124,7 @@ class LocalPolicyClient(PolicyClient):
             return self.cache.evaluate(
                 trigger=TRIGGER_ON_OUTPUT, metrics={"output": text}
             )
-        except Exception as e:
+        except Exception:
             logger.exception(
                 "Policy evaluation failed for trigger=%s", TRIGGER_ON_OUTPUT
             )
@@ -142,7 +151,7 @@ class LocalPolicyClient(PolicyClient):
             return self.cache.evaluate(
                 trigger=TRIGGER_ON_TOOL_CALL, metrics={"tool_name": tool_name}
             )
-        except Exception as e:
+        except Exception:
             logger.exception(
                 "Policy evaluation failed for trigger=%s", TRIGGER_ON_TOOL_CALL
             )

@@ -28,6 +28,11 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
+# Policy trigger event constants
+TRIGGER_ON_INPUT = "on_input"
+TRIGGER_ON_OUTPUT = "on_output"
+TRIGGER_ON_TOOL_CALL = "on_tool_call"
+
 
 @dataclass(frozen=True)
 class PolicyResult:

@@ -28,8 +28,8 @@ class PolicyCache:
     """
     In-process local policy cache for evaluating compiled rules against live span metrics.
 
-    The cache stores policy rules indexed by their trigger events (e.g., 'on_llm_call',
-    'on_tool_call') to achieve O(1) lookups during hot-path evaluation. Each rule's
+    The cache stores policy rules indexed by their trigger events (e.g., 'on_input',
+    'on_tool_call', 'on_output') to achieve O(1) lookups during hot-path evaluation. Each rule's
     condition is pre-compiled into a callable predicate, eliminating parsing overhead.
 
     Attributes:
@@ -86,7 +86,7 @@ class PolicyCache:
         are skipped (no-op).
 
         Args:
-            trigger: The trigger event name (e.g., 'on_llm_call', 'on_tool_call').
+            trigger: The trigger event name (e.g., 'on_input', 'on_tool_call', 'on_output').
             metrics: Dictionary of span metrics to evaluate against policy conditions.
 
         Returns:

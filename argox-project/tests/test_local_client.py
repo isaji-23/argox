@@ -96,23 +96,14 @@ class TestLocalClientInitialization:
         """
         Verifies the client initializes and parses the policy file without errors.
 
-        The cache should be populated with the parsed policy rules.
+        The policy file is loaded and compiled into the internal cache during __init__.
+        The behavior is verified through subsequent policy evaluation tests.
         """
         client = LocalPolicyClient(policy_file)
 
         # Verify the client has a cache and parser
         assert client.cache is not None
         assert client.parser is not None
-
-        # Verify the cache has the expected triggers
-        assert "on_input" in client.cache._rules_by_trigger
-        assert "on_tool_call" in client.cache._rules_by_trigger
-        assert "on_output" in client.cache._rules_by_trigger
-
-        # Verify the number of rules for each trigger
-        assert len(client.cache._rules_by_trigger["on_input"]) == 2
-        assert len(client.cache._rules_by_trigger["on_tool_call"]) == 2
-        assert len(client.cache._rules_by_trigger["on_output"]) == 1
 
     def test_local_client_initialization_with_string_path(
         self, policy_file: Path
@@ -227,7 +218,7 @@ class TestIsToolAllowed:
         """
         Tests that a tool not explicitly mentioned in the policy is allowed.
 
-        Tools not in the blocklist should pass (fail-open).
+        When no rule matches a given trigger and metrics, evaluation returns PolicyResult.ok().
         """
         result = await local_client.is_tool_allowed("send_email")
 
