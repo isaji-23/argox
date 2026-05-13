@@ -2,16 +2,16 @@
 
 from __future__ import annotations
 
-import os
-import tempfile
-from typing import Generator
+from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
 
-from argox.policies.local_client import LocalPolicyClient
+from argox.interfaces.policy import PolicyResult
+from argox.policies.local_client import LocalPolicyClient, SYSTEM_ERROR_RULE_ID
 
 
-# Sample YAML policy with blocking rules for on_input and on_tool_call
+# Sample YAML policy with blocking rules, alert rules for on_input and on_tool_call
 SAMPLE_POLICY_YAML = """
 id: test-policy
 version: 1
@@ -24,6 +24,14 @@ rules:
       operator: contains
       threshold: secret
     action: block
+
+  - id: alert-password-input
+    trigger: on_input
+    condition:
+      metric: prompt
+      operator: contains
+      threshold: password
+    action: alert
 
   - id: block-delete-db-tool
     trigger: on_tool_call
@@ -52,50 +60,45 @@ rules:
 
 
 @pytest.fixture
-def temp_policy_file() -> Generator[str, None, None]:
+def policy_file(tmp_path: Path) -> Path:
     """
     Creates a temporary YAML policy file for testing.
 
-    Yields:
+    Args:
+        tmp_path: pytest's tmp_path fixture for temporary file creation.
+
+    Returns:
         Path to the temporary policy file.
     """
-    with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".yaml", delete=False, encoding="utf-8"
-    ) as f:
-        f.write(SAMPLE_POLICY_YAML)
-        temp_path = f.name
-
-    yield temp_path
-
-    # Cleanup
-    if os.path.exists(temp_path):
-        os.unlink(temp_path)
+    policy_path = tmp_path / "policy.yaml"
+    policy_path.write_text(SAMPLE_POLICY_YAML, encoding="utf-8")
+    return policy_path
 
 
 @pytest.fixture
-async def local_client(temp_policy_file: str) -> LocalPolicyClient:
+async def local_client(policy_file: Path) -> LocalPolicyClient:
     """
     Creates a LocalPolicyClient initialized with the test policy file.
 
     Args:
-        temp_policy_file: Path to the temporary policy file.
+        policy_file: Path to the temporary policy file.
 
     Returns:
         A LocalPolicyClient instance ready for testing.
     """
-    return LocalPolicyClient(temp_policy_file)
+    return LocalPolicyClient(policy_file)
 
 
 class TestLocalClientInitialization:
     """Test LocalPolicyClient initialization."""
 
-    def test_local_client_initialization(self, temp_policy_file: str) -> None:
+    def test_local_client_initialization(self, policy_file: Path) -> None:
         """
         Verifies the client initializes and parses the policy file without errors.
 
         The cache should be populated with the parsed policy rules.
         """
-        client = LocalPolicyClient(temp_policy_file)
+        client = LocalPolicyClient(policy_file)
 
         # Verify the client has a cache and parser
         assert client.cache is not None
@@ -107,29 +110,38 @@ class TestLocalClientInitialization:
         assert "on_output" in client.cache._rules_by_trigger
 
         # Verify the number of rules for each trigger
-        assert len(client.cache._rules_by_trigger["on_input"]) == 1
+        assert len(client.cache._rules_by_trigger["on_input"]) == 2
         assert len(client.cache._rules_by_trigger["on_tool_call"]) == 2
         assert len(client.cache._rules_by_trigger["on_output"]) == 1
+
+    def test_local_client_initialization_with_string_path(
+        self, policy_file: Path
+    ) -> None:
+        """
+        Verifies that the client accepts both str and Path objects.
+
+        The __init__ method should accept Union[str, Path].
+        """
+        # Test with string path
+        client_str = LocalPolicyClient(str(policy_file))
+        assert client_str.cache is not None
+
+        # Test with Path object
+        client_path = LocalPolicyClient(policy_file)
+        assert client_path.cache is not None
 
     def test_local_client_initialization_invalid_file(self) -> None:
         """Verifies that an invalid policy file path raises an error."""
         with pytest.raises(FileNotFoundError):
             LocalPolicyClient("/nonexistent/path/policy.yaml")
 
-    def test_local_client_initialization_invalid_yaml(self) -> None:
+    def test_local_client_initialization_invalid_yaml(self, tmp_path: Path) -> None:
         """Verifies that invalid YAML raises a ValueError."""
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".yaml", delete=False, encoding="utf-8"
-        ) as f:
-            f.write("invalid: yaml: content: [")  # Intentionally malformed YAML
-            temp_path = f.name
+        policy_file = tmp_path / "invalid.yaml"
+        policy_file.write_text("invalid: yaml: content: [", encoding="utf-8")
 
-        try:
-            with pytest.raises(ValueError, match="Failed to parse YAML"):
-                LocalPolicyClient(temp_path)
-        finally:
-            if os.path.exists(temp_path):
-                os.unlink(temp_path)
+        with pytest.raises(ValueError, match="Failed to parse YAML"):
+            LocalPolicyClient(policy_file)
 
 
 class TestCheckInput:
@@ -140,7 +152,7 @@ class TestCheckInput:
         """
         Tests that a safe prompt passes the input check.
 
-        A prompt without the blocked word should be allowed.
+        A prompt without blocked keywords should be allowed.
         """
         result = await local_client.check_input("What is the weather today?")
 
@@ -162,20 +174,21 @@ class TestCheckInput:
         assert "block-secret-input" in result.reason
 
     @pytest.mark.asyncio
-    async def test_check_input_blocked_case_sensitive(
-        self, local_client: LocalPolicyClient
-    ) -> None:
+    async def test_check_input_alert(self, local_client: LocalPolicyClient) -> None:
         """
-        Tests that the blocking is case-sensitive.
+        Tests that a prompt containing 'password' triggers an alert.
 
-        A prompt with 'Secret' (capitalized) should not be blocked by the 'secret' rule.
+        Alert rules should pass execution (passed=True) but include a reason.
         """
-        result = await local_client.check_input("This is a Secret message")
+        result = await local_client.check_input(
+            "What is my password for the system?"
+        )
 
-        # Depending on the "contains" operator implementation, this may pass or fail
-        # If case-sensitive, should pass; if case-insensitive, should block.
-        # The current implementation is case-sensitive for 'contains'.
+        # Alert rules: passed=True but reason is set
         assert result.passed is True
+        assert result.reason != ""
+        assert result.rule_id == "alert-password-input"
+        assert "alert-password-input" in result.reason
 
 
 class TestIsToolAllowed:
@@ -231,7 +244,7 @@ class TestCheckOutput:
         """
         Tests that safe output passes the check.
 
-        An output without the blocked phrase should be allowed.
+        An output without blocked phrases should be allowed.
         """
         result = await local_client.check_output("The weather today is sunny.")
 
@@ -270,6 +283,58 @@ class TestCheckOutput:
         assert result.rule_id == ""
 
 
+class TestFailSafeBehavior:
+    """Test fail-safe error handling (catch exceptions → block)."""
+
+    @pytest.mark.asyncio
+    async def test_check_input_fail_safe(self, local_client: LocalPolicyClient) -> None:
+        """
+        Tests that check_input returns block on unexpected exceptions.
+
+        Mocking cache.evaluate to raise an exception should trigger fail-safe block.
+        """
+        with patch.object(local_client.cache, "evaluate", side_effect=RuntimeError("Unexpected error")):
+            result = await local_client.check_input("test prompt")
+
+        # Fail-safe should return block with generic reason, not expose error details
+        assert result.passed is False
+        assert result.rule_id == SYSTEM_ERROR_RULE_ID
+        assert "Unexpected error" not in result.reason  # No stack trace leak
+        assert result.reason == "Input policy evaluation failed. Request denied."
+
+    @pytest.mark.asyncio
+    async def test_check_output_fail_safe(self, local_client: LocalPolicyClient) -> None:
+        """
+        Tests that check_output returns block on unexpected exceptions.
+
+        Mocking cache.evaluate to raise an exception should trigger fail-safe block.
+        """
+        with patch.object(local_client.cache, "evaluate", side_effect=ValueError("Cache error")):
+            result = await local_client.check_output("test output")
+
+        # Fail-safe should return block with generic reason
+        assert result.passed is False
+        assert result.rule_id == SYSTEM_ERROR_RULE_ID
+        assert "Cache error" not in result.reason  # No stack trace leak
+        assert result.reason == "Output policy evaluation failed. Response blocked."
+
+    @pytest.mark.asyncio
+    async def test_is_tool_allowed_fail_safe(self, local_client: LocalPolicyClient) -> None:
+        """
+        Tests that is_tool_allowed returns block on unexpected exceptions.
+
+        Mocking cache.evaluate to raise an exception should trigger fail-safe block.
+        """
+        with patch.object(local_client.cache, "evaluate", side_effect=KeyError("Missing key")):
+            result = await local_client.is_tool_allowed("some_tool")
+
+        # Fail-safe should return block with generic reason
+        assert result.passed is False
+        assert result.rule_id == SYSTEM_ERROR_RULE_ID
+        assert "Missing key" not in result.reason  # No stack trace leak
+        assert result.reason == "Tool policy evaluation failed. Tool access denied."
+
+
 class TestAsyncBehavior:
     """Test async behavior of the client."""
 
@@ -305,3 +370,4 @@ class TestAsyncBehavior:
         assert input_result.passed is True
         assert tool_result.passed is True
         assert output_result.passed is True
+

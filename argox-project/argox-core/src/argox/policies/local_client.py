@@ -17,11 +17,23 @@ Example usage::
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
+from typing import Union
 
 from argox.interfaces.policy import PolicyClient, PolicyResult
 from argox.policies.cache import PolicyCache
 from argox.policies.parser import PolicyParser
+from argox.policies.triggers import (
+    TRIGGER_ON_INPUT,
+    TRIGGER_ON_OUTPUT,
+    TRIGGER_ON_TOOL_CALL,
+)
+
+logger = logging.getLogger(__name__)
+
+# System error rule identifier for fail-safe blocks
+SYSTEM_ERROR_RULE_ID = "system_error"
 
 
 class LocalPolicyClient(PolicyClient):
@@ -38,12 +50,12 @@ class LocalPolicyClient(PolicyClient):
         parser: PolicyParser instance for loading and validating YAML files.
     """
 
-    def __init__(self, policy_path: str) -> None:
+    def __init__(self, policy_path: Union[str, Path]) -> None:
         """
         Initialize the LocalPolicyClient and load the policy file.
 
         Args:
-            policy_path: Path to the YAML policy file (absolute or relative).
+            policy_path: Path to the YAML policy file (absolute, relative, or Path object).
 
         Raises:
             FileNotFoundError: If the policy file does not exist.
@@ -53,7 +65,7 @@ class LocalPolicyClient(PolicyClient):
         self.parser: PolicyParser = PolicyParser()
 
         # Load the policy document from the file
-        document = self.parser.parse_file(policy_path)
+        document = self.parser.parse_file(str(policy_path))
 
         # Compile and cache the policy rules
         self.cache.load_policy(document)
@@ -73,12 +85,16 @@ class LocalPolicyClient(PolicyClient):
             PolicyResult.alert(...) if an alert rule matched.
         """
         try:
-            return self.cache.evaluate(trigger="on_input", metrics={"prompt": text})
+            return self.cache.evaluate(
+                trigger=TRIGGER_ON_INPUT, metrics={"prompt": text}
+            )
         except Exception as e:
-            # Fail-safe: return block on unexpected errors
+            logger.exception(
+                "Policy evaluation failed for trigger=%s", TRIGGER_ON_INPUT
+            )
             return PolicyResult.block(
-                reason=f"Unexpected error during input policy check: {e}",
-                rule_id="system_error",
+                reason="Input policy evaluation failed. Request denied.",
+                rule_id=SYSTEM_ERROR_RULE_ID,
             )
 
     async def check_output(self, text: str) -> PolicyResult:
@@ -96,12 +112,16 @@ class LocalPolicyClient(PolicyClient):
             PolicyResult.alert(...) if an alert rule matched.
         """
         try:
-            return self.cache.evaluate(trigger="on_output", metrics={"output": text})
+            return self.cache.evaluate(
+                trigger=TRIGGER_ON_OUTPUT, metrics={"output": text}
+            )
         except Exception as e:
-            # Fail-safe: return block on unexpected errors
+            logger.exception(
+                "Policy evaluation failed for trigger=%s", TRIGGER_ON_OUTPUT
+            )
             return PolicyResult.block(
-                reason=f"Unexpected error during output policy check: {e}",
-                rule_id="system_error",
+                reason="Output policy evaluation failed. Response blocked.",
+                rule_id=SYSTEM_ERROR_RULE_ID,
             )
 
     async def is_tool_allowed(self, tool_name: str) -> PolicyResult:
@@ -120,11 +140,13 @@ class LocalPolicyClient(PolicyClient):
         """
         try:
             return self.cache.evaluate(
-                trigger="on_tool_call", metrics={"tool_name": tool_name}
+                trigger=TRIGGER_ON_TOOL_CALL, metrics={"tool_name": tool_name}
             )
         except Exception as e:
-            # Fail-safe: return block on unexpected errors
+            logger.exception(
+                "Policy evaluation failed for trigger=%s", TRIGGER_ON_TOOL_CALL
+            )
             return PolicyResult.block(
-                reason=f"Unexpected error during tool policy check: {e}",
-                rule_id="system_error",
+                reason="Tool policy evaluation failed. Tool access denied.",
+                rule_id=SYSTEM_ERROR_RULE_ID,
             )
