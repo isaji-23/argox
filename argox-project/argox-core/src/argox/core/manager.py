@@ -10,6 +10,12 @@ from opentelemetry import trace
 from opentelemetry.trace import Span, Status, StatusCode
 
 from argox.core.context import RunContext
+from argox.core.metrics import (
+    record_policy_decision,
+    record_processor_invocation,
+    record_run_duration,
+    record_token_usage,
+)
 from argox.core.state import AgentRunMetrics
 from argox.interfaces.exporter import ExporterBase
 from argox.interfaces.plugin import ArgoxPlugin
@@ -130,7 +136,9 @@ class ArgoxManager:
                         metrics.input_policy_passed = False
                         metrics.policy_violations.append(result.reason)
                         _record_policy_block(span, result.rule_id, "input policy blocked")
+                        record_policy_decision(decision="block", rule_id=result.rule_id)
                         raise PermissionError(f"[POLICY:{result.rule_id}] {result.reason}")
+                    record_policy_decision(decision="ok", rule_id=None)
 
                 # 3. Filter tools via policy
                 raw_tools = _extract_tool_names(agent) if tools is None else tools
@@ -139,8 +147,10 @@ class ArgoxManager:
                         tool_result = await self._policy.is_tool_allowed(tool_name)
                         if tool_result.passed:
                             metrics.tools_available.append(tool_name)
+                            record_policy_decision(decision="ok", rule_id=None)
                         else:
                             metrics.tools_blocked.append({"name": tool_name, "reason": tool_result.reason})
+                            record_policy_decision(decision="block", rule_id=tool_result.rule_id)
                     if metrics.tools_blocked:
                         span.set_attribute(
                             ARGOX_RUN_BLOCKED_TOOLS,
@@ -161,6 +171,8 @@ class ArgoxManager:
                 if metrics.api_calls:
                     span.set_attribute(_GEN_AI_INPUT_TOKENS, metrics.total_input_tokens)
                     span.set_attribute(_GEN_AI_OUTPUT_TOKENS, metrics.total_output_tokens)
+                    record_token_usage(metrics.total_input_tokens, token_type="input")
+                    record_token_usage(metrics.total_output_tokens, token_type="output")
 
                 # 6. Process output
                 output = await self._run_processors(
@@ -174,7 +186,9 @@ class ArgoxManager:
                         metrics.output_policy_passed = False
                         metrics.policy_violations.append(result.reason)
                         _record_policy_block(span, result.rule_id, "output policy blocked")
+                        record_policy_decision(decision="block", rule_id=result.rule_id)
                         raise PermissionError(f"[POLICY:{result.rule_id}] {result.reason}")
+                    record_policy_decision(decision="ok", rule_id=None)
 
                 metrics.final_output = output
                 metrics.success = True
@@ -190,6 +204,11 @@ class ArgoxManager:
                 _restore_tools(agent, original_tools)
                 if metrics.end_time is None:
                     metrics.end_time = time.time()
+                record_run_duration(
+                    metrics.duration,
+                    agent_name=metrics.agent_name,
+                    success=metrics.success,
+                )
                 for exporter in self._exporters:
                     try:
                         exporter.export(metrics)
@@ -236,6 +255,7 @@ class ArgoxManager:
                         "exception.message": str(exc),
                     },
                 )
+                record_processor_invocation(name=name, phase=phase, status="error")
                 if strict:
                     span.set_status(
                         Status(StatusCode.ERROR, f"processor {name} failed in {phase} phase")
@@ -247,6 +267,7 @@ class ArgoxManager:
                 EVENT_PROCESSOR_APPLIED,
                 {ARGOX_PROCESSOR_NAME: name, ARGOX_PROCESSOR_PHASE: phase},
             )
+            record_processor_invocation(name=name, phase=phase, status="applied")
             applied.append(name)
         return value
 
