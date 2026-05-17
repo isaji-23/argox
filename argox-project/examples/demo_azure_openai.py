@@ -11,10 +11,21 @@ Run from ``argox-project/``::
 
     python examples/demo_azure_openai.py
 
-Expected output is a single ``argox.agent.run`` span line printed by the
-``ConsoleSpanExporter`` plus a metrics summary printed by the custom exporter
-defined below. The demo wires a toy ``PolicyClient`` that blocks
-``get_current_datetime`` so the LLM must answer using only ``get_weather``.
+The demo exercises three Argox capabilities end-to-end:
+
+1. **Policy-based tool blocking** — ``get_current_datetime`` is denied by the
+   inline policy, so the LLM must answer using only the other tools.
+2. **In-flight argument redaction (PLUGIN-02)** — a ``PiiRedactingProcessor``
+   scrubs anything that looks like an email address from tool arguments
+   *before* the tool function receives them. The processor prints each
+   redaction it performs, and the recipient tool prints exactly what it ends
+   up seeing so the in-flight mutation is visible side-by-side.
+3. **Metrics export** — a tiny custom exporter prints a one-line summary of
+   the run (tokens, duration, tools called/blocked) once the run completes.
+
+Expected output is a ``ConsoleSpanExporter`` span line for the run, plus the
+processor's redaction logs, the tools' "received" lines, and the metrics
+summary. The final answer from the LLM is printed last.
 
 This example uses the public ``@argox.monitor`` decorator, which replaces the
 manual ``ArgoxManager`` wiring with a single declaration on the runner.
@@ -24,7 +35,9 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 from datetime import datetime
+from typing import Any
 
 from agents import (
     Agent,
@@ -38,10 +51,12 @@ from openai import AsyncOpenAI
 
 import argox
 from argox.core import init_telemetry
+from argox.core.context import RunContext
 from argox.core.state import AgentRunMetrics
 from argox.exporters import ConsoleSpanExporter
 from argox.interfaces.exporter import ExporterBase
 from argox.interfaces.policy import PolicyClient, PolicyResult
+from argox.interfaces.processor import ArgoxProcessor
 from argox_openai import ArgoxOpenAIPlugin
 
 
@@ -58,6 +73,7 @@ set_default_openai_client(
 @function_tool
 def get_weather(city: str) -> str:
     """Return the current weather for a city (fake data)."""
+    print(f"[tool:get_weather] received: city={city!r}")
     return f"It is sunny and 24C in {city}."
 
 
@@ -65,6 +81,13 @@ def get_weather(city: str) -> str:
 def get_current_datetime() -> str:
     """Return the current date and time."""
     return datetime.now().isoformat()
+
+
+@function_tool
+def log_user_activity(email: str, action: str) -> str:
+    """Persist a user activity record (fake sink — prints what it received)."""
+    print(f"[tool:log_user_activity] received: email={email!r} action={action!r}")
+    return f"logged action={action!r} for {email}"
 
 
 class _InlinePolicy(PolicyClient):
@@ -91,6 +114,44 @@ class _InlinePolicy(PolicyClient):
         return PolicyResult.ok()
 
 
+class _PiiRedactingProcessor(ArgoxProcessor):
+    """Scrubs email-shaped substrings from tool argument values in flight.
+
+    Exercises the PLUGIN-02 pathway: ``ArgoxOpenAIPlugin`` wraps each function
+    tool so that registered processors run on the arguments *before* the tool
+    body executes. The processor returns a new dict; the original LLM-emitted
+    args are never seen by the tool.
+
+    ``process_input`` and ``process_output`` are pass-throughs — this demo
+    only showcases the tool-args phase.
+    """
+
+    _EMAIL_PATTERN = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
+
+    async def process_input(self, text: str, ctx: RunContext) -> str:
+        return text
+
+    async def process_tool_args(
+        self, tool_name: str, args: dict, ctx: RunContext,
+    ) -> dict:
+        scrubbed: dict[str, Any] = {}
+        for key, value in args.items():
+            if isinstance(value, str):
+                redacted = self._EMAIL_PATTERN.sub("[REDACTED]", value)
+                if redacted != value:
+                    print(
+                        f"[processor] redacted email in tool={tool_name!r} "
+                        f"arg={key!r}: {value!r} -> {redacted!r}"
+                    )
+                scrubbed[key] = redacted
+            else:
+                scrubbed[key] = value
+        return scrubbed
+
+    async def process_output(self, text: str, ctx: RunContext) -> str:
+        return text
+
+
 class _PrintMetricsExporter(ExporterBase):
     """Tiny exporter that prints a one-shot metrics summary at the end of the run."""
 
@@ -114,9 +175,14 @@ init_telemetry(exporters=[ConsoleSpanExporter()])
 
 agent = Agent(
     name="weather-assistant",
-    instructions="Use the available tools to answer the user's question.",
+    instructions=(
+        "Use the available tools to answer the user's request. "
+        "When the user asks you to record or log an activity, you MUST call "
+        "the log_user_activity tool with the email and a short action string. "
+        "When the user asks for weather, you MUST call get_weather."
+    ),
     model=os.environ.get("AZURE_OPENAI_DEPLOYMENT", ""),
-    tools=[get_weather, get_current_datetime],
+    tools=[get_weather, get_current_datetime, log_user_activity],
 )
 
 
@@ -124,6 +190,7 @@ agent = Agent(
     plugin=ArgoxOpenAIPlugin(),
     agent=agent,
     policy=_InlinePolicy(),
+    processors=[_PiiRedactingProcessor()],
     exporters=[_PrintMetricsExporter()],
 )
 async def run_agent(agent: Agent, prompt: str):
@@ -132,7 +199,8 @@ async def run_agent(agent: Agent, prompt: str):
 
 async def main() -> None:
     output = await run_agent(
-        "What's the weather in Madrid right now and what time is it?"
+        "Log that user@example.com just checked the forecast, "
+        "and tell me the weather in Madrid."
     )
     print("\nFinal output:", output)
 
