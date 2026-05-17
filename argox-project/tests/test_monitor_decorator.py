@@ -39,7 +39,12 @@ class _RecordingPlugin(ArgoxPlugin):
     def name(self) -> str:
         return "recording"
 
-    def instrument(self, target: Any, metrics: AgentRunMetrics) -> Any:
+    def instrument(
+        self,
+        target: Any,
+        metrics: AgentRunMetrics,
+        tool_args_runner: Any = None,
+    ) -> Any:
         return target
 
     def extract_tokens(self, raw_result: Any, metrics: AgentRunMetrics) -> None:
@@ -250,7 +255,12 @@ class _WrappingPlugin(_RecordingPlugin):
     def name(self) -> str:
         return "wrapping"
 
-    def instrument(self, target: Any, metrics: AgentRunMetrics) -> Any:
+    def instrument(
+        self,
+        target: Any,
+        metrics: AgentRunMetrics,
+        tool_args_runner: Any = None,
+    ) -> Any:
         return _WrappingAgent(target)
 
 

@@ -23,7 +23,10 @@ ARGOX_PROCESSOR_NAME: Final[str] = "argox.processor.name"
 """The class name of the processor associated with a span event."""
 
 ARGOX_PROCESSOR_PHASE: Final[str] = "argox.processor.phase"
-"""The lifecycle phase the processor ran in. Possible values: 'input', 'output'."""
+"""The lifecycle phase the processor ran in. Possible values: 'input', 'tool_args', 'output'."""
+
+ARGOX_PROCESSOR_TOOL_NAME: Final[str] = "argox.processor.tool_name"
+"""The tool name a processor ran against during a 'tool_args' phase invocation."""
 
 ARGOX_PROCESSOR_STRICT: Final[str] = "argox.processor.strict"
 """True if the failing processor was registered with fail-closed (strict) semantics."""
