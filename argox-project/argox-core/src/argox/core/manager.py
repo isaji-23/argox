@@ -19,7 +19,7 @@ from argox.core.metrics import (
 )
 from argox.core.state import AgentRunMetrics
 from argox.interfaces.exporter import ExporterBase
-from argox.interfaces.plugin import ArgoxPlugin
+from argox.interfaces.plugin import ArgoxPlugin, ToolArgsRunner
 from argox.interfaces.policy import PolicyClient
 from argox.interfaces.processor import ArgoxProcessor
 from argox.semconv.attributes import (
@@ -164,15 +164,16 @@ class ArgoxManager:
                     metrics.tools_available.extend(raw_tools)
 
                 # 4. Instrument agent and execute
+                tool_args_runner: ToolArgsRunner | None = None
                 if self._processors:
-                    async def tool_args_runner(
+                    async def _tool_args_runner(
                         tool_name: str, args: dict[str, Any],
                     ) -> dict[str, Any]:
                         return await self._run_tool_args_processors(
                             span, ctx, tool_name, args, applied_processors,
                         )
-                else:
-                    tool_args_runner = None
+
+                    tool_args_runner = _tool_args_runner
 
                 instrumented = plugin.instrument(
                     agent, metrics, tool_args_runner=tool_args_runner,
