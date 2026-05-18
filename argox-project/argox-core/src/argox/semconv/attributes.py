@@ -48,3 +48,29 @@ ARGOX_AGENT_VERSION: Final[str] = "argox.agent.version"
 # Run/Execution Attributes
 ARGOX_RUN_BLOCKED_TOOLS: Final[str] = "argox.run.blocked_tools"
 """A list of tools that were filtered/blocked by the policy engine during the run."""
+
+ARGOX_RUN_SUCCESS: Final[str] = "argox.run.success"
+"""Boolean attribute marking whether a run completed without unhandled errors."""
+
+ARGOX_AGENT_NAME: Final[str] = "argox.agent.name"
+"""Logical name of the agent recorded alongside run-level metrics."""
+
+ARGOX_PROCESSOR_STATUS: Final[str] = "argox.processor.status"
+"""Outcome of a processor invocation. Possible values: 'applied', 'error'."""
+
+# Metric instrument names
+METRIC_GEN_AI_TOKEN_USAGE: Final[str] = "gen_ai.client.token.usage"
+"""Counter for input/output tokens consumed by agent runs."""
+
+METRIC_GEN_AI_OPERATION_DURATION: Final[str] = "gen_ai.client.operation.duration"
+"""Histogram for total agent-run duration in seconds."""
+
+METRIC_ARGOX_POLICY_DECISIONS: Final[str] = "argox.policy.decisions"
+"""Counter for policy decisions emitted by the policy engine."""
+
+METRIC_ARGOX_PROCESSOR_INVOCATIONS: Final[str] = "argox.processor.invocations"
+"""Counter for processor invocations grouped by phase and outcome."""
+
+# Metric-only attribute keys
+GEN_AI_TOKEN_TYPE: Final[str] = "gen_ai.token.type"
+"""Distinguishes 'input' vs 'output' token-usage counter increments."""

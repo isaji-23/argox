@@ -21,11 +21,13 @@ The demo exercises three Argox capabilities end-to-end:
    redaction it performs, and the recipient tool prints exactly what it ends
    up seeing so the in-flight mutation is visible side-by-side.
 3. **Metrics export** — a tiny custom exporter prints a one-line summary of
-   the run (tokens, duration, tools called/blocked) once the run completes.
+   the run (tokens, duration, tools called/blocked) once the run completes,
+   and an OTel ``ConsoleMetricExporter`` dump is flushed once at the very
+   end via ``MeterProvider.force_flush()``.
 
-Expected output is a ``ConsoleSpanExporter`` span line for the run, plus the
-processor's redaction logs, the tools' "received" lines, and the metrics
-summary. The final answer from the LLM is printed last.
+Expected output is a ``ConsoleSpanExporter`` span line for the run, the
+processor's redaction logs, the tools' "received" lines, the in-memory
+metrics summary, the LLM's final answer, and finally the OTel metric dump.
 
 This example uses the public ``@argox.monitor`` decorator, which replaces the
 manual ``ArgoxManager`` wiring with a single declaration on the runner.
@@ -48,9 +50,10 @@ from agents import (
 )
 from dotenv import load_dotenv
 from openai import AsyncOpenAI
+from opentelemetry.sdk.metrics.export import ConsoleMetricExporter
 
 import argox
-from argox.core import init_telemetry
+from argox.core import init_metrics, init_telemetry
 from argox.core.context import RunContext
 from argox.core.state import AgentRunMetrics
 from argox.exporters import ConsoleSpanExporter
@@ -172,6 +175,12 @@ class _PrintMetricsExporter(ExporterBase):
 
 
 init_telemetry(exporters=[ConsoleSpanExporter()])
+# A 1-hour export interval keeps the periodic reader from interleaving its
+# output with the run; ``force_flush`` at the end prints one clean dump.
+_meter_provider = init_metrics(
+    exporters=[ConsoleMetricExporter()],
+    export_interval_ms=3_600_000,
+)
 
 agent = Agent(
     name="weather-assistant",
@@ -198,11 +207,14 @@ async def run_agent(agent: Agent, prompt: str):
 
 
 async def main() -> None:
-    output = await run_agent(
-        "Log that user@example.com just checked the forecast, "
-        "and tell me the weather in Madrid."
-    )
-    print("\nFinal output:", output)
+    try:
+        output = await run_agent(
+            "Log that user@example.com just checked the forecast, "
+            "and tell me the weather in Madrid."
+        )
+        print("\nFinal output:", output)
+    finally:
+        _meter_provider.force_flush()
 
 
 if __name__ == "__main__":
