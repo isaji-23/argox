@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import time
 from typing import Any, Awaitable, Callable
 
@@ -153,10 +154,15 @@ class ArgoxManager:
                     metrics.tools_available.extend(raw_tools)
 
                 # 4. Instrument agent and execute
-                async def tool_args_runner(tool_name: str, args: dict[str, Any]) -> dict[str, Any]:
-                    return await self._run_tool_args_processors(
-                        span, ctx, tool_name, args, applied_processors,
-                    )
+                if self._processors:
+                    async def tool_args_runner(
+                        tool_name: str, args: dict[str, Any],
+                    ) -> dict[str, Any]:
+                        return await self._run_tool_args_processors(
+                            span, ctx, tool_name, args, applied_processors,
+                        )
+                else:
+                    tool_args_runner = None
 
                 instrumented = plugin.instrument(
                     agent, metrics, tool_args_runner=tool_args_runner,
@@ -282,8 +288,14 @@ class ArgoxManager:
         phase = "tool_args"
         for processor, strict in self._processors:
             name = type(processor).__name__
+            # Pass a deep copy so a fail-open processor that mutates the dict
+            # in place and then raises cannot leak partial changes into the
+            # next processor or the tool. We accept the return value only on
+            # successful completion.
             try:
-                args = await processor.process_tool_args(tool_name, args, ctx)
+                result = await processor.process_tool_args(
+                    tool_name, copy.deepcopy(args), ctx,
+                )
             except asyncio.CancelledError:
                 # Cancellation is control-flow, not a processor failure — let it propagate
                 # regardless of strict mode so callers can shut down cleanly.
@@ -310,6 +322,7 @@ class ArgoxManager:
                     raise
                 continue
 
+            args = result
             span.add_event(
                 EVENT_PROCESSOR_APPLIED,
                 {

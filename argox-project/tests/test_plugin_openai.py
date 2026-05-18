@@ -509,6 +509,31 @@ class TestProcessorChainReachesTools:
         assert sink == []
 
     @pytest.mark.asyncio
+    async def test_no_processors_means_no_tool_wrapping(self):
+        """When no processors are registered the Manager passes None as the
+        runner, the OpenAI plugin must not wrap any FunctionTool, and the
+        SDK observes the original raw JSON byte-for-byte."""
+        sink: list[str] = []
+        recording_tool = _make_recording_function_tool("record", sink)
+
+        async def fake_runner(agent: Any, prompt: str):
+            tool = next(t for t in agent.tools if t.name == "record")
+            # Tool instance must be the unmodified original, not a wrapped copy.
+            assert tool is recording_tool
+            ctx = SimpleNamespace(tool_name=tool.name)
+            await tool.on_invoke_tool(ctx, '{"text":"hi"}')
+            return _make_run_result("done", _make_usage(1, 1))
+
+        mgr = ArgoxManager()
+        mgr.register_plugin(ArgoxOpenAIPlugin())
+        # No processors registered.
+        agent = _make_agent()
+        object.__setattr__(agent, "tools", [recording_tool])
+        await mgr.run(agent, "hi", "openai", fake_runner)
+        # Raw JSON reached the tool unchanged — no parse/serialize round-trip.
+        assert sink == ['{"text":"hi"}']
+
+    @pytest.mark.asyncio
     async def test_fail_open_tool_args_lets_original_args_reach_tool(self):
         sink: list[str] = []
         recording_tool = _make_recording_function_tool("record", sink)

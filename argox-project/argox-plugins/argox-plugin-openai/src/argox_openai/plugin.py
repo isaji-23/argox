@@ -107,18 +107,12 @@ class ArgoxOpenAIPlugin(ArgoxPlugin):
         if not hasattr(target, "tools"):
             return target
 
-        wrapped_tools = [
+        target.tools = [
             _wrap_function_tool(tool, tool_args_runner)
             if isinstance(tool, FunctionTool)
             else tool
             for tool in target.tools
         ]
-        try:
-            target.tools = wrapped_tools
-        except (AttributeError, TypeError):
-            # Some frameworks make `.tools` read-only; bypass Pydantic field validation
-            # the same way we do for `hooks`.
-            object.__setattr__(target, "tools", wrapped_tools)
         return target
 
     def extract_tokens(self, raw_result: Any, metrics: AgentRunMetrics) -> None:
