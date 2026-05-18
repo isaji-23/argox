@@ -13,8 +13,9 @@ Run from ``argox-project/``::
 
 Expected output is a single ``argox.agent.run`` span line printed by the
 ``ConsoleSpanExporter`` plus a metrics summary printed by the custom exporter
-defined below. The demo wires a toy ``PolicyClient`` that blocks
-``get_current_datetime`` so the LLM must answer using only ``get_weather``.
+defined below, followed by an OTel metric dump from ``ConsoleMetricExporter``
+flushed once at the end of the run. The demo wires a toy ``PolicyClient`` that
+blocks ``get_current_datetime`` so the LLM must answer using only ``get_weather``.
 
 This example uses the public ``@argox.monitor`` decorator, which replaces the
 manual ``ArgoxManager`` wiring with a single declaration on the runner.
@@ -35,9 +36,10 @@ from agents import (
 )
 from dotenv import load_dotenv
 from openai import AsyncOpenAI
+from opentelemetry.sdk.metrics.export import ConsoleMetricExporter
 
 import argox
-from argox.core import init_telemetry
+from argox.core import init_metrics, init_telemetry
 from argox.core.state import AgentRunMetrics
 from argox.exporters import ConsoleSpanExporter
 from argox.interfaces.exporter import ExporterBase
@@ -111,6 +113,12 @@ class _PrintMetricsExporter(ExporterBase):
 
 
 init_telemetry(exporters=[ConsoleSpanExporter()])
+# A 1-hour export interval keeps the periodic reader from interleaving its
+# output with the run; ``force_flush`` at the end prints one clean dump.
+_meter_provider = init_metrics(
+    exporters=[ConsoleMetricExporter()],
+    export_interval_ms=3_600_000,
+)
 
 agent = Agent(
     name="weather-assistant",
@@ -131,10 +139,13 @@ async def run_agent(agent: Agent, prompt: str):
 
 
 async def main() -> None:
-    output = await run_agent(
-        "What's the weather in Madrid right now and what time is it?"
-    )
-    print("\nFinal output:", output)
+    try:
+        output = await run_agent(
+            "What's the weather in Madrid right now and what time is it?"
+        )
+        print("\nFinal output:", output)
+    finally:
+        _meter_provider.force_flush()
 
 
 if __name__ == "__main__":
