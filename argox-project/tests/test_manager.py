@@ -38,7 +38,12 @@ class _FakePlugin(ArgoxPlugin):
     def name(self) -> str:
         return "fake"
 
-    def instrument(self, target: Any, metrics: AgentRunMetrics) -> Any:
+    def instrument(
+        self,
+        target: Any,
+        metrics: AgentRunMetrics,
+        tool_args_runner: Any = None,
+    ) -> Any:
         return target
 
     def extract_tokens(self, raw_result: Any, metrics: AgentRunMetrics) -> None:

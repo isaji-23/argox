@@ -15,11 +15,23 @@ responsibility of ArgoxManager. The plugin only knows how to talk to its framewo
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 # Deferred import to avoid circular dependency at import time.
 # AgentRunMetrics is defined in argox.core.state, which does not depend on interfaces.
 from argox.core.state import AgentRunMetrics
+
+
+ToolArgsRunner = Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]]
+"""Callable contract for tool-argument mutation hooks.
+
+The Manager builds an instance of this callable on every run and passes it to
+``ArgoxPlugin.instrument``. Plugins invoke it from inside their tool-execution
+shim with ``(tool_name, args_dict)``. The Manager runs the registered
+``ArgoxProcessor.process_tool_args`` chain (honouring per-processor strict
+semantics and emitting span events) and returns the mutated args dict that the
+plugin must forward to the framework-native tool implementation.
+"""
 
 
 class ArgoxPlugin(ABC):
@@ -37,7 +49,7 @@ class ArgoxPlugin(ABC):
             def name(self) -> str:
                 return "my_framework"
 
-            def instrument(self, target, metrics):
+            def instrument(self, target, metrics, tool_args_runner=None):
                 # Inject framework hooks/callbacks here
                 target.on_tool_call = lambda t: metrics.tools_called.append(...)
                 return target
@@ -77,19 +89,35 @@ class ArgoxPlugin(ABC):
     # ------------------------------------------------------------------
 
     @abstractmethod
-    def instrument(self, target: Any, metrics: AgentRunMetrics) -> Any:
+    def instrument(
+        self,
+        target: Any,
+        metrics: AgentRunMetrics,
+        tool_args_runner: ToolArgsRunner | None = None,
+    ) -> Any:
         """
         Injects monitoring into the agent or runner of the framework.
 
         This method is called BEFORE the agent executes. It must configure
         the framework's mechanisms (hooks, callbacks, middleware…) so that
-        events are recorded in ``metrics`` during execution.
+        events are recorded in ``metrics`` during execution. When
+        ``tool_args_runner`` is provided, the plugin should additionally
+        intercept each tool invocation and await
+        ``tool_args_runner(tool_name, args)`` before delegating to the
+        framework-native tool implementation. The Manager owns the processor
+        chain behind that callable; plugins must not look at the processor
+        list directly.
 
         Args:
             target:  The framework object to instrument (Agent, Chain…).
                      The concrete type depends on the framework; the plugin knows it.
             metrics: The AgentRunMetrics instance that will accumulate data
                      for this execution. The plugin writes to it directly.
+            tool_args_runner: Optional callable that runs the registered
+                     processor chain against a single tool call's arguments
+                     and returns the mutated dict. ``None`` means the plugin
+                     should not intercept tool args (no processors registered
+                     or older Manager).
 
         Returns:
             The instrumented ``target``. Can be the same mutated object

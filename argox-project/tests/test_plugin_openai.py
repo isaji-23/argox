@@ -1,17 +1,21 @@
-"""Tests for ArgoxOpenAIPlugin (PLUGIN-01)."""
+"""Tests for ArgoxOpenAIPlugin (PLUGIN-01, PLUGIN-02)."""
 
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from agents import Agent
+from agents import Agent, function_tool
+from agents.tool import FunctionTool
 
+from argox.core.context import RunContext
 from argox.core.manager import ArgoxManager
 from argox.core.state import AgentRunMetrics
+from argox.interfaces.processor import ArgoxProcessor
 from argox_openai import ArgoxOpenAIPlugin
-from argox_openai.plugin import _ArgoxAgentHooks
+from argox_openai.plugin import _ArgoxAgentHooks, _wrap_function_tool
 
 
 def _make_agent() -> Agent:
@@ -211,3 +215,346 @@ class TestEndToEnd:
         assert metrics.tools_called[0].name == "search"
         assert metrics.tools_called[0].result == "found"
         assert metrics.tools_called[0].end is not None
+
+
+# ---------------------------------------------------------------------------
+# PLUGIN-02 — tool argument processor wiring
+# ---------------------------------------------------------------------------
+
+
+@function_tool
+def _echo_tool(text: str) -> str:
+    """Return whatever text the caller sends."""
+    return text
+
+
+@function_tool
+def _add_tool(x: int, y: int) -> int:
+    """Add two integers."""
+    return x + y
+
+
+class _RedactingProcessor(ArgoxProcessor):
+    """Injects ``redacted=True`` into every tool args dict."""
+
+    async def process_input(self, text: str, ctx: RunContext) -> str:
+        return text
+
+    async def process_tool_args(self, tool_name: str, args: dict, ctx: RunContext) -> dict:
+        return {**args, "redacted": True}
+
+    async def process_output(self, text: str, ctx: RunContext) -> str:
+        return text
+
+
+class TestWrapFunctionTool:
+    def test_wrap_returns_a_copy_not_the_original(self):
+        async def runner(name, args):
+            return args
+
+        wrapped = _wrap_function_tool(_echo_tool, runner)
+        assert isinstance(wrapped, FunctionTool)
+        assert wrapped is not _echo_tool
+        assert wrapped.on_invoke_tool is not _echo_tool.on_invoke_tool
+
+    def test_wrap_leaves_original_on_invoke_tool_untouched(self):
+        original_invoke = _echo_tool.on_invoke_tool
+
+        async def runner(name, args):
+            return args
+
+        _wrap_function_tool(_echo_tool, runner)
+        assert _echo_tool.on_invoke_tool is original_invoke
+
+    @pytest.mark.asyncio
+    async def test_shim_passes_mutated_args_to_original_invoker(self):
+        seen_inputs: list[str] = []
+
+        async def recording_original(ctx, raw_input):
+            seen_inputs.append(raw_input)
+            return "ok"
+
+        tool = FunctionTool(
+            name="t",
+            description="d",
+            params_json_schema={
+                "type": "object", "properties": {},
+                "required": [], "additionalProperties": False,
+            },
+            on_invoke_tool=recording_original,
+            strict_json_schema=False,
+        )
+
+        async def runner(name, args):
+            return {**args, "redacted": True}
+
+        wrapped = _wrap_function_tool(tool, runner)
+        ctx = SimpleNamespace(tool_name="t")
+        await wrapped.on_invoke_tool(ctx, json.dumps({"text": "hi"}))
+        assert seen_inputs == [json.dumps({"text": "hi", "redacted": True})]
+        # Original tool is untouched.
+        assert tool.on_invoke_tool is recording_original
+
+    @pytest.mark.asyncio
+    async def test_shim_treats_empty_input_as_empty_dict(self):
+        received_runner_args: list[dict] = []
+        received_raw: list[str] = []
+
+        async def recording_original(ctx, raw_input):
+            received_raw.append(raw_input)
+            return "ok"
+
+        async def runner(name, args):
+            received_runner_args.append(args)
+            return args
+
+        tool = FunctionTool(
+            name="t",
+            description="d",
+            params_json_schema={
+                "type": "object", "properties": {},
+                "required": [], "additionalProperties": False,
+            },
+            on_invoke_tool=recording_original,
+            strict_json_schema=False,
+        )
+        wrapped = _wrap_function_tool(tool, runner)
+        ctx = SimpleNamespace(tool_name="t")
+        await wrapped.on_invoke_tool(ctx, "")
+        assert received_runner_args == [{}]
+        assert received_raw == [json.dumps({})]
+
+    @pytest.mark.asyncio
+    async def test_shim_forwards_malformed_json_unchanged(self):
+        runner_calls: list = []
+        forwarded: list[str] = []
+
+        async def recording_original(ctx, raw_input):
+            forwarded.append(raw_input)
+            return "ok"
+
+        async def runner(name, args):
+            runner_calls.append((name, args))
+            return args
+
+        tool = FunctionTool(
+            name="t",
+            description="d",
+            params_json_schema={
+                "type": "object", "properties": {},
+                "required": [], "additionalProperties": False,
+            },
+            on_invoke_tool=recording_original,
+            strict_json_schema=False,
+        )
+        wrapped = _wrap_function_tool(tool, runner)
+        ctx = SimpleNamespace(tool_name="t")
+        await wrapped.on_invoke_tool(ctx, "not json")
+        # Runner must NOT have been called; raw input passed straight through
+        # so the SDK's own JSON diagnostics can fire downstream.
+        assert runner_calls == []
+        assert forwarded == ["not json"]
+
+    @pytest.mark.asyncio
+    async def test_shim_forwards_non_object_json_unchanged(self):
+        runner_calls: list = []
+        forwarded: list[str] = []
+
+        async def recording_original(ctx, raw_input):
+            forwarded.append(raw_input)
+            return "ok"
+
+        async def runner(name, args):
+            runner_calls.append((name, args))
+            return args
+
+        tool = FunctionTool(
+            name="t",
+            description="d",
+            params_json_schema={
+                "type": "object", "properties": {},
+                "required": [], "additionalProperties": False,
+            },
+            on_invoke_tool=recording_original,
+            strict_json_schema=False,
+        )
+        wrapped = _wrap_function_tool(tool, runner)
+        ctx = SimpleNamespace(tool_name="t")
+        await wrapped.on_invoke_tool(ctx, "[1, 2, 3]")
+        assert runner_calls == []
+        assert forwarded == ["[1, 2, 3]"]
+
+
+class TestInstrumentWrapsTools:
+    def test_instrument_skips_wrapping_when_runner_is_none(self):
+        agent = _make_agent()
+        object.__setattr__(agent, "tools", [_echo_tool])
+        plugin = ArgoxOpenAIPlugin()
+        plugin.instrument(agent, AgentRunMetrics(agent_name="t"))
+        assert agent.tools == [_echo_tool]  # untouched, same instance
+
+    def test_instrument_wraps_function_tools_when_runner_is_provided(self):
+        agent = _make_agent()
+        object.__setattr__(agent, "tools", [_echo_tool, _add_tool])
+
+        async def runner(name, args):
+            return args
+
+        plugin = ArgoxOpenAIPlugin()
+        plugin.instrument(agent, AgentRunMetrics(agent_name="t"), tool_args_runner=runner)
+        assert all(isinstance(t, FunctionTool) for t in agent.tools)
+        # New list with new instances — originals untouched.
+        assert agent.tools[0] is not _echo_tool
+        assert agent.tools[1] is not _add_tool
+        # Names preserved.
+        assert {t.name for t in agent.tools} == {_echo_tool.name, _add_tool.name}
+
+    def test_instrument_passes_through_non_function_tools(self):
+        agent = _make_agent()
+        sentinel = SimpleNamespace(name="hosted", _kind="hosted")  # not a FunctionTool
+        object.__setattr__(agent, "tools", [_echo_tool, sentinel])
+
+        async def runner(name, args):
+            return args
+
+        plugin = ArgoxOpenAIPlugin()
+        plugin.instrument(agent, AgentRunMetrics(agent_name="t"), tool_args_runner=runner)
+        # Non-FunctionTool was passed through identically.
+        assert agent.tools[1] is sentinel
+
+    def test_instrument_no_op_when_agent_has_no_tools_attribute(self):
+        class _Agentless:
+            name = "x"
+
+        async def runner(name, args):
+            return args
+
+        target = _Agentless()
+        ArgoxOpenAIPlugin().instrument(
+            target, AgentRunMetrics(agent_name="t"), tool_args_runner=runner,
+        )  # should not raise
+
+
+def _make_recording_function_tool(name: str, sink: list[str]) -> FunctionTool:
+    """Build a FunctionTool whose on_invoke_tool records the raw JSON it receives."""
+
+    async def _record(ctx: Any, raw_input: str) -> str:
+        sink.append(raw_input)
+        return "ok"
+
+    return FunctionTool(
+        name=name,
+        description="recording stub",
+        params_json_schema={
+            "type": "object",
+            "properties": {"text": {"type": "string"}},
+            "required": ["text"],
+            "additionalProperties": False,
+        },
+        on_invoke_tool=_record,
+        strict_json_schema=False,
+    )
+
+
+class TestProcessorChainReachesTools:
+    @pytest.mark.asyncio
+    async def test_redactor_mutates_args_before_original_invoker_runs(self):
+        """End-to-end through Manager → plugin shim → recording original."""
+        sink: list[str] = []
+        recording_tool = _make_recording_function_tool("record", sink)
+
+        async def fake_runner(agent: Any, prompt: str):
+            tool = next(t for t in agent.tools if t.name == "record")
+            ctx = SimpleNamespace(tool_name=tool.name)
+            await tool.on_invoke_tool(ctx, json.dumps({"text": "hello"}))
+            return _make_run_result("done", _make_usage(1, 1))
+
+        mgr = ArgoxManager()
+        mgr.register_plugin(ArgoxOpenAIPlugin())
+        mgr.register_processor(_RedactingProcessor())
+        agent = _make_agent()
+        object.__setattr__(agent, "tools", [recording_tool])
+        await mgr.run(agent, "hi", "openai", fake_runner)
+
+        assert sink == [json.dumps({"text": "hello", "redacted": True})]
+        # Original tool's on_invoke_tool was never mutated; only the wrapped copy was.
+        # (Sanity: the agent.tools list was restored to [recording_tool] in finally.)
+        assert agent.tools == [recording_tool]
+
+    @pytest.mark.asyncio
+    async def test_strict_tool_args_failure_aborts_before_tool_runs(self):
+        sink: list[str] = []
+        recording_tool = _make_recording_function_tool("record", sink)
+
+        class _Boom(ArgoxProcessor):
+            async def process_input(self, text, ctx): return text
+            async def process_tool_args(self, name, args, ctx):
+                raise RuntimeError("strict boom")
+            async def process_output(self, text, ctx): return text
+
+        async def fake_runner(agent: Any, prompt: str):
+            tool = next(t for t in agent.tools if t.name == "record")
+            ctx = SimpleNamespace(tool_name=tool.name)
+            await tool.on_invoke_tool(ctx, json.dumps({"text": "x"}))
+            return _make_run_result("done", _make_usage(1, 1))
+
+        mgr = ArgoxManager()
+        mgr.register_plugin(ArgoxOpenAIPlugin())
+        mgr.register_processor(_Boom(), strict=True)
+        agent = _make_agent()
+        object.__setattr__(agent, "tools", [recording_tool])
+        with pytest.raises(RuntimeError, match="strict boom"):
+            await mgr.run(agent, "hi", "openai", fake_runner)
+        # The recording original was never reached.
+        assert sink == []
+
+    @pytest.mark.asyncio
+    async def test_no_processors_means_no_tool_wrapping(self):
+        """When no processors are registered the Manager passes None as the
+        runner, the OpenAI plugin must not wrap any FunctionTool, and the
+        SDK observes the original raw JSON byte-for-byte."""
+        sink: list[str] = []
+        recording_tool = _make_recording_function_tool("record", sink)
+
+        async def fake_runner(agent: Any, prompt: str):
+            tool = next(t for t in agent.tools if t.name == "record")
+            # Tool instance must be the unmodified original, not a wrapped copy.
+            assert tool is recording_tool
+            ctx = SimpleNamespace(tool_name=tool.name)
+            await tool.on_invoke_tool(ctx, '{"text":"hi"}')
+            return _make_run_result("done", _make_usage(1, 1))
+
+        mgr = ArgoxManager()
+        mgr.register_plugin(ArgoxOpenAIPlugin())
+        # No processors registered.
+        agent = _make_agent()
+        object.__setattr__(agent, "tools", [recording_tool])
+        await mgr.run(agent, "hi", "openai", fake_runner)
+        # Raw JSON reached the tool unchanged — no parse/serialize round-trip.
+        assert sink == ['{"text":"hi"}']
+
+    @pytest.mark.asyncio
+    async def test_fail_open_tool_args_lets_original_args_reach_tool(self):
+        sink: list[str] = []
+        recording_tool = _make_recording_function_tool("record", sink)
+
+        class _Boom(ArgoxProcessor):
+            async def process_input(self, text, ctx): return text
+            async def process_tool_args(self, name, args, ctx):
+                raise RuntimeError("fail-open boom")
+            async def process_output(self, text, ctx): return text
+
+        async def fake_runner(agent: Any, prompt: str):
+            tool = next(t for t in agent.tools if t.name == "record")
+            ctx = SimpleNamespace(tool_name=tool.name)
+            await tool.on_invoke_tool(ctx, json.dumps({"text": "x"}))
+            return _make_run_result("done", _make_usage(1, 1))
+
+        mgr = ArgoxManager()
+        mgr.register_plugin(ArgoxOpenAIPlugin())
+        mgr.register_processor(_Boom())  # default strict=False
+        agent = _make_agent()
+        object.__setattr__(agent, "tools", [recording_tool])
+        await mgr.run(agent, "hi", "openai", fake_runner)
+        # Original args (pre-processor) reached the recording tool.
+        assert sink == [json.dumps({"text": "x"})]

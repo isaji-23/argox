@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import time
 from typing import Any, Awaitable, Callable
 
@@ -18,7 +19,7 @@ from argox.core.metrics import (
 )
 from argox.core.state import AgentRunMetrics
 from argox.interfaces.exporter import ExporterBase
-from argox.interfaces.plugin import ArgoxPlugin
+from argox.interfaces.plugin import ArgoxPlugin, ToolArgsRunner
 from argox.interfaces.policy import PolicyClient
 from argox.interfaces.processor import ArgoxProcessor
 from argox.semconv.attributes import (
@@ -28,6 +29,7 @@ from argox.semconv.attributes import (
     ARGOX_PROCESSOR_NAME,
     ARGOX_PROCESSOR_PHASE,
     ARGOX_PROCESSOR_STRICT,
+    ARGOX_PROCESSOR_TOOL_NAME,
     ARGOX_RUN_BLOCKED_TOOLS,
     EVENT_PROCESSOR_APPLIED,
     EVENT_PROCESSOR_ERROR,
@@ -67,7 +69,8 @@ class ArgoxManager:
         """Append a processor to the transformation pipeline.
 
         Processors run in registration order on every supported phase
-        (``input``, ``output``). Failure semantics are configured per-processor:
+        (``input``, ``tool_args``, ``output``). Failure semantics are configured
+        per-processor:
 
         Args:
             processor: The processor instance to add.
@@ -161,7 +164,20 @@ class ArgoxManager:
                     metrics.tools_available.extend(raw_tools)
 
                 # 4. Instrument agent and execute
-                instrumented = plugin.instrument(agent, metrics)
+                tool_args_runner: ToolArgsRunner | None = None
+                if self._processors:
+                    async def _tool_args_runner(
+                        tool_name: str, args: dict[str, Any],
+                    ) -> dict[str, Any]:
+                        return await self._run_tool_args_processors(
+                            span, ctx, tool_name, args, applied_processors,
+                        )
+
+                    tool_args_runner = _tool_args_runner
+
+                instrumented = plugin.instrument(
+                    agent, metrics, tool_args_runner=tool_args_runner,
+                )
                 raw_result = await runner(instrumented, processed_prompt)
 
                 # 5. Extract tokens and raw output
@@ -270,6 +286,77 @@ class ArgoxManager:
             record_processor_invocation(name=name, phase=phase, status="applied")
             applied.append(name)
         return value
+
+    async def _run_tool_args_processors(
+        self,
+        span: Span,
+        ctx: RunContext,
+        tool_name: str,
+        args: dict[str, Any],
+        applied: list[str],
+    ) -> dict[str, Any]:
+        """Run every registered processor's ``process_tool_args`` for a single tool call.
+
+        Mirrors :meth:`_run_processors` but matches the ``(tool_name, args, ctx) -> dict``
+        signature used by tool-arg processors. The phase tag on emitted span events
+        is always ``"tool_args"``; the tool name is attached as an extra attribute
+        so consumers can correlate events to specific tool invocations.
+
+        On failure: in strict mode the exception propagates and the run span is
+        marked ERROR; in fail-open mode the failure is captured as an
+        ``argox.processor.error`` span event and the current ``args`` dict is
+        forwarded unchanged to the next processor.
+        """
+        phase = "tool_args"
+        for processor, strict in self._processors:
+            name = type(processor).__name__
+            # Pass a deep copy so a fail-open processor that mutates the dict
+            # in place and then raises cannot leak partial changes into the
+            # next processor or the tool. We accept the return value only on
+            # successful completion.
+            try:
+                result = await processor.process_tool_args(
+                    tool_name, copy.deepcopy(args), ctx,
+                )
+            except asyncio.CancelledError:
+                # Cancellation is control-flow, not a processor failure — let it propagate
+                # regardless of strict mode so callers can shut down cleanly.
+                raise
+            except Exception as exc:
+                span.add_event(
+                    EVENT_PROCESSOR_ERROR,
+                    {
+                        ARGOX_PROCESSOR_NAME: name,
+                        ARGOX_PROCESSOR_PHASE: phase,
+                        ARGOX_PROCESSOR_TOOL_NAME: tool_name,
+                        ARGOX_PROCESSOR_STRICT: strict,
+                        "exception.type": type(exc).__name__,
+                        "exception.message": str(exc),
+                    },
+                )
+                record_processor_invocation(name=name, phase=phase, status="error")
+                if strict:
+                    span.set_status(
+                        Status(
+                            StatusCode.ERROR,
+                            f"processor {name} failed in {phase} phase for tool {tool_name}",
+                        )
+                    )
+                    raise
+                continue
+
+            args = result
+            span.add_event(
+                EVENT_PROCESSOR_APPLIED,
+                {
+                    ARGOX_PROCESSOR_NAME: name,
+                    ARGOX_PROCESSOR_PHASE: phase,
+                    ARGOX_PROCESSOR_TOOL_NAME: tool_name,
+                },
+            )
+            record_processor_invocation(name=name, phase=phase, status="applied")
+            applied.append(name)
+        return args
 
 
 def _record_policy_block(span: Span, rule_id: str, message: str) -> None:

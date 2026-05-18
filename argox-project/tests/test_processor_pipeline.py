@@ -90,7 +90,12 @@ class _FakePlugin(ArgoxPlugin):
     def name(self) -> str:
         return "fake"
 
-    def instrument(self, target: Any, metrics: AgentRunMetrics) -> Any:
+    def instrument(
+        self,
+        target: Any,
+        metrics: AgentRunMetrics,
+        tool_args_runner: Any = None,
+    ) -> Any:
         return target
 
     def extract_tokens(self, raw_result: Any, metrics: AgentRunMetrics) -> None:
@@ -334,3 +339,304 @@ class TestSpanEmission:
         await mgr.run(_FakeAgent(), "hi", "fake", _fake_runner)
         span = _find_run_span(span_exporter)
         assert ARGOX_PROCESSOR_APPLIED not in (span.attributes or {})
+
+
+# ---------------------------------------------------------------------------
+# tool_args phase — Manager-level semantics (PLUGIN-02)
+# ---------------------------------------------------------------------------
+
+
+class _ToolArgsCapturingPlugin(_FakePlugin):
+    """Plugin that captures the ``tool_args_runner`` so tests can drive it directly."""
+
+    def __init__(self) -> None:
+        self.captured_runner: Any = None
+
+    def instrument(
+        self,
+        target: Any,
+        metrics: AgentRunMetrics,
+        tool_args_runner: Any = None,
+    ) -> Any:
+        self.captured_runner = tool_args_runner
+        return target
+
+
+def _make_runner_invoking_tool(
+    plugin: _ToolArgsCapturingPlugin,
+    tool_name: str,
+    args: dict,
+    sink: list,
+):
+    """Build a fake runner that drives the captured tool_args_runner once during the run."""
+
+    async def runner(agent: Any, prompt: str) -> _FakeResponse:
+        if plugin.captured_runner is None:
+            sink.append(("no-runner", None))
+        else:
+            try:
+                mutated = await plugin.captured_runner(tool_name, args)
+                sink.append(("ok", mutated))
+            except Exception as exc:
+                sink.append(("err", exc))
+                raise
+        return _FakeResponse(text=f"echo: {prompt}")
+
+    return runner
+
+
+class _ArgsMutatingProcessor(ArgoxProcessor):
+    """Processor that injects a fixed key/value into tool_args, no-ops elsewhere."""
+
+    async def process_input(self, text: str, ctx: RunContext) -> str:
+        return text
+
+    async def process_tool_args(self, tool_name: str, args: dict, ctx: RunContext) -> dict:
+        return {**args, "redacted": True}
+
+    async def process_output(self, text: str, ctx: RunContext) -> str:
+        return text
+
+
+class _ToolArgsRaisingProcessor(ArgoxProcessor):
+    """Processor that raises only on the tool_args phase."""
+
+    async def process_input(self, text: str, ctx: RunContext) -> str:
+        return text
+
+    async def process_tool_args(self, tool_name: str, args: dict, ctx: RunContext) -> dict:
+        raise RuntimeError("tool_args boom")
+
+    async def process_output(self, text: str, ctx: RunContext) -> str:
+        return text
+
+
+class TestToolArgsPhase:
+    @pytest.mark.asyncio
+    async def test_manager_passes_runner_to_plugin(self, span_exporter):
+        plugin = _ToolArgsCapturingPlugin()
+        mgr = ArgoxManager()
+        mgr.register_plugin(plugin)
+        mgr.register_processor(_PassThroughProcessor())
+        await mgr.run(_FakeAgent(), "hi", "fake", _fake_runner)
+        assert callable(plugin.captured_runner)
+
+    @pytest.mark.asyncio
+    async def test_runner_applies_processor_chain_in_order(self, span_exporter):
+        plugin = _ToolArgsCapturingPlugin()
+        sink: list = []
+        mgr = ArgoxManager()
+        mgr.register_plugin(plugin)
+        mgr.register_processor(_ArgsMutatingProcessor())
+        await mgr.run(
+            _FakeAgent(), "hi", "fake",
+            _make_runner_invoking_tool(plugin, "search", {"q": "hi"}, sink),
+        )
+        assert sink == [("ok", {"q": "hi", "redacted": True})]
+
+    @pytest.mark.asyncio
+    async def test_fail_open_returns_unchanged_args(self, span_exporter):
+        plugin = _ToolArgsCapturingPlugin()
+        sink: list = []
+        mgr = ArgoxManager()
+        mgr.register_plugin(plugin)
+        mgr.register_processor(_ToolArgsRaisingProcessor())  # default strict=False
+        await mgr.run(
+            _FakeAgent(), "hi", "fake",
+            _make_runner_invoking_tool(plugin, "calc", {"x": 1}, sink),
+        )
+        assert sink == [("ok", {"x": 1})]
+
+    @pytest.mark.asyncio
+    async def test_strict_failure_aborts_run(self, span_exporter):
+        plugin = _ToolArgsCapturingPlugin()
+        sink: list = []
+        mgr = ArgoxManager()
+        mgr.register_plugin(plugin)
+        mgr.register_processor(_ToolArgsRaisingProcessor(), strict=True)
+        with pytest.raises(RuntimeError, match="tool_args boom"):
+            await mgr.run(
+                _FakeAgent(), "hi", "fake",
+                _make_runner_invoking_tool(plugin, "calc", {"x": 1}, sink),
+            )
+        span = _find_run_span(span_exporter)
+        assert span.status.status_code == StatusCode.ERROR
+
+    @pytest.mark.asyncio
+    async def test_successful_tool_args_emits_applied_event_with_phase_and_tool(
+        self, span_exporter,
+    ):
+        plugin = _ToolArgsCapturingPlugin()
+        sink: list = []
+        mgr = ArgoxManager()
+        mgr.register_plugin(plugin)
+        mgr.register_processor(_ArgsMutatingProcessor())
+        await mgr.run(
+            _FakeAgent(), "hi", "fake",
+            _make_runner_invoking_tool(plugin, "search", {"q": "hi"}, sink),
+        )
+        span = _find_run_span(span_exporter)
+        applied_events = [
+            e for e in span.events
+            if e.name == EVENT_PROCESSOR_APPLIED
+            and e.attributes[ARGOX_PROCESSOR_PHASE] == "tool_args"
+        ]
+        assert len(applied_events) == 1
+        e = applied_events[0]
+        assert e.attributes[ARGOX_PROCESSOR_NAME] == "_ArgsMutatingProcessor"
+        assert e.attributes["argox.processor.tool_name"] == "search"
+
+    @pytest.mark.asyncio
+    async def test_fail_open_emits_error_event_with_tool_name(self, span_exporter):
+        plugin = _ToolArgsCapturingPlugin()
+        sink: list = []
+        mgr = ArgoxManager()
+        mgr.register_plugin(plugin)
+        mgr.register_processor(_ToolArgsRaisingProcessor())
+        await mgr.run(
+            _FakeAgent(), "hi", "fake",
+            _make_runner_invoking_tool(plugin, "calc", {"x": 1}, sink),
+        )
+        span = _find_run_span(span_exporter)
+        err_events = [
+            e for e in span.events
+            if e.name == EVENT_PROCESSOR_ERROR
+            and e.attributes[ARGOX_PROCESSOR_PHASE] == "tool_args"
+        ]
+        assert len(err_events) == 1
+        e = err_events[0]
+        assert e.attributes["argox.processor.tool_name"] == "calc"
+        assert e.attributes[ARGOX_PROCESSOR_STRICT] is False
+        assert e.attributes["exception.type"] == "RuntimeError"
+
+    @pytest.mark.asyncio
+    async def test_applied_attribute_includes_tool_args_only_processors(
+        self, span_exporter,
+    ):
+        plugin = _ToolArgsCapturingPlugin()
+        sink: list = []
+        mgr = ArgoxManager()
+        mgr.register_plugin(plugin)
+        mgr.register_processor(_ArgsMutatingProcessor())
+        await mgr.run(
+            _FakeAgent(), "hi", "fake",
+            _make_runner_invoking_tool(plugin, "search", {"q": "hi"}, sink),
+        )
+        span = _find_run_span(span_exporter)
+        applied = span.attributes[ARGOX_PROCESSOR_APPLIED]
+        assert "_ArgsMutatingProcessor" in list(applied)
+
+    @pytest.mark.asyncio
+    async def test_processor_chain_runs_in_registration_order(self, span_exporter):
+        class _AddA(ArgoxProcessor):
+            async def process_input(self, text, ctx): return text
+            async def process_tool_args(self, name, args, ctx):
+                return {**args, "order": args.get("order", "") + "a"}
+            async def process_output(self, text, ctx): return text
+
+        class _AddB(ArgoxProcessor):
+            async def process_input(self, text, ctx): return text
+            async def process_tool_args(self, name, args, ctx):
+                return {**args, "order": args.get("order", "") + "b"}
+            async def process_output(self, text, ctx): return text
+
+        plugin = _ToolArgsCapturingPlugin()
+        sink: list = []
+        mgr = ArgoxManager()
+        mgr.register_plugin(plugin)
+        mgr.register_processor(_AddA())
+        mgr.register_processor(_AddB())
+        await mgr.run(
+            _FakeAgent(), "hi", "fake",
+            _make_runner_invoking_tool(plugin, "t", {}, sink),
+        )
+        assert sink == [("ok", {"order": "ab"})]
+
+    @pytest.mark.asyncio
+    async def test_fail_open_isolates_in_place_mutation_before_raising(
+        self, span_exporter,
+    ):
+        """A fail-open processor that mutates args in place and then raises
+        must not leak its partial changes into the next processor or the tool."""
+
+        class _MutateThenBoom(ArgoxProcessor):
+            async def process_input(self, text, ctx): return text
+            async def process_tool_args(self, name, args, ctx):
+                args["leaked"] = "should not appear"
+                raise RuntimeError("mutate-then-boom")
+            async def process_output(self, text, ctx): return text
+
+        observed: list[dict] = []
+
+        class _Observer(ArgoxProcessor):
+            async def process_input(self, text, ctx): return text
+            async def process_tool_args(self, name, args, ctx):
+                observed.append(dict(args))
+                return args
+            async def process_output(self, text, ctx): return text
+
+        plugin = _ToolArgsCapturingPlugin()
+        sink: list = []
+        mgr = ArgoxManager()
+        mgr.register_plugin(plugin)
+        mgr.register_processor(_MutateThenBoom())  # fail-open
+        mgr.register_processor(_Observer())
+        await mgr.run(
+            _FakeAgent(), "hi", "fake",
+            _make_runner_invoking_tool(plugin, "t", {"k": "v"}, sink),
+        )
+        assert observed == [{"k": "v"}]
+        assert sink == [("ok", {"k": "v"})]
+
+    @pytest.mark.asyncio
+    async def test_fail_open_isolates_nested_in_place_mutation(self, span_exporter):
+        """Deep-copy must also protect nested structures, not only top-level keys."""
+
+        class _MutateNestedThenBoom(ArgoxProcessor):
+            async def process_input(self, text, ctx): return text
+            async def process_tool_args(self, name, args, ctx):
+                args["nested"]["leaked"] = True
+                raise RuntimeError("nested boom")
+            async def process_output(self, text, ctx): return text
+
+        plugin = _ToolArgsCapturingPlugin()
+        sink: list = []
+        mgr = ArgoxManager()
+        mgr.register_plugin(plugin)
+        mgr.register_processor(_MutateNestedThenBoom())  # fail-open
+        await mgr.run(
+            _FakeAgent(), "hi", "fake",
+            _make_runner_invoking_tool(plugin, "t", {"nested": {"safe": True}}, sink),
+        )
+        assert sink == [("ok", {"nested": {"safe": True}})]
+
+    @pytest.mark.asyncio
+    async def test_manager_passes_none_runner_when_no_processors(self, span_exporter):
+        """When zero processors are registered the Manager must not build a runner,
+        so plugins can short-circuit any tool wrapping or JSON round-tripping."""
+        plugin = _ToolArgsCapturingPlugin()
+        mgr = ArgoxManager()
+        mgr.register_plugin(plugin)
+        await mgr.run(_FakeAgent(), "hi", "fake", _fake_runner)
+        assert plugin.captured_runner is None
+
+    @pytest.mark.asyncio
+    async def test_cancellation_propagates_in_tool_args_fail_open_mode(
+        self, span_exporter,
+    ):
+        class _CancellingToolArgs(ArgoxProcessor):
+            async def process_input(self, text, ctx): return text
+            async def process_tool_args(self, name, args, ctx):
+                raise asyncio.CancelledError()
+            async def process_output(self, text, ctx): return text
+
+        plugin = _ToolArgsCapturingPlugin()
+        sink: list = []
+        mgr = ArgoxManager()
+        mgr.register_plugin(plugin)
+        mgr.register_processor(_CancellingToolArgs())  # strict=False
+        with pytest.raises(asyncio.CancelledError):
+            await mgr.run(
+                _FakeAgent(), "hi", "fake",
+                _make_runner_invoking_tool(plugin, "t", {}, sink),
+            )
