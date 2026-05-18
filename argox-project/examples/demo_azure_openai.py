@@ -118,18 +118,26 @@ class _InlinePolicy(PolicyClient):
 
 
 class _PiiRedactingProcessor(ArgoxProcessor):
-    """Scrubs email-shaped substrings from tool argument values in flight.
+    """Scrubs email-shaped substrings from tool args and LLM output in flight.
 
-    Exercises the PLUGIN-02 pathway: ``ArgoxOpenAIPlugin`` wraps each function
-    tool so that registered processors run on the arguments *before* the tool
-    body executes. The processor returns a new dict; the original LLM-emitted
-    args are never seen by the tool.
+    Demonstrates two of the three ``ArgoxProcessor`` phases:
 
-    ``process_input`` and ``process_output`` are pass-throughs — this demo
-    only showcases the tool-args phase.
+    - ``process_tool_args`` (PLUGIN-02) — ``ArgoxOpenAIPlugin`` wraps each
+      function tool so this method runs on the arguments *before* the tool
+      body executes. The original LLM-emitted args never reach the tool.
+    - ``process_output`` — the Manager runs this on the LLM's final answer
+      *before* it is returned to the caller, so any email the model echoed
+      back in plain text is scrubbed too.
+
+    ``process_input`` is left as a pass-through on purpose: the demo wants
+    the LLM to see the email in the prompt so it actually emits a tool call
+    carrying that email — that is what makes the tool-args redaction visible.
     """
 
     _EMAIL_PATTERN = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
+
+    def _scrub(self, value: str) -> str:
+        return self._EMAIL_PATTERN.sub("[REDACTED]", value)
 
     async def process_input(self, text: str, ctx: RunContext) -> str:
         return text
@@ -140,7 +148,7 @@ class _PiiRedactingProcessor(ArgoxProcessor):
         scrubbed: dict[str, Any] = {}
         for key, value in args.items():
             if isinstance(value, str):
-                redacted = self._EMAIL_PATTERN.sub("[REDACTED]", value)
+                redacted = self._scrub(value)
                 if redacted != value:
                     print(
                         f"[processor] redacted email in tool={tool_name!r} "
@@ -152,7 +160,10 @@ class _PiiRedactingProcessor(ArgoxProcessor):
         return scrubbed
 
     async def process_output(self, text: str, ctx: RunContext) -> str:
-        return text
+        redacted = self._scrub(text)
+        if redacted != text:
+            print("[processor] redacted email(s) in LLM output before returning to caller")
+        return redacted
 
 
 class _PrintMetricsExporter(ExporterBase):
