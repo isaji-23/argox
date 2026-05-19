@@ -46,6 +46,10 @@ def _format_summary(span: ReadableSpan) -> str:
         tout = attrs.get(_GEN_AI_OUTPUT_TOKENS, 0)
         parts.append(f"tokens={tin}/{tout}")
 
+    cost = attrs.get("gen_ai.usage.cost") or attrs.get("argox.run.cost")
+    if cost is not None:
+        parts.append(f"cost=${float(cost):.3f}")
+
     decision = attrs.get(ARGOX_POLICY_DECISION)
     if decision is not None:
         rule = attrs.get(ARGOX_POLICY_RULE_ID)

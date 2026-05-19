@@ -79,6 +79,14 @@ class TestConsoleSpanExporter:
         assert "shell" in out
         assert "fs.write" in out
 
+    def test_emits_cost(self):
+        buf = io.StringIO()
+        tracer = _make_tracer(ConsoleSpanExporter(out=buf))
+        with tracer.start_as_current_span("llm.call") as span:
+            span.set_attribute("gen_ai.usage.cost", 0.042)
+        out = buf.getvalue()
+        assert "cost=$0.042" in out
+
     def test_emits_status_ok_by_default(self):
         buf = io.StringIO()
         tracer = _make_tracer(ConsoleSpanExporter(out=buf))
