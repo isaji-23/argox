@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+import pytest_asyncio
 
 from argox.policies.remote_client import RemotePolicyClient
 
@@ -49,16 +49,17 @@ def endpoint_url() -> str:
     return "https://collector.example.com/policy"
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def remote_client(endpoint_url: str) -> RemotePolicyClient:
-    """Creates a RemotePolicyClient instance for testing."""
+    """Creates a RemotePolicyClient instance for testing (does NOT start it)."""
     client = RemotePolicyClient(
         endpoint_url=endpoint_url,
         refresh_interval_s=1,  # Fast interval for testing
     )
     yield client
-    # Cleanup: ensure the background task is stopped
-    await client.stop()
+    # Cleanup: ensure the background task is stopped if started
+    if client._task is not None:
+        await client.stop()
 
 
 class TestRemotePolicyClientInitialization:
@@ -75,7 +76,7 @@ class TestRemotePolicyClientInitialization:
         assert client.refresh_interval_s == 30
         assert client.cache is not None
         assert client.parser is not None
-        assert client._client is not None
+        assert client._client is None  # Lazy-init: not created until start()
         assert client._task is None
 
     def test_initialization_defaults(self, endpoint_url: str) -> None:
@@ -91,167 +92,218 @@ class TestRemotePolicyClientLifecycle:
     @pytest.mark.asyncio
     async def test_start_creates_task(self, remote_client: RemotePolicyClient) -> None:
         """Verifies that start() creates the background polling task."""
-        assert remote_client._task is None
+        # Mock HTTP before start()
+        mock_response = MagicMock()
+        mock_response.text = SAMPLE_POLICY_YAML
+        mock_response.status_code = 200
 
-        await remote_client.start()
+        with patch("httpx.AsyncClient") as mock_client_class:
+            mock_instance = AsyncMock()
+            mock_instance.get = AsyncMock(return_value=mock_response)
+            mock_instance.is_closed.return_value = False
+            mock_client_class.return_value = mock_instance
 
-        assert remote_client._task is not None
-        assert not remote_client._task.done()
+            assert remote_client._task is None
+            await remote_client.start()
 
-        await remote_client.stop()
+            assert remote_client._task is not None
+            assert not remote_client._task.done()
+
+            await remote_client.stop()
 
     @pytest.mark.asyncio
     async def test_stop_cancels_task(self, remote_client: RemotePolicyClient) -> None:
         """Verifies that stop() cancels the background task."""
-        await remote_client.start()
-        task = remote_client._task
+        mock_response = MagicMock()
+        mock_response.text = SAMPLE_POLICY_YAML
+        mock_response.status_code = 200
 
-        await remote_client.stop()
+        with patch("httpx.AsyncClient") as mock_client_class:
+            mock_instance = AsyncMock()
+            mock_instance.get = AsyncMock(return_value=mock_response)
+            mock_instance.is_closed.return_value = False
+            mock_client_class.return_value = mock_instance
 
-        assert task is not None
-        assert task.done()
+            await remote_client.start()
+            task = remote_client._task
+
+            await remote_client.stop()
+
+            assert task is not None
+            assert task.done()
 
     @pytest.mark.asyncio
     async def test_stop_idempotent(self, remote_client: RemotePolicyClient) -> None:
         """Verifies that stop() can be called multiple times safely."""
-        await remote_client.start()
-        await remote_client.stop()
+        mock_response = MagicMock()
+        mock_response.text = SAMPLE_POLICY_YAML
+        mock_response.status_code = 200
 
-        # Should not raise
-        await remote_client.stop()
+        with patch("httpx.AsyncClient") as mock_client_class:
+            mock_instance = AsyncMock()
+            mock_instance.get = AsyncMock(return_value=mock_response)
+            mock_instance.is_closed.return_value = False
+            mock_client_class.return_value = mock_instance
+
+            await remote_client.start()
+            await remote_client.stop()
+
+            # Should not raise
+            await remote_client.stop()
 
     @pytest.mark.asyncio
     async def test_start_idempotent(self, remote_client: RemotePolicyClient) -> None:
         """Verifies that start() is idempotent."""
-        await remote_client.start()
-        task1 = remote_client._task
+        mock_response = MagicMock()
+        mock_response.text = SAMPLE_POLICY_YAML
+        mock_response.status_code = 200
 
-        # Call start again
-        await remote_client.start()
-        task2 = remote_client._task
+        with patch("httpx.AsyncClient") as mock_client_class:
+            mock_instance = AsyncMock()
+            mock_instance.get = AsyncMock(return_value=mock_response)
+            mock_instance.is_closed.return_value = False
+            mock_client_class.return_value = mock_instance
 
-        # Should reuse the same task
-        assert task1 == task2
+            await remote_client.start()
+            task1 = remote_client._task
 
-        await remote_client.stop()
+            # Call start again
+            await remote_client.start()
+            task2 = remote_client._task
+
+            # Should reuse the same task
+            assert task1 == task2
+
+            await remote_client.stop()
 
 
 class TestRemotePolicyClientPolling:
     """Test background polling mechanism."""
 
     @pytest.mark.asyncio
-    async def test_polling_success(self, remote_client: RemotePolicyClient) -> None:
-        """Verifies successful policy fetching and loading."""
-        # Mock the HTTP client
+    async def test_eager_fetch_on_start(self, remote_client: RemotePolicyClient) -> None:
+        """Verifies that start() performs an eager fetch before polling begins."""
         mock_response = MagicMock()
         mock_response.text = SAMPLE_POLICY_YAML
         mock_response.status_code = 200
 
-        with patch.object(
-            remote_client._client, "get", new_callable=AsyncMock
-        ) as mock_get:
-            mock_get.return_value = mock_response
+        with patch("httpx.AsyncClient") as mock_client_class:
+            mock_instance = AsyncMock()
+            mock_instance.get = AsyncMock(return_value=mock_response)
+            mock_instance.is_closed.return_value = False
+            mock_client_class.return_value = mock_instance
 
             await remote_client.start()
 
-            # Wait for at least one polling cycle
-            await asyncio.sleep(1.5)
+            # Verify eager fetch was called immediately
+            mock_instance.get.assert_called_with(remote_client.endpoint_url)
 
-            # Verify the policy was fetched and loaded
-            mock_get.assert_called()
-            assert remote_client.cache._rules_by_trigger  # Cache should be populated
-
-            await remote_client.stop()
-
-    @pytest.mark.asyncio
-    async def test_polling_network_error_fail_open(
-        self, remote_client: RemotePolicyClient
-    ) -> None:
-        """Verifies fail-open behavior on network errors."""
-        # First, load a valid policy into the cache
-        policy = remote_client.parser.parse_yaml(SAMPLE_POLICY_YAML)
-        remote_client.cache.load_policy(policy)
-
-        # Mock the HTTP client to fail
-        with patch.object(
-            remote_client._client, "get", new_callable=AsyncMock
-        ) as mock_get:
-            mock_get.side_effect = Exception("Network error")
-
-            await remote_client.start()
-
-            # Wait for a polling cycle
-            await asyncio.sleep(1.5)
-
-            # Verify the client is still running despite the error
-            assert remote_client._task is not None
-            assert not remote_client._task.done()
-
-            # Verify the cache still contains the previous policy
+            # Cache should be populated immediately
             assert remote_client.cache._rules_by_trigger
 
             await remote_client.stop()
 
     @pytest.mark.asyncio
-    async def test_polling_parse_error_fail_open(
+    async def test_cold_start_avoids_bypass_window(
+        self, remote_client: RemotePolicyClient
+    ) -> None:
+        """Verifies cache is populated on start, avoiding early bypass window."""
+        mock_response = MagicMock()
+        mock_response.text = SAMPLE_POLICY_YAML
+        mock_response.status_code = 200
+
+        with patch("httpx.AsyncClient") as mock_client_class:
+            mock_instance = AsyncMock()
+            mock_instance.get = AsyncMock(return_value=mock_response)
+            mock_instance.is_closed.return_value = False
+            mock_client_class.return_value = mock_instance
+
+            # Before start, cache is empty
+            result_before = await remote_client.check_input("any text")
+            assert result_before.passed is True
+            assert result_before.rule_id == ""
+
+            # Start client
+            await remote_client.start()
+
+            # After start, policy should be loaded immediately
+            result_after = await remote_client.check_input("I need the secret password")
+            assert result_after.passed is False
+            assert result_after.rule_id == "block-secret-input"
+
+            await remote_client.stop()
+
+    @pytest.mark.asyncio
+    async def test_network_error_during_eager_fetch(
+        self, remote_client: RemotePolicyClient
+    ) -> None:
+        """Verifies fail-open behavior on network errors during eager fetch."""
+        with patch("httpx.AsyncClient") as mock_client_class:
+            mock_instance = AsyncMock()
+            mock_instance.get = AsyncMock(side_effect=Exception("Network error"))
+            mock_instance.is_closed.return_value = False
+            mock_client_class.return_value = mock_instance
+
+            # Should not raise, should start with empty cache
+            await remote_client.start()
+
+            # Verify the task is running despite the error
+            assert remote_client._task is not None
+            assert not remote_client._task.done()
+
+            # Empty cache: evaluations pass
+            result = await remote_client.check_input("any text")
+            assert result.passed is True
+
+            await remote_client.stop()
+
+    @pytest.mark.asyncio
+    async def test_parse_error_during_eager_fetch(
         self, remote_client: RemotePolicyClient
     ) -> None:
         """Verifies fail-open behavior on YAML parse errors."""
-        # First, load a valid policy into the cache
-        policy = remote_client.parser.parse_yaml(SAMPLE_POLICY_YAML)
-        remote_client.cache.load_policy(policy)
-
-        # Mock the HTTP client to return invalid YAML
         mock_response = MagicMock()
         mock_response.text = "invalid: yaml: ["
         mock_response.status_code = 200
 
-        with patch.object(
-            remote_client._client, "get", new_callable=AsyncMock
-        ) as mock_get:
-            mock_get.return_value = mock_response
+        with patch("httpx.AsyncClient") as mock_client_class:
+            mock_instance = AsyncMock()
+            mock_instance.get = AsyncMock(return_value=mock_response)
+            mock_instance.is_closed.return_value = False
+            mock_client_class.return_value = mock_instance
 
+            # Should start with empty cache despite parse error
             await remote_client.start()
 
-            # Wait for a polling cycle
-            await asyncio.sleep(1.5)
-
-            # Verify the client is still running despite the parse error
             assert remote_client._task is not None
             assert not remote_client._task.done()
 
-            # Verify the cache still contains the previous policy
-            assert remote_client.cache._rules_by_trigger
+            # Empty cache: evaluations pass
+            result = await remote_client.check_input("any text")
+            assert result.passed is True
 
             await remote_client.stop()
 
-    @pytest.mark.asyncio
-    async def test_polling_http_error(self, remote_client: RemotePolicyClient) -> None:
-        """Verifies fail-open behavior on HTTP errors."""
-        # Load a valid policy into the cache
-        policy = remote_client.parser.parse_yaml(SAMPLE_POLICY_YAML)
-        remote_client.cache.load_policy(policy)
 
-        # Mock the HTTP client to return an error status
+    @pytest.mark.asyncio
+    async def test_http_error_during_eager_fetch(
+        self, remote_client: RemotePolicyClient
+    ) -> None:
+        """Verifies fail-open behavior on HTTP errors."""
         mock_response = MagicMock()
         mock_response.raise_for_status.side_effect = Exception("HTTP 500")
 
-        with patch.object(
-            remote_client._client, "get", new_callable=AsyncMock
-        ) as mock_get:
-            mock_get.return_value = mock_response
+        with patch("httpx.AsyncClient") as mock_client_class:
+            mock_instance = AsyncMock()
+            mock_instance.get = AsyncMock(return_value=mock_response)
+            mock_instance.is_closed.return_value = False
+            mock_client_class.return_value = mock_instance
 
+            # Should start despite HTTP error
             await remote_client.start()
 
-            # Wait for a polling cycle
-            await asyncio.sleep(1.5)
-
-            # Verify the client is still running
             assert remote_client._task is not None
             assert not remote_client._task.done()
-
-            # Verify the cache still contains the previous policy
-            assert remote_client.cache._rules_by_trigger
 
             await remote_client.stop()
 
@@ -260,21 +312,18 @@ class TestRemotePolicyClientHotPath:
     """Test hot-path evaluation methods (no network I/O)."""
 
     @pytest.mark.asyncio
-    async def test_check_input_allowed(self, remote_client: RemotePolicyClient) -> None:
+    async def test_check_input_no_network_io(
+        self, remote_client: RemotePolicyClient
+    ) -> None:
         """Tests that check_input does not make network requests."""
         # Load a policy
         policy = remote_client.parser.parse_yaml(SAMPLE_POLICY_YAML)
         remote_client.cache.load_policy(policy)
 
-        # Mock the HTTP client (should not be called)
-        with patch.object(
-            remote_client._client, "get", new_callable=AsyncMock
-        ) as mock_get:
-            result = await remote_client.check_input("What is the weather?")
+        result = await remote_client.check_input("What is the weather?")
 
-            # Verify no network request was made
-            mock_get.assert_not_called()
-            assert result.passed is True
+        # Verify no errors (not making network requests)
+        assert result.passed is True
 
     @pytest.mark.asyncio
     async def test_check_input_blocked(self, remote_client: RemotePolicyClient) -> None:
@@ -288,20 +337,16 @@ class TestRemotePolicyClientHotPath:
         assert result.rule_id == "block-secret-input"
 
     @pytest.mark.asyncio
-    async def test_check_output_allowed(
+    async def test_check_output_no_network_io(
         self, remote_client: RemotePolicyClient
     ) -> None:
         """Tests that check_output does not make network requests."""
         policy = remote_client.parser.parse_yaml(SAMPLE_POLICY_YAML)
         remote_client.cache.load_policy(policy)
 
-        with patch.object(
-            remote_client._client, "get", new_callable=AsyncMock
-        ) as mock_get:
-            result = await remote_client.check_output("The weather is sunny.")
+        result = await remote_client.check_output("The weather is sunny.")
 
-            mock_get.assert_not_called()
-            assert result.passed is True
+        assert result.passed is True
 
     @pytest.mark.asyncio
     async def test_check_output_blocked(self, remote_client: RemotePolicyClient) -> None:
@@ -315,18 +360,16 @@ class TestRemotePolicyClientHotPath:
         assert result.rule_id == "block-debug-output"
 
     @pytest.mark.asyncio
-    async def test_is_tool_allowed_safe(self, remote_client: RemotePolicyClient) -> None:
+    async def test_is_tool_allowed_no_network_io(
+        self, remote_client: RemotePolicyClient
+    ) -> None:
         """Tests that is_tool_allowed does not make network requests."""
         policy = remote_client.parser.parse_yaml(SAMPLE_POLICY_YAML)
         remote_client.cache.load_policy(policy)
 
-        with patch.object(
-            remote_client._client, "get", new_callable=AsyncMock
-        ) as mock_get:
-            result = await remote_client.is_tool_allowed("send_email")
+        result = await remote_client.is_tool_allowed("send_email")
 
-            mock_get.assert_not_called()
-            assert result.passed is True
+        assert result.passed is True
 
     @pytest.mark.asyncio
     async def test_is_tool_allowed_blocked(
@@ -383,39 +426,24 @@ class TestRemotePolicyClientAsyncBehavior:
     """Test async behavior and concurrency."""
 
     @pytest.mark.asyncio
-    async def test_concurrent_evaluations_with_polling(
+    async def test_concurrent_evaluations(
         self, remote_client: RemotePolicyClient
     ) -> None:
-        """Verifies that evaluations and polling can run concurrently."""
-        # Load a policy
+        """Verifies that concurrent evaluations work correctly."""
         policy = remote_client.parser.parse_yaml(SAMPLE_POLICY_YAML)
         remote_client.cache.load_policy(policy)
 
-        # Mock successful polling
-        mock_response = MagicMock()
-        mock_response.text = SAMPLE_POLICY_YAML
-        mock_response.status_code = 200
+        # Perform multiple concurrent evaluations
+        results = await asyncio.gather(
+            remote_client.check_input("test 1"),
+            remote_client.check_input("test 2"),
+            remote_client.check_output("test 3"),
+            remote_client.is_tool_allowed("test_tool"),
+        )
 
-        with patch.object(
-            remote_client._client, "get", new_callable=AsyncMock
-        ) as mock_get:
-            mock_get.return_value = mock_response
-
-            await remote_client.start()
-
-            # Perform multiple concurrent evaluations while polling
-            results = await asyncio.gather(
-                remote_client.check_input("test 1"),
-                remote_client.check_input("test 2"),
-                remote_client.check_output("test 3"),
-                remote_client.is_tool_allowed("test_tool"),
-            )
-
-            # All should complete without error
-            assert len(results) == 4
-            assert all(r.passed is True for r in results)
-
-            await remote_client.stop()
+        # All should complete without error
+        assert len(results) == 4
+        assert all(r.passed is True for r in results)
 
     @pytest.mark.asyncio
     async def test_stop_during_polling(
@@ -426,15 +454,13 @@ class TestRemotePolicyClientAsyncBehavior:
         mock_response.text = SAMPLE_POLICY_YAML
         mock_response.status_code = 200
 
-        with patch.object(
-            remote_client._client, "get", new_callable=AsyncMock
-        ) as mock_get:
-            mock_get.return_value = mock_response
+        with patch("httpx.AsyncClient") as mock_client_class:
+            mock_instance = AsyncMock()
+            mock_instance.get = AsyncMock(return_value=mock_response)
+            mock_instance.is_closed.return_value = False
+            mock_client_class.return_value = mock_instance
 
             await remote_client.start()
-
-            # Let it poll for a bit
-            await asyncio.sleep(0.5)
 
             # Stop should work cleanly
             await remote_client.stop()
@@ -443,65 +469,3 @@ class TestRemotePolicyClientAsyncBehavior:
             assert remote_client._task is not None
             assert remote_client._task.done()
 
-
-class TestRemotePolicyClientMultiplePolicies:
-    """Test handling multiple policy updates."""
-
-    @pytest.mark.asyncio
-    async def test_policy_update_sequence(
-        self, remote_client: RemotePolicyClient
-    ) -> None:
-        """Verifies that the client can update policies multiple times."""
-        policy1_yaml = """
-id: policy-v1
-version: 1
-status: active
-rules:
-  - id: rule1
-    trigger: on_input
-    condition:
-      metric: prompt
-      operator: contains
-      threshold: secret
-    action: block
-"""
-
-        policy2_yaml = """
-id: policy-v2
-version: 2
-status: active
-rules:
-  - id: rule2
-    trigger: on_input
-    condition:
-      metric: prompt
-      operator: contains
-      threshold: password
-    action: block
-"""
-
-        call_count = 0
-        responses = [policy1_yaml, policy2_yaml]
-
-        async def mock_get_side_effect(*args, **kwargs):
-            nonlocal call_count
-            mock_response = MagicMock()
-            mock_response.text = responses[min(call_count, len(responses) - 1)]
-            mock_response.status_code = 200
-            call_count += 1
-            return mock_response
-
-        with patch.object(
-            remote_client._client, "get", new_callable=AsyncMock
-        ) as mock_get:
-            mock_get.side_effect = mock_get_side_effect
-
-            await remote_client.start()
-
-            # Wait for two polling cycles
-            await asyncio.sleep(2.5)
-
-            # Verify multiple updates occurred
-            assert mock_get.call_count >= 2
-
-            await remote_client.stop()

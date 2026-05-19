@@ -98,8 +98,8 @@ class RemotePolicyClient(PolicyClient):
         self.refresh_interval_s: int = refresh_interval_s
         self.cache: PolicyCache = PolicyCache()
         self.parser: PolicyParser = PolicyParser()
-        self._client: httpx.AsyncClient = httpx.AsyncClient(timeout=10.0)
-        self._task: Optional[asyncio.Task] = None
+        self._client: Optional[httpx.AsyncClient] = None
+        self._task: Optional[asyncio.Task[None]] = None
 
     async def start(self) -> None:
         """
@@ -108,9 +108,34 @@ class RemotePolicyClient(PolicyClient):
         This method creates an asyncio.Task that runs the _poll_loop() coroutine.
         The task runs in the background and will not block the caller.
 
+        On first start or after stop(), an eager fetch is performed to populate the cache
+        before polling begins. This ensures policies are available immediately, avoiding
+        the cold-start window where all evaluations would pass due to empty cache.
+
         Safe to call multiple times; if a task is already running, this is a no-op.
         """
         if self._task is None or self._task.done():
+            # Recreate HTTP client if it was closed
+            if self._client is None or self._client.is_closed():
+                self._client = httpx.AsyncClient(timeout=10.0)
+
+            # Eager fetch before starting the polling loop
+            try:
+                response = await self._client.get(self.endpoint_url)
+                response.raise_for_status()
+                policy = self.parser.parse_yaml(response.text)
+                self.cache.load_policy(policy)
+                logger.info(
+                    "RemotePolicyClient initial policy fetched from %s",
+                    self.endpoint_url,
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to fetch initial policy from %s. Starting with empty cache.",
+                    self.endpoint_url,
+                )
+                # Continue anyway; the polling loop will retry periodically
+
             self._task = asyncio.create_task(self._poll_loop())
             logger.info(
                 "RemotePolicyClient background polling started. Endpoint: %s, interval: %ds",
@@ -135,18 +160,19 @@ class RemotePolicyClient(PolicyClient):
                 pass
             logger.info("RemotePolicyClient background polling stopped")
 
-        await self._client.aclose()
+        if self._client is not None and not self._client.is_closed():
+            await self._client.aclose()
 
     async def _poll_loop(self) -> None:
         """
         Background polling loop that fetches and updates policy.
 
         This coroutine runs indefinitely in a background task. On each iteration:
-        1. Sleeps for refresh_interval_s seconds.
-        2. Attempts to fetch the policy bundle from the remote endpoint.
-        3. Parses and loads the policy into the cache if successful.
-        4. On any error (network, parsing, etc.), logs a warning and retains
+        1. Attempts to fetch the policy bundle from the remote endpoint.
+        2. Parses and loads the policy into the cache if successful.
+        3. On any error (network, parsing, etc.), logs a warning with traceback and retains
            the last known valid policy.
+        4. Sleeps for refresh_interval_s seconds before the next fetch.
         5. Catches asyncio.CancelledError to gracefully shut down when stop() is called.
 
         This method never raises an exception to the caller (except CancelledError
@@ -154,9 +180,8 @@ class RemotePolicyClient(PolicyClient):
         """
         try:
             while True:
-                await asyncio.sleep(self.refresh_interval_s)
-
                 try:
+                    assert self._client is not None, "HTTP client not initialized"
                     response = await self._client.get(self.endpoint_url)
                     response.raise_for_status()
 
@@ -168,14 +193,15 @@ class RemotePolicyClient(PolicyClient):
                         self.endpoint_url,
                     )
 
-                except Exception as exc:
-                    logger.warning(
-                        "Failed to fetch or parse policy from %s: %s. "
+                except Exception:
+                    logger.exception(
+                        "Failed to fetch or parse policy from %s. "
                         "Retaining last known policy.",
                         self.endpoint_url,
-                        exc,
                     )
                     # Continue the loop; the cache retains the previous policy
+
+                await asyncio.sleep(self.refresh_interval_s)
 
         except asyncio.CancelledError:
             logger.debug("RemotePolicyClient polling loop cancelled")
@@ -196,9 +222,17 @@ class RemotePolicyClient(PolicyClient):
             PolicyResult.block(...) if a blocking rule matched.
             PolicyResult.alert(...) if an alert rule matched.
         """
-        return self.cache.evaluate(
-            trigger=TRIGGER_ON_INPUT, metrics={"prompt": text}
-        )
+        try:
+            return self.cache.evaluate(
+                trigger=TRIGGER_ON_INPUT, metrics={"prompt": text}
+            )
+        except Exception:
+            logger.exception("Unexpected error during input policy evaluation")
+            # Fail closed: treat evaluation errors as policy violations
+            return PolicyResult.block(
+                reason="Policy evaluation error. Request denied.",
+                rule_id="evaluation_error",
+            )
 
     async def check_output(self, text: str) -> PolicyResult:
         """
@@ -215,9 +249,17 @@ class RemotePolicyClient(PolicyClient):
             PolicyResult.block(...) if a blocking rule matched.
             PolicyResult.alert(...) if an alert rule matched.
         """
-        return self.cache.evaluate(
-            trigger=TRIGGER_ON_OUTPUT, metrics={"output": text}
-        )
+        try:
+            return self.cache.evaluate(
+                trigger=TRIGGER_ON_OUTPUT, metrics={"output": text}
+            )
+        except Exception:
+            logger.exception("Unexpected error during output policy evaluation")
+            # Fail closed: treat evaluation errors as policy violations
+            return PolicyResult.block(
+                reason="Policy evaluation error. Response blocked.",
+                rule_id="evaluation_error",
+            )
 
     async def is_tool_allowed(self, tool_name: str) -> PolicyResult:
         """
@@ -234,6 +276,14 @@ class RemotePolicyClient(PolicyClient):
             PolicyResult.block(...) if a blocking rule matched.
             PolicyResult.alert(...) if an alert rule matched.
         """
-        return self.cache.evaluate(
-            trigger=TRIGGER_ON_TOOL_CALL, metrics={"tool_name": tool_name}
-        )
+        try:
+            return self.cache.evaluate(
+                trigger=TRIGGER_ON_TOOL_CALL, metrics={"tool_name": tool_name}
+            )
+        except Exception:
+            logger.exception("Unexpected error during tool policy evaluation")
+            # Fail closed: treat evaluation errors as policy violations
+            return PolicyResult.block(
+                reason="Policy evaluation error. Tool access denied.",
+                rule_id="evaluation_error",
+            )
