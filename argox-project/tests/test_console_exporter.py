@@ -86,7 +86,7 @@ class TestConsoleSpanExporter:
         with tracer.start_as_current_span("llm.call") as span:
             span.set_attribute("gen_ai.usage.cost", 0.042)
         out = buf.getvalue()
-        assert "cost=$0.042000" in out
+        assert "cost=$0.042" in out
 
     def test_emits_cost_fallback(self):
         buf = io.StringIO()
@@ -94,7 +94,7 @@ class TestConsoleSpanExporter:
         with tracer.start_as_current_span("llm.call") as span:
             span.set_attribute(ARGOX_RUN_COST, 0.042)
         out = buf.getvalue()
-        assert "cost=$0.042000" in out
+        assert "cost=$0.042" in out
 
     def test_emits_cost_zero(self):
         buf = io.StringIO()
@@ -102,7 +102,7 @@ class TestConsoleSpanExporter:
         with tracer.start_as_current_span("llm.call") as span:
             span.set_attribute("gen_ai.usage.cost", 0.0)
         out = buf.getvalue()
-        assert "cost=$0.000000" in out
+        assert "cost=$0" in out
 
     def test_no_cost_section_when_attrs_absent(self):
         buf = io.StringIO()

@@ -52,7 +52,8 @@ def _format_summary(span: ReadableSpan) -> str:
     if cost is None:
         cost = attrs.get(ARGOX_RUN_COST)
     if cost is not None:
-        parts.append(f"cost=${float(cost):.6f}")
+        cost_str = f"{float(cost):.6f}".rstrip("0").rstrip(".")
+        parts.append(f"cost=${cost_str}")
 
     decision = attrs.get(ARGOX_POLICY_DECISION)
     if decision is not None:
