@@ -64,9 +64,10 @@ ARGOX_PROCESSOR_STATUS: Final[str] = "argox.processor.status"
 ARGOX_PII_REDACTIONS: Final[str] = "argox.pii.redactions"
 """Per-entity redaction counts emitted by the built-in PII processor.
 
-Stored on the active span as a list of ``"<ENTITY>:<count>"`` strings so it
-encodes cleanly through every OpenTelemetry exporter (attributes cannot hold
-nested dicts). The raw redacted values are never recorded.
+Attached to the :data:`EVENT_PII_REDACTED` span event as a list of
+``"<ENTITY>:<count>"`` strings so it encodes cleanly through every
+OpenTelemetry exporter (attributes cannot hold nested dicts). The raw
+redacted values are never recorded.
 """
 
 EVENT_PII_REDACTED: Final[str] = "argox.pii.redacted"
