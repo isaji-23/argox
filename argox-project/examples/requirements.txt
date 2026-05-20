@@ -1,0 +1,7 @@
+# Extra runtime dependencies for the Argox demos.
+#
+# The Argox SDK packages themselves are installed in editable mode from the
+# repository (see the README in this directory). The entries below are only
+# the libraries the demo scripts use directly that are NOT already pulled in
+# by `argox-core` or `argox-plugin-openai`.
+python-dotenv>=1.0
