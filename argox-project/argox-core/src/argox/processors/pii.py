@@ -267,6 +267,15 @@ class PiiRedactionProcessor(ArgoxProcessor):
         hash_salt: str = "",
         detector: Detector | None = None,
     ) -> None:
+        if isinstance(entities, str):
+            # ``str`` is iterable in Python and would silently expand to its
+            # individual characters, which never match a catalogue label and
+            # would mute detection entirely. Reject it at the boundary so
+            # ``entities="EMAIL"`` fails loudly instead of disabling redaction.
+            raise TypeError(
+                "entities must be an iterable of labels (e.g. ['EMAIL']), "
+                "not a single string"
+            )
         self._entities: tuple[str, ...] = (
             tuple(entities) if entities is not None else DEFAULT_ENTITIES
         )

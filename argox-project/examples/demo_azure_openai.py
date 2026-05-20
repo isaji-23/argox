@@ -126,6 +126,11 @@ class _CustomPiiProcessor:
     *not* registered with the manager — it exists only to document the minimal
     contract a custom processor must satisfy. To roll your own::
 
+        import re
+
+        from argox.interfaces.processor import ArgoxProcessor
+
+
         class MyProcessor(ArgoxProcessor):
             _EMAIL_PATTERN = re.compile(r"[\\w.+-]+@[\\w-]+\\.[\\w.-]+")
 

@@ -233,6 +233,12 @@ async def test_entities_filter_skips_disabled_kinds(ctx: RunContext) -> None:
     assert "[REDACTED:PHONE]" not in out
 
 
+def test_entities_as_string_raises_type_error() -> None:
+    """A bare string would silently iterate as characters; reject it loudly."""
+    with pytest.raises(TypeError, match="iterable of labels"):
+        PiiRedactionProcessor(entities="EMAIL")
+
+
 # ---------------------------------------------------------------------------
 # Custom detector contract
 # ---------------------------------------------------------------------------
