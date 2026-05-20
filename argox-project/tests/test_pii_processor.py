@@ -289,6 +289,30 @@ def test_entities_as_string_raises_type_error() -> None:
         PiiRedactionProcessor(entities="EMAIL")
 
 
+async def test_mode_accepts_raw_string_value(ctx: RunContext) -> None:
+    """A raw mode string ('hash') must be coerced to the enum member.
+
+    Without coercion, the ``is`` comparisons in ``_replacement`` would
+    miss the string and fall through to the defensive MASK branch.
+    """
+    processor = PiiRedactionProcessor(
+        mode="hash", hash_salt="x", entities=["EMAIL"],
+    )
+    out = await processor.process_output("a@b.com", ctx)
+    assert out != "a@b.com"
+    assert not out.startswith("[REDACTED")
+
+
+def test_mode_unknown_string_raises_type_error() -> None:
+    with pytest.raises(TypeError, match="RedactionMode"):
+        PiiRedactionProcessor(mode="hashh")
+
+
+def test_mode_non_string_non_enum_raises_type_error() -> None:
+    with pytest.raises(TypeError, match="RedactionMode"):
+        PiiRedactionProcessor(mode=42)
+
+
 # ---------------------------------------------------------------------------
 # Custom detector contract
 # ---------------------------------------------------------------------------

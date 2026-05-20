@@ -313,6 +313,18 @@ class PiiRedactionProcessor(ArgoxProcessor):
         self._entities: tuple[str, ...] = (
             tuple(entities) if entities is not None else DEFAULT_ENTITIES
         )
+        # Coerce raw strings ("mask", "hash", "drop") into the enum so callers
+        # can pass either form, and fail loudly on anything else — without
+        # this guard a typo like ``mode="hashh"`` (or even ``mode="hash"``)
+        # would slip past the ``is`` comparisons in _replacement and silently
+        # fall back to MASK behavior, since RedactionMode subclasses str.
+        if not isinstance(mode, RedactionMode):
+            try:
+                mode = RedactionMode(mode)
+            except ValueError as exc:
+                raise TypeError(
+                    f"mode must be a RedactionMode (got {mode!r})"
+                ) from exc
         self._mode = mode
         self._redact_input = redact_input
         self._hash_salt = hash_salt
@@ -363,13 +375,17 @@ class PiiRedactionProcessor(ArgoxProcessor):
         return value
 
     def _apply(self, text: str, counts: dict[str, int]) -> str:
-        """Detect, deduplicate, and rewrite ``text`` in place.
+        """Detect, deduplicate, and rewrite ``text`` in a single pass.
 
         Overlapping matches are resolved by entity precedence first
         (:data:`_ENTITY_PRECEDENCE`); ties on precedence fall back to
-        the longest span, then to the earliest start offset. ``counts``
-        is mutated in place so the caller can emit a single aggregated
-        span event per phase invocation.
+        the longest span, then to the earliest start offset. The
+        rewrite is a linear left-to-right scan that appends unchanged
+        slices and replacements to a list and joins once, keeping
+        runtime O(len(text) + number of matches) regardless of how
+        many spans were redacted. ``counts`` is mutated in place so
+        the caller can emit a single aggregated span event per phase
+        invocation.
         """
         try:
             matches = self._detector.detect(text, self._entities)
@@ -382,7 +398,8 @@ class PiiRedactionProcessor(ArgoxProcessor):
             # Log only the exception type — a detector's exception message
             # may quote the raw input and we must never leak PII into logs.
             _LOGGER.warning(
-                "PII detector %s raised; returning original text",
+                "PII detector %s raised %s; returning original text",
+                type(self._detector).__name__,
                 type(exc).__name__,
             )
             return text
@@ -394,13 +411,16 @@ class PiiRedactionProcessor(ArgoxProcessor):
         if not chosen:
             return text
 
-        chosen.sort(key=lambda m: m.start, reverse=True)
-        out = text
+        chosen.sort(key=lambda m: m.start)
+        pieces: list[str] = []
+        cursor = 0
         for match in chosen:
-            replacement = self._replacement(match)
-            out = out[: match.start] + replacement + out[match.end :]
+            pieces.append(text[cursor : match.start])
+            pieces.append(self._replacement(match))
             counts[match.entity] = counts.get(match.entity, 0) + 1
-        return out
+            cursor = match.end
+        pieces.append(text[cursor:])
+        return "".join(pieces)
 
     def _normalized_hash_value(self, match: EntityMatch) -> str:
         """Return a canonical value for stable hashing of equivalent PII.
