@@ -20,7 +20,7 @@ import hashlib
 import logging
 import re
 from collections.abc import Iterable, Sequence
-from typing import Any, NamedTuple, Protocol
+from typing import Any, Literal, NamedTuple, Protocol
 
 from opentelemetry import trace
 
@@ -296,7 +296,7 @@ class PiiRedactionProcessor(ArgoxProcessor):
     def __init__(
         self,
         entities: Iterable[str] | None = None,
-        mode: RedactionMode = RedactionMode.MASK,
+        mode: RedactionMode | Literal["mask", "hash", "drop"] = RedactionMode.MASK,
         redact_input: bool = False,
         hash_salt: str = "",
         detector: Detector | None = None,
