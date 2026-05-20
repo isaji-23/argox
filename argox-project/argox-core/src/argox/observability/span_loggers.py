@@ -1,4 +1,4 @@
-"""ConsoleSpanExporter — human-readable wrapper over OTel's console exporter.
+"""ConsoleSpanLogger — human-readable wrapper over OTel's console exporter.
 
 Replaces the default JSON-dump formatter with a single-line summary per span
 that highlights the fields a developer wants to see at a glance: span name,
@@ -67,7 +67,7 @@ def _format_summary(span: ReadableSpan) -> str:
     return " ".join(parts) + os.linesep
 
 
-class ConsoleSpanExporter(_OtelConsoleSpanExporter):
+class ConsoleSpanLogger(_OtelConsoleSpanExporter):
     """OTel ConsoleSpanExporter that prints a one-line Argox summary per span.
 
     Drop-in replacement for ``opentelemetry.sdk.trace.export.ConsoleSpanExporter``
@@ -80,9 +80,9 @@ class ConsoleSpanExporter(_OtelConsoleSpanExporter):
     Example::
 
         from argox.core import init_telemetry
-        from argox.exporters import ConsoleSpanExporter
+        from argox.observability.span_loggers import ConsoleSpanLogger
 
-        init_telemetry(exporters=[ConsoleSpanExporter()])
+        init_telemetry(exporters=[ConsoleSpanLogger()])
     """
 
     def __init__(self, out: IO = sys.stdout) -> None:

@@ -25,7 +25,7 @@ The demo exercises three Argox capabilities end-to-end:
    and an OTel ``ConsoleMetricExporter`` dump is flushed once at the very
    end via ``MeterProvider.force_flush()``.
 
-Expected output is a ``ConsoleSpanExporter`` span line for the run, the
+Expected output is a ``ConsoleSpanLogger`` span line for the run, the
 processor's redaction logs, the tools' "received" lines, the in-memory
 metrics summary, the LLM's final answer, and finally the OTel metric dump.
 
@@ -56,7 +56,7 @@ import argox
 from argox.core import init_metrics, init_telemetry
 from argox.core.context import RunContext
 from argox.core.state import AgentRunMetrics
-from argox.exporters import ConsoleSpanExporter
+from argox.observability.span_loggers import ConsoleSpanLogger
 from argox.interfaces.exporter import ExporterBase
 from argox.interfaces.policy import PolicyClient, PolicyResult
 from argox.interfaces.processor import ArgoxProcessor
@@ -185,7 +185,7 @@ class _PrintMetricsExporter(ExporterBase):
             print("[metrics] violations:   ", metrics.policy_violations)
 
 
-init_telemetry(exporters=[ConsoleSpanExporter()])
+init_telemetry(exporters=[ConsoleSpanLogger()])
 # A 1-hour export interval keeps the periodic reader from interleaving its
 # output with the run; ``force_flush`` at the end prints one clean dump.
 _meter_provider = init_metrics(

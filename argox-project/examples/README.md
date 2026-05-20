@@ -125,7 +125,7 @@ python examples/demo_azure_openai.py
 
 Expected output, in order:
 
-1. A `ConsoleSpanExporter` JSON line per agent run span.
+1. A `ConsoleSpanLogger` JSON line per agent run span.
 2. `[processor] redacted email …` lines as the `PiiRedactingProcessor`
    scrubs the email address from `log_user_activity`'s arguments
    before the tool body runs.
