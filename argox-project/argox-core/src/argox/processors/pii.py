@@ -14,6 +14,7 @@ changing the public processor surface.
 
 from __future__ import annotations
 
+import asyncio
 import enum
 import hashlib
 import logging
@@ -240,7 +241,10 @@ class PiiRedactionProcessor(ArgoxProcessor):
 
     Args:
         entities: Iterable of entity labels to detect. Defaults to the
-            full catalogue. Unknown labels are silently ignored.
+            full built-in catalogue. The default regex detector ignores
+            any label outside its catalogue; a custom :class:`Detector`
+            is free to recognize and emit additional labels, which the
+            processor will then redact like any other entity.
         mode: One of :class:`RedactionMode`.
             ``MASK`` (default) replaces matches with ``[REDACTED:<ENTITY>]``;
             ``HASH`` replaces them with ``sha256(value + salt)[:12]``;
@@ -326,6 +330,11 @@ class PiiRedactionProcessor(ArgoxProcessor):
         """
         try:
             matches = self._detector.detect(text, self._entities)
+        except asyncio.CancelledError:
+            # Cancellation is control-flow, not a detector failure — let it
+            # propagate so the Manager can shut the run down cleanly. This
+            # mirrors the pattern in ``ArgoxManager._run_processors``.
+            raise
         except Exception as exc:
             # Log only the exception type — a detector's exception message
             # may quote the raw input and we must never leak PII into logs.
