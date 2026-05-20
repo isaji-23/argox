@@ -20,11 +20,13 @@ from argox.semconv.attributes import (
     ARGOX_POLICY_DECISION,
     ARGOX_POLICY_RULE_ID,
     ARGOX_RUN_BLOCKED_TOOLS,
+    ARGOX_RUN_COST,
 )
 
 # OTel GenAI semantic-convention attribute keys for LLM token usage.
 _GEN_AI_INPUT_TOKENS = "gen_ai.usage.input_tokens"
 _GEN_AI_OUTPUT_TOKENS = "gen_ai.usage.output_tokens"
+_GEN_AI_COST = "gen_ai.usage.cost"
 
 
 def _format_summary(span: ReadableSpan) -> str:
@@ -46,9 +48,11 @@ def _format_summary(span: ReadableSpan) -> str:
         tout = attrs.get(_GEN_AI_OUTPUT_TOKENS, 0)
         parts.append(f"tokens={tin}/{tout}")
 
-    cost = attrs.get("gen_ai.usage.cost") or attrs.get("argox.run.cost")
+    cost = attrs.get(_GEN_AI_COST)
+    if cost is None:
+        cost = attrs.get(ARGOX_RUN_COST)
     if cost is not None:
-        parts.append(f"cost=${float(cost):.3f}")
+        parts.append(f"cost=${float(cost):.6f}")
 
     decision = attrs.get(ARGOX_POLICY_DECISION)
     if decision is not None:
