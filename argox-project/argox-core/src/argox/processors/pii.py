@@ -402,11 +402,29 @@ class PiiRedactionProcessor(ArgoxProcessor):
             counts[match.entity] = counts.get(match.entity, 0) + 1
         return out
 
+    def _normalized_hash_value(self, match: EntityMatch) -> str:
+        """Return a canonical value for stable hashing of equivalent PII.
+
+        Normalization is intentionally conservative and entity-specific
+        so values that differ only by formatting or casing hash
+        identically where downstream consumers would expect a join to
+        succeed. Override this in a subclass to add normalization for
+        custom entities.
+        """
+        value = match.value.strip()
+        if match.entity == "EMAIL":
+            return value.lower()
+        if match.entity == "CREDIT_CARD":
+            return re.sub(r"[\s-]+", "", value)
+        if match.entity == "IBAN":
+            return re.sub(r"[\s-]+", "", value).upper()
+        return value
+
     def _replacement(self, match: EntityMatch) -> str:
         if self._mode is RedactionMode.MASK:
             return f"[REDACTED:{match.entity}]"
         if self._mode is RedactionMode.HASH:
-            normalized = _normalize_for_hash(match.entity, match.value)
+            normalized = self._normalized_hash_value(match)
             digest = hashlib.sha256(
                 (normalized + self._hash_salt).encode("utf-8")
             ).hexdigest()
@@ -445,29 +463,6 @@ class PiiRedactionProcessor(ArgoxProcessor):
         if tool_name is not None:
             attributes[ARGOX_PROCESSOR_TOOL_NAME] = tool_name
         span.add_event(EVENT_PII_REDACTED, attributes)
-
-
-def _normalize_for_hash(entity: str, value: str) -> str:
-    """Canonicalize a value before hashing so HASH mode supports stable joins.
-
-    Without normalization, the same logical PII would hash differently
-    when its textual form varies (``A@B.com`` vs ``a@b.com``,
-    ``4111-1111-1111-1111`` vs ``4111 1111 1111 1111``, ``ES91 21...``
-    vs ``ES9121...``). The contract for HASH mode is that downstream
-    joins still collide on the underlying identity, so we strip
-    formatting and apply the canonical case per entity.
-    """
-    if entity == "EMAIL":
-        return value.lower()
-    if entity == "CREDIT_CARD":
-        return re.sub(r"[ \-]", "", value)
-    if entity == "IBAN":
-        return value.replace(" ", "").upper()
-    if entity == "PHONE":
-        return value.replace(" ", "")
-    if entity in ("ES_DNI", "ES_NIE"):
-        return value.upper()
-    return value
 
 
 def _resolve_overlaps(matches: Sequence[EntityMatch]) -> list[EntityMatch]:
