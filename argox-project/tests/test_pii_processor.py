@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 import hashlib
-from typing import List, Sequence
+from collections.abc import Sequence
 
 import pytest
-
 from argox.core.context import RunContext
 from argox.processors import (
     Detector,
@@ -15,6 +14,20 @@ from argox.processors import (
     RedactionMode,
 )
 from argox.processors.pii import _DefaultRegexDetector  # noqa: PLC2701
+from argox.semconv.attributes import (
+    ARGOX_PII_REDACTIONS,
+    ARGOX_PROCESSOR_NAME,
+    ARGOX_PROCESSOR_PHASE,
+    ARGOX_PROCESSOR_TOOL_NAME,
+    EVENT_PII_REDACTED,
+)
+from opentelemetry import trace
+from opentelemetry.sdk.resources import Resource
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+    InMemorySpanExporter,
+)
 
 
 @pytest.fixture
@@ -190,7 +203,7 @@ async def test_process_input_redacts_when_enabled(ctx: RunContext) -> None:
 class _ExplodingDetector:
     """Detector that always raises — used to exercise fail-open."""
 
-    def detect(self, text: str, entities: Sequence[str]) -> List[EntityMatch]:
+    def detect(self, text: str, entities: Sequence[str]) -> list[EntityMatch]:
         raise RuntimeError("boom")
 
 
@@ -226,8 +239,8 @@ async def test_entities_filter_skips_disabled_kinds(ctx: RunContext) -> None:
 
 
 class _ConstantDetector:
-    def detect(self, text: str, entities: Sequence[str]) -> List[EntityMatch]:
-        out: List[EntityMatch] = []
+    def detect(self, text: str, entities: Sequence[str]) -> list[EntityMatch]:
+        out: list[EntityMatch] = []
         marker = "SECRET"
         start = text.find(marker)
         if start >= 0:
@@ -254,3 +267,118 @@ def test_default_detector_implements_protocol() -> None:
     assert len(matches) == 1
     assert matches[0].entity == "EMAIL"
     assert matches[0].value == "a@b.com"
+
+
+# ---------------------------------------------------------------------------
+# Span event emission — argox.pii.redacted carries counts, never raw PII
+# ---------------------------------------------------------------------------
+
+
+_TRACE_EXPORTER = InMemorySpanExporter()
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _install_in_memory_tracer_provider():
+    """Install an in-memory TracerProvider for this module only.
+
+    OTel's ``set_tracer_provider`` is set-once globally, so we bypass the
+    guard via the private ``_TRACER_PROVIDER_SET_ONCE`` attribute and
+    restore the previous state when the module's tests finish, matching
+    the pattern used by ``tests/test_processor_pipeline.py``.
+    """
+    saved_provider = trace._TRACER_PROVIDER  # type: ignore[attr-defined]
+    saved_set_once = trace._TRACER_PROVIDER_SET_ONCE._done  # type: ignore[attr-defined]
+
+    provider = TracerProvider(resource=Resource.create({"service.name": "test"}))
+    provider.add_span_processor(SimpleSpanProcessor(_TRACE_EXPORTER))
+    trace._TRACER_PROVIDER_SET_ONCE._done = False  # type: ignore[attr-defined]
+    trace._TRACER_PROVIDER = None  # type: ignore[attr-defined]
+    trace.set_tracer_provider(provider)
+
+    yield
+
+    trace._TRACER_PROVIDER = saved_provider  # type: ignore[attr-defined]
+    trace._TRACER_PROVIDER_SET_ONCE._done = saved_set_once  # type: ignore[attr-defined]
+    _TRACE_EXPORTER.clear()
+
+
+@pytest.fixture
+def span_exporter():
+    _TRACE_EXPORTER.clear()
+    yield _TRACE_EXPORTER
+    _TRACE_EXPORTER.clear()
+
+
+async def _run_in_span(coro_fn):
+    tracer = trace.get_tracer("test")
+    with tracer.start_as_current_span("test-span"):
+        return await coro_fn()
+
+
+async def test_output_emits_redaction_event_with_counts_no_raw_pii(
+    ctx: RunContext, span_exporter: InMemorySpanExporter,
+) -> None:
+    processor = PiiRedactionProcessor()
+
+    async def run():
+        return await processor.process_output(
+            "mail a@b.com and a@c.com and ip 10.0.0.1", ctx,
+        )
+
+    out = await _run_in_span(run)
+    assert "[REDACTED:EMAIL]" in out
+    assert "[REDACTED:IPV4]" in out
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    events = [e for e in spans[0].events if e.name == EVENT_PII_REDACTED]
+    assert len(events) == 1
+    attrs = dict(events[0].attributes or {})
+    assert attrs[ARGOX_PROCESSOR_NAME] == "PiiRedactionProcessor"
+    assert attrs[ARGOX_PROCESSOR_PHASE] == "output"
+    assert set(attrs[ARGOX_PII_REDACTIONS]) == {"EMAIL:2", "IPV4:1"}
+    # Tool name attribute is omitted on output/input phases.
+    assert ARGOX_PROCESSOR_TOOL_NAME not in attrs
+    # Raw PII must not appear anywhere in the event attributes.
+    for value in attrs.values():
+        rendered = str(value)
+        assert "a@b.com" not in rendered
+        assert "a@c.com" not in rendered
+        assert "10.0.0.1" not in rendered
+
+
+async def test_tool_args_event_includes_tool_name(
+    ctx: RunContext, span_exporter: InMemorySpanExporter,
+) -> None:
+    processor = PiiRedactionProcessor(entities=["EMAIL"])
+
+    async def run():
+        return await processor.process_tool_args(
+            "log_user_activity", {"email": "user@example.com"}, ctx,
+        )
+
+    await _run_in_span(run)
+
+    spans = span_exporter.get_finished_spans()
+    events = [e for e in spans[0].events if e.name == EVENT_PII_REDACTED]
+    assert len(events) == 1
+    attrs = dict(events[0].attributes or {})
+    assert attrs[ARGOX_PROCESSOR_PHASE] == "tool_args"
+    assert attrs[ARGOX_PROCESSOR_TOOL_NAME] == "log_user_activity"
+    assert attrs[ARGOX_PROCESSOR_NAME] == "PiiRedactionProcessor"
+    assert list(attrs[ARGOX_PII_REDACTIONS]) == ["EMAIL:1"]
+
+
+async def test_no_redactions_emits_no_event(
+    ctx: RunContext, span_exporter: InMemorySpanExporter,
+) -> None:
+    processor = PiiRedactionProcessor()
+
+    async def run():
+        return await processor.process_output("nothing to scrub here", ctx)
+
+    await _run_in_span(run)
+
+    spans = span_exporter.get_finished_spans()
+    pii_events = [e for e in spans[0].events if e.name == EVENT_PII_REDACTED]
+    assert pii_events == []

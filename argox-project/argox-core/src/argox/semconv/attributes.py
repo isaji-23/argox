@@ -69,6 +69,14 @@ encodes cleanly through every OpenTelemetry exporter (attributes cannot hold
 nested dicts). The raw redacted values are never recorded.
 """
 
+EVENT_PII_REDACTED: Final[str] = "argox.pii.redacted"
+"""Span event emitted by the built-in PII processor when redactions fire.
+
+Distinct from :data:`EVENT_PROCESSOR_APPLIED` (which the Manager emits once
+per processor invocation regardless of effect), so consumers can tell apart
+"this processor ran" from "this processor actually redacted something".
+"""
+
 # Metric instrument names
 METRIC_GEN_AI_TOKEN_USAGE: Final[str] = "gen_ai.client.token.usage"
 """Counter for input/output tokens consumed by agent runs."""

@@ -4,7 +4,7 @@ A pure-regex, dependency-free :class:`ArgoxProcessor` that scrubs common
 personally-identifiable information from strings flowing through the
 Argox pipeline. It covers all three lifecycle phases — ``process_input``
 (opt-in), ``process_tool_args`` (with recursive traversal), and
-``process_output`` — and emits ``argox.processor.applied`` span events
+``process_output`` — and emits an ``argox.pii.redacted`` span event
 carrying per-entity redaction counts without ever leaking raw values.
 
 The detector is pluggable via the :class:`Detector` protocol so a richer
@@ -18,7 +18,8 @@ import enum
 import hashlib
 import logging
 import re
-from typing import Any, Iterable, List, Optional, Protocol, Sequence, Tuple
+from collections.abc import Iterable, Sequence
+from typing import Any, NamedTuple, Protocol
 
 from opentelemetry import trace
 
@@ -28,12 +29,11 @@ from argox.semconv.attributes import (
     ARGOX_PII_REDACTIONS,
     ARGOX_PROCESSOR_NAME,
     ARGOX_PROCESSOR_PHASE,
-    EVENT_PROCESSOR_APPLIED,
+    ARGOX_PROCESSOR_TOOL_NAME,
+    EVENT_PII_REDACTED,
 )
 
 _LOGGER = logging.getLogger(__name__)
-
-_PROCESSOR_NAME = "pii"
 
 
 class RedactionMode(str, enum.Enum):
@@ -52,46 +52,31 @@ class RedactionMode(str, enum.Enum):
     DROP = "drop"
 
 
-class EntityMatch(Tuple[int, int, str, str]):
-    """A detected PII span: ``(start, end, entity, value)``.
+class EntityMatch(NamedTuple):
+    """A detected PII span.
 
-    ``start``/``end`` are character offsets into the source string;
+    ``start`` and ``end`` are character offsets into the source string;
     ``entity`` is one of the catalogue labels (e.g. ``"EMAIL"``);
     ``value`` is the raw matched substring (needed by ``HASH`` mode and
     never logged).
     """
 
-    __slots__ = ()
-
-    def __new__(cls, start: int, end: int, entity: str, value: str) -> "EntityMatch":
-        return tuple.__new__(cls, (start, end, entity, value))
-
-    @property
-    def start(self) -> int:
-        return self[0]
-
-    @property
-    def end(self) -> int:
-        return self[1]
-
-    @property
-    def entity(self) -> str:
-        return self[2]
-
-    @property
-    def value(self) -> str:
-        return self[3]
+    start: int
+    end: int
+    entity: str
+    value: str
 
 
 class Detector(Protocol):
     """Pluggable detector contract.
 
     An implementation returns every PII match found in ``text``. Overlaps
-    are resolved by the processor (longest match wins, ties broken by
-    entity precedence), so detectors do not need to deduplicate.
+    are resolved by the processor (entity precedence first per
+    :data:`_ENTITY_PRECEDENCE`, ties broken by longest match then earliest
+    start offset), so detectors do not need to deduplicate.
     """
 
-    def detect(self, text: str, entities: Sequence[str]) -> List[EntityMatch]:
+    def detect(self, text: str, entities: Sequence[str]) -> list[EntityMatch]:
         ...
 
 
@@ -101,7 +86,7 @@ class Detector(Protocol):
 
 
 # Higher index = higher precedence when two matches overlap on the same span.
-_ENTITY_PRECEDENCE: Tuple[str, ...] = (
+_ENTITY_PRECEDENCE: tuple[str, ...] = (
     "PHONE",
     "IPV4",
     "IPV6",
@@ -198,7 +183,7 @@ class _DefaultRegexDetector:
     so a regex hit alone is not enough to trigger redaction.
     """
 
-    _PATTERNS: Tuple[Tuple[str, "re.Pattern[str]"], ...] = (
+    _PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
         ("EMAIL", _EMAIL_RE),
         ("PHONE", _PHONE_RE),
         ("IPV4", _IPV4_RE),
@@ -209,9 +194,9 @@ class _DefaultRegexDetector:
         ("ES_NIE", _ES_NIE_RE),
     )
 
-    def detect(self, text: str, entities: Sequence[str]) -> List[EntityMatch]:
+    def detect(self, text: str, entities: Sequence[str]) -> list[EntityMatch]:
         enabled = set(entities)
-        matches: List[EntityMatch] = []
+        matches: list[EntityMatch] = []
         for entity, pattern in self._PATTERNS:
             if entity not in enabled:
                 continue
@@ -236,7 +221,7 @@ class _DefaultRegexDetector:
 # ---------------------------------------------------------------------------
 
 
-DEFAULT_ENTITIES: Tuple[str, ...] = _ENTITY_PRECEDENCE
+DEFAULT_ENTITIES: tuple[str, ...] = _ENTITY_PRECEDENCE
 
 
 class PiiRedactionProcessor(ArgoxProcessor):
@@ -272,13 +257,13 @@ class PiiRedactionProcessor(ArgoxProcessor):
 
     def __init__(
         self,
-        entities: Optional[Iterable[str]] = None,
+        entities: Iterable[str] | None = None,
         mode: RedactionMode = RedactionMode.MASK,
         redact_input: bool = False,
         hash_salt: str = "",
-        detector: Optional[Detector] = None,
+        detector: Detector | None = None,
     ) -> None:
-        self._entities: Tuple[str, ...] = (
+        self._entities: tuple[str, ...] = (
             tuple(entities) if entities is not None else DEFAULT_ENTITIES
         )
         self._mode = mode
@@ -300,7 +285,7 @@ class PiiRedactionProcessor(ArgoxProcessor):
     ) -> dict:
         counts: dict[str, int] = {}
         redacted = self._redact_any(args, counts)
-        self._emit_event("tool_args", counts)
+        self._emit_event("tool_args", counts, tool_name=tool_name)
         # ``_redact_any`` always returns a dict for a dict input.
         return redacted  # type: ignore[return-value]
 
@@ -333,15 +318,21 @@ class PiiRedactionProcessor(ArgoxProcessor):
     def _apply(self, text: str, counts: dict[str, int]) -> str:
         """Detect, deduplicate, and rewrite ``text`` in place.
 
-        Overlapping matches are resolved by entity precedence
-        (:data:`_ENTITY_PRECEDENCE`); ties on precedence go to the
-        longest span. ``counts`` is mutated in place so the caller can
-        emit a single aggregated span event per phase invocation.
+        Overlapping matches are resolved by entity precedence first
+        (:data:`_ENTITY_PRECEDENCE`); ties on precedence fall back to
+        the longest span, then to the earliest start offset. ``counts``
+        is mutated in place so the caller can emit a single aggregated
+        span event per phase invocation.
         """
         try:
             matches = self._detector.detect(text, self._entities)
-        except Exception as exc:  # pragma: no cover - defensive
-            _LOGGER.warning("PII detector failed, returning original text: %s", exc)
+        except Exception as exc:
+            # Log only the exception type — a detector's exception message
+            # may quote the raw input and we must never leak PII into logs.
+            _LOGGER.warning(
+                "PII detector %s raised; returning original text",
+                type(exc).__name__,
+            )
             return text
 
         if not matches:
@@ -372,12 +363,20 @@ class PiiRedactionProcessor(ArgoxProcessor):
         # Defensive — RedactionMode is closed; unreachable under normal use.
         return f"[REDACTED:{match.entity}]"  # pragma: no cover
 
-    def _emit_event(self, phase: str, counts: dict[str, int]) -> None:
-        """Attach an ``argox.processor.applied`` event with per-entity counts.
+    def _emit_event(
+        self,
+        phase: str,
+        counts: dict[str, int],
+        tool_name: str | None = None,
+    ) -> None:
+        """Attach an ``argox.pii.redacted`` event with per-entity counts.
 
-        No raw values are written; the event carries only the entity
-        label and the number of redactions of that kind. Skipped when no
-        redaction fired so quiet calls do not pollute the trace.
+        A dedicated event name is used (rather than the standard
+        ``argox.processor.applied`` the Manager already emits) so a
+        consumer can tell apart "this processor ran" from "this
+        processor actually redacted something". No raw values are
+        written; the event carries only the entity label and the
+        number of redactions of that kind.
         """
         if not counts:
             return
@@ -385,21 +384,27 @@ class PiiRedactionProcessor(ArgoxProcessor):
         if span is None or not span.is_recording():
             return
         encoded = [f"{entity}:{count}" for entity, count in sorted(counts.items())]
-        span.add_event(
-            EVENT_PROCESSOR_APPLIED,
-            {
-                ARGOX_PROCESSOR_NAME: _PROCESSOR_NAME,
-                ARGOX_PROCESSOR_PHASE: phase,
-                ARGOX_PII_REDACTIONS: encoded,
-            },
-        )
+        attributes: dict[str, Any] = {
+            ARGOX_PROCESSOR_NAME: type(self).__name__,
+            ARGOX_PROCESSOR_PHASE: phase,
+            ARGOX_PII_REDACTIONS: encoded,
+        }
+        if tool_name is not None:
+            attributes[ARGOX_PROCESSOR_TOOL_NAME] = tool_name
+        span.add_event(EVENT_PII_REDACTED, attributes)
 
 
-def _resolve_overlaps(matches: Sequence[EntityMatch]) -> List[EntityMatch]:
-    """Drop overlapping detections, keeping the highest-precedence span.
+def _resolve_overlaps(matches: Sequence[EntityMatch]) -> list[EntityMatch]:
+    """Drop overlapping detections.
 
-    Ties on precedence fall back to the longest match, then to the
-    earliest start offset, so the rewrite step has a deterministic input.
+    Resolution rule, applied in order:
+
+    1. Highest entity precedence wins (:data:`_ENTITY_PRECEDENCE`).
+    2. Ties on precedence go to the longest span.
+    3. Remaining ties go to the earliest start offset.
+
+    This keeps the rewrite step's input deterministic so the output
+    string only depends on the input text and the enabled entity set.
     """
     rank = {entity: i for i, entity in enumerate(_ENTITY_PRECEDENCE)}
     ordered = sorted(
@@ -410,7 +415,7 @@ def _resolve_overlaps(matches: Sequence[EntityMatch]) -> List[EntityMatch]:
             m.start,
         ),
     )
-    chosen: List[EntityMatch] = []
+    chosen: list[EntityMatch] = []
     for candidate in ordered:
         if any(
             not (candidate.end <= taken.start or candidate.start >= taken.end)
