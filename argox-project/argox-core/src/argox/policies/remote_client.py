@@ -3,46 +3,37 @@ POL-04 — RemotePolicyClient
 ===========================
 A remote policy client that fetches policy bundles from a central Collector API.
 
-This client implements a background polling mechanism that periodically fetches
-policy updates from a remote server. The hot-path evaluation methods (check_input,
-check_output, is_tool_allowed) are completely synchronous and perform no network I/O.
-They delegate to the in-memory PolicyCache for O(1) evaluation.
+Network Semantics:
+    - **Polling failures (network, parse errors)**: Fail-open. Retains the last known
+      valid policy and logs warnings. Service continues uninterrupted.
+    - **Evaluation errors (predicate failures)**: Fail-closed. Returns PolicyResult.block()
+      to prevent unsafe defaults during system errors.
+
+Hot-path Methods:
+    check_input(), check_output(), is_tool_allowed() perform zero network I/O.
+    They delegate entirely to the in-memory PolicyCache for O(1) evaluation.
+    These methods fail-closed: evaluation errors return block() results.
 
 Background Polling:
-    The client maintains an asyncio.Task that runs a polling loop. The loop:
-    1. Fetches the policy bundle from the endpoint every refresh_interval_s seconds.
-    2. Parses and loads the policy into the local cache on success.
-    3. On network or parsing errors, retains the last known valid policy and logs a warning.
+    An asyncio.Task runs _poll_loop() which:
+    1. Fetches policy from endpoint every refresh_interval_s seconds.
+    2. Parses and loads policy into local cache on success.
+    3. On error, logs warning and retains previous policy (fail-open).
     4. Never crashes or propagates exceptions to the caller.
 
-Design Notes:
-    - **Fail-open behavior**: Network errors do not block or terminate the client.
-      The last valid policy remains active. Errors are logged for operator visibility.
-    - **Zero hot-path network I/O**: Policy evaluation methods call cache.evaluate() only.
-      No requests are made during check_input, check_output, or is_tool_allowed.
-    - **Stateful polling**: The client requires explicit start() and stop() calls
-      to manage the background task lifecycle.
-
-Example usage::
-
-    client = RemotePolicyClient(
-        endpoint_url="https://collector.example.com/policy",
-        refresh_interval_s=30
-    )
-    await client.start()  # Begins background polling
-
-    try:
-        result = await client.check_input("user prompt")
-        if not result.passed:
-            raise PermissionError(f"Policy violation: {result.reason}")
-    finally:
-        await client.stop()
+Cold-start Behavior:
+    On start(), performs an eager fetch to populate the cache immediately.
+    If eager fetch fails, the cache remains empty and all evaluations pass
+    (no policies to enforce). Retries continue in the background polling loop.
+    If policy_cache_dir is configured, loads persisted policy on cold-start
+    (disk fallback for issue #40 resilience).
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+from pathlib import Path
 from typing import Optional
 
 import httpx
@@ -86,6 +77,7 @@ class RemotePolicyClient(PolicyClient):
         self,
         endpoint_url: str,
         refresh_interval_s: int = 60,
+        policy_cache_dir: Optional[str | Path] = None,
     ) -> None:
         """
         Initialize the RemotePolicyClient.
@@ -93,13 +85,76 @@ class RemotePolicyClient(PolicyClient):
         Args:
             endpoint_url: URL of the remote policy endpoint (e.g., https://collector/policy).
             refresh_interval_s: Polling interval in seconds. Defaults to 60.
+            policy_cache_dir: Directory for disk-based policy fallback. If provided,
+                fetched policies are written to this directory and loaded on cold-start
+                (disk fallback for issue #40). Defaults to None (memory-only).
         """
         self.endpoint_url: str = endpoint_url
         self.refresh_interval_s: int = refresh_interval_s
+        self.policy_cache_dir: Optional[Path] = Path(policy_cache_dir) if policy_cache_dir else None
         self.cache: PolicyCache = PolicyCache()
         self.parser: PolicyParser = PolicyParser()
         self._client: Optional[httpx.AsyncClient] = None
         self._task: Optional[asyncio.Task[None]] = None
+        
+        # Load policy from disk on cold-start if available (issue #40 fallback)
+        if self.policy_cache_dir is not None:
+            self._load_policy_from_disk()
+
+    def _load_policy_from_disk(self) -> None:
+        """
+        Load persisted policy from disk fallback directory (issue #40).
+        
+        If a policy file exists, parses and loads it into the cache.
+        Failures are logged as warnings; cache remains empty if fallback unavailable.
+        """
+        if self.policy_cache_dir is None:
+            return
+            
+        policy_file = self.policy_cache_dir / "policy.yaml"
+        if not policy_file.exists():
+            return
+            
+        try:
+            with open(policy_file, "r", encoding="utf-8") as f:
+                yaml_content = f.read()
+            policy = self.parser.parse_yaml(yaml_content)
+            self.cache.load_policy(policy)
+            logger.info(
+                "RemotePolicyClient loaded policy from disk fallback: %s",
+                policy_file,
+            )
+        except Exception:
+            logger.warning(
+                "Failed to load policy from disk fallback at %s. "
+                "Cache remains empty until remote fetch succeeds.",
+                policy_file,
+                exc_info=True,
+            )
+
+    def _save_policy_to_disk(self, yaml_content: str) -> None:
+        """
+        Persist fetched policy to disk for cold-start fallback (issue #40).
+        
+        Failures are logged as warnings; cache has already been updated
+        so the service is not affected by disk write failures.
+        """
+        if self.policy_cache_dir is None:
+            return
+            
+        try:
+            self.policy_cache_dir.mkdir(parents=True, exist_ok=True)
+            policy_file = self.policy_cache_dir / "policy.yaml"
+            with open(policy_file, "w", encoding="utf-8") as f:
+                f.write(yaml_content)
+            logger.debug("RemotePolicyClient persisted policy to disk: %s", policy_file)
+        except Exception:
+            logger.warning(
+                "Failed to persist policy to disk fallback at %s. "
+                "Cache is updated but process restart will not have fallback.",
+                self.policy_cache_dir,
+                exc_info=True,
+            )
 
     async def start(self) -> None:
         """
@@ -116,7 +171,7 @@ class RemotePolicyClient(PolicyClient):
         """
         if self._task is None or self._task.done():
             # Recreate HTTP client if it was closed
-            if self._client is None or self._client.is_closed():
+            if self._client is None or self._client.is_closed:
                 self._client = httpx.AsyncClient(timeout=10.0)
 
             # Eager fetch before starting the polling loop
@@ -125,6 +180,7 @@ class RemotePolicyClient(PolicyClient):
                 response.raise_for_status()
                 policy = self.parser.parse_yaml(response.text)
                 self.cache.load_policy(policy)
+                self._save_policy_to_disk(response.text)
                 logger.info(
                     "RemotePolicyClient initial policy fetched from %s",
                     self.endpoint_url,
@@ -160,7 +216,7 @@ class RemotePolicyClient(PolicyClient):
                 pass
             logger.info("RemotePolicyClient background polling stopped")
 
-        if self._client is not None and not self._client.is_closed():
+        if self._client is not None and not self._client.is_closed:
             await self._client.aclose()
 
     async def _poll_loop(self) -> None:
@@ -181,13 +237,15 @@ class RemotePolicyClient(PolicyClient):
         try:
             while True:
                 try:
-                    assert self._client is not None, "HTTP client not initialized"
+                    if self._client is None:
+                        raise RuntimeError("HTTP client not initialized during polling")
                     response = await self._client.get(self.endpoint_url)
                     response.raise_for_status()
 
                     # Parse and load the policy
                     policy = self.parser.parse_yaml(response.text)
                     self.cache.load_policy(policy)
+                    self._save_policy_to_disk(response.text)
                     logger.debug(
                         "Policy updated from remote endpoint: %s",
                         self.endpoint_url,

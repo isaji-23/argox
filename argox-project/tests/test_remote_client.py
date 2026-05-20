@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
+from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
+import tempfile
 
 import pytest
 import pytest_asyncio
@@ -100,7 +102,7 @@ class TestRemotePolicyClientLifecycle:
         with patch("httpx.AsyncClient") as mock_client_class:
             mock_instance = AsyncMock()
             mock_instance.get = AsyncMock(return_value=mock_response)
-            mock_instance.is_closed.return_value = False
+            type(mock_instance).is_closed = PropertyMock(return_value=False)
             mock_client_class.return_value = mock_instance
 
             assert remote_client._task is None
@@ -121,7 +123,7 @@ class TestRemotePolicyClientLifecycle:
         with patch("httpx.AsyncClient") as mock_client_class:
             mock_instance = AsyncMock()
             mock_instance.get = AsyncMock(return_value=mock_response)
-            mock_instance.is_closed.return_value = False
+            type(mock_instance).is_closed = PropertyMock(return_value=False)
             mock_client_class.return_value = mock_instance
 
             await remote_client.start()
@@ -142,7 +144,7 @@ class TestRemotePolicyClientLifecycle:
         with patch("httpx.AsyncClient") as mock_client_class:
             mock_instance = AsyncMock()
             mock_instance.get = AsyncMock(return_value=mock_response)
-            mock_instance.is_closed.return_value = False
+            type(mock_instance).is_closed = PropertyMock(return_value=False)
             mock_client_class.return_value = mock_instance
 
             await remote_client.start()
@@ -161,7 +163,7 @@ class TestRemotePolicyClientLifecycle:
         with patch("httpx.AsyncClient") as mock_client_class:
             mock_instance = AsyncMock()
             mock_instance.get = AsyncMock(return_value=mock_response)
-            mock_instance.is_closed.return_value = False
+            type(mock_instance).is_closed = PropertyMock(return_value=False)
             mock_client_class.return_value = mock_instance
 
             await remote_client.start()
@@ -190,7 +192,7 @@ class TestRemotePolicyClientPolling:
         with patch("httpx.AsyncClient") as mock_client_class:
             mock_instance = AsyncMock()
             mock_instance.get = AsyncMock(return_value=mock_response)
-            mock_instance.is_closed.return_value = False
+            type(mock_instance).is_closed = PropertyMock(return_value=False)
             mock_client_class.return_value = mock_instance
 
             await remote_client.start()
@@ -215,7 +217,7 @@ class TestRemotePolicyClientPolling:
         with patch("httpx.AsyncClient") as mock_client_class:
             mock_instance = AsyncMock()
             mock_instance.get = AsyncMock(return_value=mock_response)
-            mock_instance.is_closed.return_value = False
+            type(mock_instance).is_closed = PropertyMock(return_value=False)
             mock_client_class.return_value = mock_instance
 
             # Before start, cache is empty
@@ -241,7 +243,7 @@ class TestRemotePolicyClientPolling:
         with patch("httpx.AsyncClient") as mock_client_class:
             mock_instance = AsyncMock()
             mock_instance.get = AsyncMock(side_effect=Exception("Network error"))
-            mock_instance.is_closed.return_value = False
+            type(mock_instance).is_closed = PropertyMock(return_value=False)
             mock_client_class.return_value = mock_instance
 
             # Should not raise, should start with empty cache
@@ -269,7 +271,7 @@ class TestRemotePolicyClientPolling:
         with patch("httpx.AsyncClient") as mock_client_class:
             mock_instance = AsyncMock()
             mock_instance.get = AsyncMock(return_value=mock_response)
-            mock_instance.is_closed.return_value = False
+            type(mock_instance).is_closed = PropertyMock(return_value=False)
             mock_client_class.return_value = mock_instance
 
             # Should start with empty cache despite parse error
@@ -296,7 +298,7 @@ class TestRemotePolicyClientPolling:
         with patch("httpx.AsyncClient") as mock_client_class:
             mock_instance = AsyncMock()
             mock_instance.get = AsyncMock(return_value=mock_response)
-            mock_instance.is_closed.return_value = False
+            type(mock_instance).is_closed = PropertyMock(return_value=False)
             mock_client_class.return_value = mock_instance
 
             # Should start despite HTTP error
@@ -457,7 +459,7 @@ class TestRemotePolicyClientAsyncBehavior:
         with patch("httpx.AsyncClient") as mock_client_class:
             mock_instance = AsyncMock()
             mock_instance.get = AsyncMock(return_value=mock_response)
-            mock_instance.is_closed.return_value = False
+            type(mock_instance).is_closed = PropertyMock(return_value=False)
             mock_client_class.return_value = mock_instance
 
             await remote_client.start()
@@ -468,4 +470,119 @@ class TestRemotePolicyClientAsyncBehavior:
             # Task should be cancelled
             assert remote_client._task is not None
             assert remote_client._task.done()
+
+
+class TestRemotePolicyClientDiskFallback:
+    """Test disk-based policy fallback (issue #40)."""
+
+    @pytest.mark.asyncio
+    async def test_disk_fallback_on_cold_start(self) -> None:
+        """Verifies policy is loaded from disk on cold-start (issue #40)."""
+        endpoint_url = "https://collector.example.com/policy"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_dir = Path(tmpdir)
+            
+            # Simulate a persisted policy file
+            policy_file = cache_dir / "policy.yaml"
+            policy_file.write_text(SAMPLE_POLICY_YAML, encoding="utf-8")
+
+            # Create client with disk fallback dir
+            client = RemotePolicyClient(
+                endpoint_url=endpoint_url,
+                refresh_interval_s=1,
+                policy_cache_dir=cache_dir,
+            )
+
+            # On initialization, should load policy from disk
+            result = await client.check_input("I need the secret password")
+            assert result.passed is False
+            assert result.rule_id == "block-secret-input"
+
+            if client._task is not None:
+                await client.stop()
+
+    @pytest.mark.asyncio
+    async def test_disk_persistence_on_successful_fetch(self) -> None:
+        """Verifies fetched policy is persisted to disk."""
+        endpoint_url = "https://collector.example.com/policy"
+        mock_response = MagicMock()
+        mock_response.text = SAMPLE_POLICY_YAML
+        mock_response.status_code = 200
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_dir = Path(tmpdir)
+            client = RemotePolicyClient(
+                endpoint_url=endpoint_url,
+                refresh_interval_s=1,
+                policy_cache_dir=cache_dir,
+            )
+
+            with patch("httpx.AsyncClient") as mock_client_class:
+                mock_instance = AsyncMock()
+                mock_instance.get = AsyncMock(return_value=mock_response)
+                type(mock_instance).is_closed = PropertyMock(return_value=False)
+                mock_client_class.return_value = mock_instance
+
+                await client.start()
+
+                # Give it a moment to persist
+                await asyncio.sleep(0.1)
+
+                # Policy file should exist on disk
+                policy_file = cache_dir / "policy.yaml"
+                assert policy_file.exists()
+
+                # File should contain the fetched policy
+                persisted_content = policy_file.read_text(encoding="utf-8")
+                assert "block-secret-input" in persisted_content
+
+                await client.stop()
+
+    @pytest.mark.asyncio
+    async def test_disk_fallback_on_network_failure(self) -> None:
+        """Verifies disk fallback is used when network fetch fails."""
+        endpoint_url = "https://collector.example.com/policy"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_dir = Path(tmpdir)
+
+            # Pre-populate disk with a policy
+            policy_file = cache_dir / "policy.yaml"
+            policy_file.write_text(SAMPLE_POLICY_YAML, encoding="utf-8")
+
+            client = RemotePolicyClient(
+                endpoint_url=endpoint_url,
+                refresh_interval_s=1,
+                policy_cache_dir=cache_dir,
+            )
+
+            # Cache should be populated from disk despite network being down
+            result = await client.check_input("I need the secret password")
+            assert result.passed is False
+            assert result.rule_id == "block-secret-input"
+
+            if client._task is not None:
+                await client.stop()
+
+    def test_initialization_with_disk_fallback(self) -> None:
+        """Verifies client initializes with policy_cache_dir parameter."""
+        endpoint_url = "https://collector.example.com/policy"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            client = RemotePolicyClient(
+                endpoint_url=endpoint_url,
+                policy_cache_dir=tmpdir,
+            )
+
+            assert client.policy_cache_dir == Path(tmpdir)
+
+    def test_initialization_without_disk_fallback(self) -> None:
+        """Verifies client works without disk fallback (memory-only)."""
+        endpoint_url = "https://collector.example.com/policy"
+
+        client = RemotePolicyClient(endpoint_url=endpoint_url)
+
+        assert client.policy_cache_dir is None
+
 
