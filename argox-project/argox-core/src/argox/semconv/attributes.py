@@ -61,6 +61,14 @@ ARGOX_AGENT_NAME: Final[str] = "argox.agent.name"
 ARGOX_PROCESSOR_STATUS: Final[str] = "argox.processor.status"
 """Outcome of a processor invocation. Possible values: 'applied', 'error'."""
 
+ARGOX_PII_REDACTIONS: Final[str] = "argox.pii.redactions"
+"""Per-entity redaction counts emitted by the built-in PII processor.
+
+Stored on the active span as a list of ``"<ENTITY>:<count>"`` strings so it
+encodes cleanly through every OpenTelemetry exporter (attributes cannot hold
+nested dicts). The raw redacted values are never recorded.
+"""
+
 # Metric instrument names
 METRIC_GEN_AI_TOKEN_USAGE: Final[str] = "gen_ai.client.token.usage"
 """Counter for input/output tokens consumed by agent runs."""

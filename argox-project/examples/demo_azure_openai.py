@@ -15,11 +15,14 @@ The demo exercises three Argox capabilities end-to-end:
 
 1. **Policy-based tool blocking** — ``get_current_datetime`` is denied by the
    inline policy, so the LLM must answer using only the other tools.
-2. **In-flight argument redaction (PLUGIN-02)** — a ``PiiRedactingProcessor``
-   scrubs anything that looks like an email address from tool arguments
-   *before* the tool function receives them. The processor prints each
-   redaction it performs, and the recipient tool prints exactly what it ends
-   up seeing so the in-flight mutation is visible side-by-side.
+2. **In-flight argument redaction (PLUGIN-02 + PROC-01)** — the built-in
+   ``PiiRedactionProcessor`` from ``argox.processors`` scrubs PII (emails,
+   phones, IPs, IBAN, credit cards, ES_DNI/ES_NIE) from tool arguments
+   *before* the tool function receives them, and from the LLM's final
+   output before it returns to the caller. The recipient tool prints
+   exactly what it ends up seeing so the in-flight mutation is visible.
+   See the docstring of ``_CustomPiiProcessor`` below for a minimal
+   example of how to build your own processor against the same contract.
 3. **Metrics export** — a tiny custom exporter prints a one-line summary of
    the run (tokens, duration, tools called/blocked) once the run completes,
    and an OTel ``ConsoleMetricExporter`` dump is flushed once at the very
@@ -37,9 +40,7 @@ from __future__ import annotations
 
 import asyncio
 import os
-import re
 from datetime import datetime
-from typing import Any
 
 from agents import (
     Agent,
@@ -54,12 +55,11 @@ from opentelemetry.sdk.metrics.export import ConsoleMetricExporter
 
 import argox
 from argox.core import init_metrics, init_telemetry
-from argox.core.context import RunContext
 from argox.core.state import AgentRunMetrics
 from argox.exporters import ConsoleSpanExporter
 from argox.interfaces.exporter import ExporterBase
 from argox.interfaces.policy import PolicyClient, PolicyResult
-from argox.interfaces.processor import ArgoxProcessor
+from argox.processors import PiiRedactionProcessor
 from argox_openai import ArgoxOpenAIPlugin
 
 
@@ -117,53 +117,30 @@ class _InlinePolicy(PolicyClient):
         return PolicyResult.ok()
 
 
-class _PiiRedactingProcessor(ArgoxProcessor):
-    """Scrubs email-shaped substrings from tool args and LLM output in flight.
+class _CustomPiiProcessor:
+    """Reference implementation kept here as a tutorial for custom processors.
 
-    Demonstrates two of the three ``ArgoxProcessor`` phases:
+    Production code should use the built-in ``argox.processors.PiiRedactionProcessor``
+    (registered below) which covers EMAIL/PHONE/IPV4/IPV6/IBAN/CC/ES_DNI/ES_NIE,
+    nested-dict traversal, MASK/HASH/DROP modes, and span events. This stub is
+    *not* registered with the manager — it exists only to document the minimal
+    contract a custom processor must satisfy. To roll your own::
 
-    - ``process_tool_args`` (PLUGIN-02) — ``ArgoxOpenAIPlugin`` wraps each
-      function tool so this method runs on the arguments *before* the tool
-      body executes. The original LLM-emitted args never reach the tool.
-    - ``process_output`` — the Manager runs this on the LLM's final answer
-      *before* it is returned to the caller, so any email the model echoed
-      back in plain text is scrubbed too.
+        class MyProcessor(ArgoxProcessor):
+            _EMAIL_PATTERN = re.compile(r"[\\w.+-]+@[\\w-]+\\.[\\w.-]+")
 
-    ``process_input`` is left as a pass-through on purpose: the demo wants
-    the LLM to see the email in the prompt so it actually emits a tool call
-    carrying that email — that is what makes the tool-args redaction visible.
+            async def process_input(self, text, ctx):
+                return text  # opt-out of input scrubbing
+
+            async def process_tool_args(self, tool_name, args, ctx):
+                return {
+                    k: self._EMAIL_PATTERN.sub("[REDACTED]", v) if isinstance(v, str) else v
+                    for k, v in args.items()
+                }
+
+            async def process_output(self, text, ctx):
+                return self._EMAIL_PATTERN.sub("[REDACTED]", text)
     """
-
-    _EMAIL_PATTERN = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
-
-    def _scrub(self, value: str) -> str:
-        return self._EMAIL_PATTERN.sub("[REDACTED]", value)
-
-    async def process_input(self, text: str, ctx: RunContext) -> str:
-        return text
-
-    async def process_tool_args(
-        self, tool_name: str, args: dict, ctx: RunContext,
-    ) -> dict:
-        scrubbed: dict[str, Any] = {}
-        for key, value in args.items():
-            if isinstance(value, str):
-                redacted = self._scrub(value)
-                if redacted != value:
-                    print(
-                        f"[processor] redacted email in tool={tool_name!r} "
-                        f"arg={key!r}: {value!r} -> {redacted!r}"
-                    )
-                scrubbed[key] = redacted
-            else:
-                scrubbed[key] = value
-        return scrubbed
-
-    async def process_output(self, text: str, ctx: RunContext) -> str:
-        redacted = self._scrub(text)
-        if redacted != text:
-            print("[processor] redacted email(s) in LLM output before returning to caller")
-        return redacted
 
 
 class _PrintMetricsExporter(ExporterBase):
@@ -210,7 +187,7 @@ agent = Agent(
     plugin=ArgoxOpenAIPlugin(),
     agent=agent,
     policy=_InlinePolicy(),
-    processors=[_PiiRedactingProcessor()],
+    processors=[PiiRedactionProcessor()],
     exporters=[_PrintMetricsExporter()],
 )
 async def run_agent(agent: Agent, prompt: str):
