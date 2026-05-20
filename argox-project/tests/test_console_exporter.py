@@ -15,6 +15,7 @@ from argox.semconv.attributes import (
     ARGOX_POLICY_DECISION,
     ARGOX_POLICY_RULE_ID,
     ARGOX_RUN_BLOCKED_TOOLS,
+    ARGOX_RUN_COST,
 )
 
 
@@ -78,6 +79,37 @@ class TestConsoleSpanExporter:
         assert "blocked_tools=" in out
         assert "shell" in out
         assert "fs.write" in out
+
+    def test_emits_cost(self):
+        buf = io.StringIO()
+        tracer = _make_tracer(ConsoleSpanExporter(out=buf))
+        with tracer.start_as_current_span("llm.call") as span:
+            span.set_attribute("gen_ai.usage.cost", 0.042)
+        out = buf.getvalue()
+        assert "cost=$0.042" in out
+
+    def test_emits_cost_fallback(self):
+        buf = io.StringIO()
+        tracer = _make_tracer(ConsoleSpanExporter(out=buf))
+        with tracer.start_as_current_span("llm.call") as span:
+            span.set_attribute(ARGOX_RUN_COST, 0.042)
+        out = buf.getvalue()
+        assert "cost=$0.042" in out
+
+    def test_emits_cost_zero(self):
+        buf = io.StringIO()
+        tracer = _make_tracer(ConsoleSpanExporter(out=buf))
+        with tracer.start_as_current_span("llm.call") as span:
+            span.set_attribute("gen_ai.usage.cost", 0.0)
+        out = buf.getvalue()
+        assert "cost=$0" in out
+
+    def test_no_cost_section_when_attrs_absent(self):
+        buf = io.StringIO()
+        tracer = _make_tracer(ConsoleSpanExporter(out=buf))
+        with tracer.start_as_current_span("op"):
+            pass
+        assert "cost=" not in buf.getvalue()
 
     def test_emits_status_ok_by_default(self):
         buf = io.StringIO()

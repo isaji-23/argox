@@ -52,6 +52,9 @@ ARGOX_RUN_BLOCKED_TOOLS: Final[str] = "argox.run.blocked_tools"
 ARGOX_RUN_SUCCESS: Final[str] = "argox.run.success"
 """Boolean attribute marking whether a run completed without unhandled errors."""
 
+ARGOX_RUN_COST: Final[str] = "argox.run.cost"
+"""The estimated cost of the run in USD."""
+
 ARGOX_AGENT_NAME: Final[str] = "argox.agent.name"
 """Logical name of the agent recorded alongside run-level metrics."""
 
