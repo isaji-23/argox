@@ -122,7 +122,25 @@ _IPV6_RE = re.compile(
     r")"
     r"(?![0-9A-Fa-f:])"
 )
-_IBAN_RE = re.compile(r"(?<![A-Z0-9])[A-Z]{2}\d{2}[A-Z0-9]{11,30}(?![A-Z0-9])")
+# IBAN: 2 letters (country) + 2 digits (checksum) + 11–30 alphanumerics
+# (BBAN). Accepted in two canonical forms:
+#   - contiguous, e.g. ``ES9121000418450200051332``
+#   - 4-char groups separated by single spaces, e.g.
+#     ``ES91 2100 0418 4502 0005 1332``.
+# Lowercase is allowed; the post-validator normalizes case before the
+# shape check. Non-4-char trailing groups are intentionally not matched
+# in v1 — keeping the boundary tight avoids the regex greedily swallowing
+# the next word into the IBAN span.
+_IBAN_RE = re.compile(
+    r"(?<![A-Za-z0-9])"
+    r"[A-Za-z]{2}\d{2}"
+    r"(?:"
+    r"[A-Za-z0-9]{11,30}"
+    r"|"
+    r"(?: [A-Za-z0-9]{4}){2,7}"
+    r")"
+    r"(?![A-Za-z0-9])"
+)
 # Credit card: 13–19 digits, optional single space or dash between digits.
 _CC_RE = re.compile(r"(?<!\d)(?:\d[ \-]?){12,18}\d(?!\d)")
 _ES_DNI_RE = re.compile(r"(?<![A-Za-z0-9])\d{8}[A-HJ-NP-TV-Z](?![A-Za-z0-9])")
@@ -156,6 +174,20 @@ def _luhn_valid(digits: str) -> bool:
                 n -= 9
         total += n
     return total % 10 == 0
+
+
+def _valid_iban(value: str) -> bool:
+    """Validate IBAN shape after stripping whitespace.
+
+    Mod-97 verification is intentionally out of scope for v1 — the regex
+    plus shape check already gives high precision on real-world text.
+    """
+    compact = value.replace(" ", "")
+    if not (15 <= len(compact) <= 34):
+        return False
+    if not compact[:2].isalpha() or not compact[2:4].isdigit():
+        return False
+    return compact[4:].isalnum()
 
 
 _DNI_LETTERS = "TRWAGMYFPDXBNJZSQVHLCKE"
@@ -209,6 +241,8 @@ class _DefaultRegexDetector:
                     digits = re.sub(r"[ \-]", "", raw)
                     if not _luhn_valid(digits):
                         continue
+                if entity == "IBAN" and not _valid_iban(raw):
+                    continue
                 if entity == "ES_DNI" and not _valid_es_dni(raw):
                     continue
                 if entity == "ES_NIE" and not _valid_es_nie(raw):
@@ -372,8 +406,9 @@ class PiiRedactionProcessor(ArgoxProcessor):
         if self._mode is RedactionMode.MASK:
             return f"[REDACTED:{match.entity}]"
         if self._mode is RedactionMode.HASH:
+            normalized = _normalize_for_hash(match.entity, match.value)
             digest = hashlib.sha256(
-                (match.value + self._hash_salt).encode("utf-8")
+                (normalized + self._hash_salt).encode("utf-8")
             ).hexdigest()
             return digest[:12]
         if self._mode is RedactionMode.DROP:
@@ -410,6 +445,29 @@ class PiiRedactionProcessor(ArgoxProcessor):
         if tool_name is not None:
             attributes[ARGOX_PROCESSOR_TOOL_NAME] = tool_name
         span.add_event(EVENT_PII_REDACTED, attributes)
+
+
+def _normalize_for_hash(entity: str, value: str) -> str:
+    """Canonicalize a value before hashing so HASH mode supports stable joins.
+
+    Without normalization, the same logical PII would hash differently
+    when its textual form varies (``A@B.com`` vs ``a@b.com``,
+    ``4111-1111-1111-1111`` vs ``4111 1111 1111 1111``, ``ES91 21...``
+    vs ``ES9121...``). The contract for HASH mode is that downstream
+    joins still collide on the underlying identity, so we strip
+    formatting and apply the canonical case per entity.
+    """
+    if entity == "EMAIL":
+        return value.lower()
+    if entity == "CREDIT_CARD":
+        return re.sub(r"[ \-]", "", value)
+    if entity == "IBAN":
+        return value.replace(" ", "").upper()
+    if entity == "PHONE":
+        return value.replace(" ", "")
+    if entity in ("ES_DNI", "ES_NIE"):
+        return value.upper()
+    return value
 
 
 def _resolve_overlaps(matches: Sequence[EntityMatch]) -> list[EntityMatch]:

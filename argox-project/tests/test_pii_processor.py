@@ -83,6 +83,34 @@ async def test_credit_card_valid_luhn_with_dashes(ctx: RunContext) -> None:
 
 
 # ---------------------------------------------------------------------------
+# IBAN formats — spaced, lowercase
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "iban ES9121000418450200051332 ok",
+        "iban ES91 2100 0418 4502 0005 1332 ok",
+        "iban es91 2100 0418 4502 0005 1332 ok",
+    ],
+)
+async def test_iban_accepts_grouped_and_lowercase_formats(
+    text: str, ctx: RunContext,
+) -> None:
+    processor = PiiRedactionProcessor(entities=["IBAN"])
+    out = await processor.process_output(text, ctx)
+    assert "[REDACTED:IBAN]" in out
+
+
+async def test_iban_rejects_too_short_strings(ctx: RunContext) -> None:
+    processor = PiiRedactionProcessor(entities=["IBAN"])
+    # 14 alphanumerics after stripping is below the 15-char minimum.
+    out = await processor.process_output("code ES912100041845 hi", ctx)
+    assert "[REDACTED:IBAN]" not in out
+
+
+# ---------------------------------------------------------------------------
 # IPv4 octet validation
 # ---------------------------------------------------------------------------
 
@@ -162,6 +190,28 @@ async def test_mode_hash_is_deterministic_with_salt(ctx: RunContext) -> None:
     expected = hashlib.sha256(("a@b.com" + "pepper").encode("utf-8")).hexdigest()[:12]
     assert out1 == f"{expected} {expected}"
     assert out2 == expected
+
+
+@pytest.mark.parametrize(
+    "entity,value_a,value_b",
+    [
+        ("EMAIL", "user@example.com", "USER@Example.COM"),
+        ("CREDIT_CARD", "4111 1111 1111 1111", "4111-1111-1111-1111"),
+        ("IBAN", "ES9121000418450200051332", "ES91 2100 0418 4502 0005 1332"),
+        ("IBAN", "ES9121000418450200051332", "es91 2100 0418 4502 0005 1332"),
+    ],
+)
+async def test_mode_hash_normalizes_per_entity(
+    entity: str, value_a: str, value_b: str, ctx: RunContext,
+) -> None:
+    """The same logical PII hashes identically regardless of formatting."""
+    processor = PiiRedactionProcessor(
+        mode=RedactionMode.HASH, hash_salt="s", entities=[entity],
+    )
+    out_a = await processor.process_output(value_a, ctx)
+    out_b = await processor.process_output(value_b, ctx)
+    assert out_a == out_b
+    assert value_a not in out_a  # raw value never appears in the digest
 
 
 async def test_mode_hash_changes_with_different_salt(ctx: RunContext) -> None:
