@@ -11,10 +11,15 @@ Run from ``argox-project/``::
 
     python examples/demo_azure_openai.py
 
-The demo exercises three Argox capabilities end-to-end:
+The demo exercises every Argox capability that is currently implemented:
 
-1. **Policy-based tool blocking** — ``get_current_datetime`` is denied by the
-   inline policy, so the LLM must answer using only the other tools.
+1. **YAML-backed policy evaluation** — ``LocalPolicyClient`` loads
+   ``examples/policies/demo_policy.yaml``, compiles its rules into the
+   in-process ``PolicyCache``, and evaluates them at the three policy
+   hooks (``on_input``, ``on_tool_call``, ``on_output``). The shipped
+   policy blocks ``get_current_datetime`` at tool-filter time, alerts on
+   prompts that mention "password", and blocks any output containing
+   ``STACK_TRACE``. Swap the YAML to retune the run — no code change.
 2. **In-flight argument redaction (PLUGIN-02 + PROC-01)** — the built-in
    ``PiiRedactionProcessor`` from ``argox.processors`` scrubs PII (emails,
    phones, IPs, IBAN, credit cards, ES_DNI/ES_NIE) from tool arguments
@@ -23,14 +28,21 @@ The demo exercises three Argox capabilities end-to-end:
    exactly what it ends up seeing so the in-flight mutation is visible.
    See the docstring of ``_CustomPiiProcessor`` below for a minimal
    example of how to build your own processor against the same contract.
-3. **Metrics export** — a tiny custom exporter prints a one-line summary of
-   the run (tokens, duration, tools called/blocked) once the run completes,
-   and an OTel ``ConsoleMetricExporter`` dump is flushed once at the very
-   end via ``MeterProvider.force_flush()``.
+3. **Span export — multi-sink** — every run emits a single
+   ``argox.agent.run`` span carrying token usage, policy decision,
+   blocked-tool list, and processor events. The demo wires two span
+   exporters in parallel: ``ConsoleSpanExporter`` for a human-readable
+   one-line summary on stdout, and ``JsonlSpanExporter`` writing the full
+   OTel JSON payload to ``examples/run_artifacts/spans.jsonl`` for
+   offline inspection.
+4. **Metrics export** — a tiny custom ``ExporterBase`` prints a one-line
+   summary of the run (tokens, duration, tools called/blocked) from the
+   in-memory ``AgentRunMetrics`` once the run completes.
 
 Expected output is a ``ConsoleSpanExporter`` span line for the run, the
 processor's redaction logs, the tools' "received" lines, the in-memory
-metrics summary, the LLM's final answer, and finally the OTel metric dump.
+metrics summary, the LLM's final answer, and a ``spans.jsonl`` file
+written under ``examples/run_artifacts/``.
 
 This example uses the public ``@argox.monitor`` decorator, which replaces the
 manual ``ArgoxManager`` wiring with a single declaration on the runner.
@@ -41,6 +53,7 @@ from __future__ import annotations
 import asyncio
 import os
 from datetime import datetime
+from pathlib import Path
 
 from agents import (
     Agent,
@@ -51,16 +64,18 @@ from agents import (
 )
 from dotenv import load_dotenv
 from openai import AsyncOpenAI
-from opentelemetry.sdk.metrics.export import ConsoleMetricExporter
-
 import argox
-from argox.core import init_metrics, init_telemetry
+from argox.core import init_telemetry
 from argox.core.state import AgentRunMetrics
-from argox.exporters import ConsoleSpanExporter
+from argox.exporters import ConsoleSpanExporter, JsonlSpanExporter
 from argox.interfaces.exporter import ExporterBase
-from argox.interfaces.policy import PolicyClient, PolicyResult
+from argox.policies import LocalPolicyClient
 from argox.processors import PiiRedactionProcessor
 from argox_openai import ArgoxOpenAIPlugin
+
+_EXAMPLES_DIR = Path(__file__).resolve().parent
+_POLICY_PATH = _EXAMPLES_DIR / "policies" / "demo_policy.yaml"
+_SPANS_PATH = _EXAMPLES_DIR / "run_artifacts" / "spans.jsonl"
 
 
 load_dotenv()
@@ -91,30 +106,6 @@ def log_user_activity(email: str, action: str) -> str:
     """Persist a user activity record (fake sink — prints what it received)."""
     print(f"[tool:log_user_activity] received: email={email!r} action={action!r}")
     return f"logged action={action!r} for {email}"
-
-
-class _InlinePolicy(PolicyClient):
-    """Toy in-memory policy used solely for the demo.
-
-    Blocks ``get_current_datetime`` to exercise the Manager's tool-filtering path.
-    All other inputs and outputs pass through unchanged.
-    """
-
-    BLOCKED_TOOLS = {"get_current_datetime"}
-
-    async def check_input(self, text: str) -> PolicyResult:
-        return PolicyResult.ok()
-
-    async def is_tool_allowed(self, tool_name: str) -> PolicyResult:
-        if tool_name in self.BLOCKED_TOOLS:
-            return PolicyResult.block(
-                reason=f"{tool_name} disabled by demo policy",
-                rule_id="DEMO-01",
-            )
-        return PolicyResult.ok()
-
-    async def check_output(self, text: str) -> PolicyResult:
-        return PolicyResult.ok()
 
 
 class _CustomPiiProcessor:
@@ -167,12 +158,11 @@ class _PrintMetricsExporter(ExporterBase):
             print("[metrics] violations:   ", metrics.policy_violations)
 
 
-init_telemetry(exporters=[ConsoleSpanExporter()])
-# A 1-hour export interval keeps the periodic reader from interleaving its
-# output with the run; ``force_flush`` at the end prints one clean dump.
-_meter_provider = init_metrics(
-    exporters=[ConsoleMetricExporter()],
-    export_interval_ms=3_600_000,
+init_telemetry(
+    exporters=[
+        ConsoleSpanExporter(),
+        JsonlSpanExporter(_SPANS_PATH),
+    ],
 )
 
 agent = Agent(
@@ -191,7 +181,7 @@ agent = Agent(
 @argox.monitor(
     plugin=ArgoxOpenAIPlugin(),
     agent=agent,
-    policy=_InlinePolicy(),
+    policy=LocalPolicyClient(_POLICY_PATH),
     processors=[PiiRedactionProcessor()],
     exporters=[_PrintMetricsExporter()],
 )
@@ -200,14 +190,11 @@ async def run_agent(agent: Agent, prompt: str):
 
 
 async def main() -> None:
-    try:
-        output = await run_agent(
-            "Log that user@example.com just checked the forecast, "
-            "and tell me the weather in Madrid."
-        )
-        print("\nFinal output:", output)
-    finally:
-        _meter_provider.force_flush()
+    output = await run_agent(
+        "Log that user@example.com just checked the forecast, "
+        "and tell me the weather in Madrid."
+    )
+    print("\nFinal output:", output)
 
 
 if __name__ == "__main__":
