@@ -121,7 +121,7 @@ class _CustomPiiProcessor:
     """Reference implementation kept here as a tutorial for custom processors.
 
     Production code should use the built-in ``argox.processors.PiiRedactionProcessor``
-    (registered below) which covers EMAIL/PHONE/IPV4/IPV6/IBAN/CC/ES_DNI/ES_NIE,
+    (registered below) which covers EMAIL/PHONE/IPV4/IPV6/IBAN/CREDIT_CARD/ES_DNI/ES_NIE,
     nested-dict traversal, MASK/HASH/DROP modes, and span events. This stub is
     *not* registered with the manager — it exists only to document the minimal
     contract a custom processor must satisfy. To roll your own::

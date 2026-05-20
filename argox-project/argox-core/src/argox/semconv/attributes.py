@@ -31,6 +31,15 @@ ARGOX_PROCESSOR_TOOL_NAME: Final[str] = "argox.processor.tool_name"
 ARGOX_PROCESSOR_STRICT: Final[str] = "argox.processor.strict"
 """True if the failing processor was registered with fail-closed (strict) semantics."""
 
+ARGOX_PII_REDACTIONS: Final[str] = "argox.pii.redactions"
+"""Per-entity redaction counts emitted by the built-in PII processor.
+
+Attached to the :data:`EVENT_PII_REDACTED` span event as a list of
+``"<ENTITY>:<count>"`` strings so it encodes cleanly through every
+OpenTelemetry exporter (attributes cannot hold nested dicts). The raw
+redacted values are never recorded.
+"""
+
 # Span / event names
 SPAN_AGENT_RUN: Final[str] = "argox.agent.run"
 """Top-level span emitted by ArgoxManager.run() covering the full agent lifecycle."""
@@ -40,6 +49,14 @@ EVENT_PROCESSOR_APPLIED: Final[str] = "argox.processor.applied"
 
 EVENT_PROCESSOR_ERROR: Final[str] = "argox.processor.error"
 """Span event marking a processor that raised during invocation."""
+
+EVENT_PII_REDACTED: Final[str] = "argox.pii.redacted"
+"""Span event emitted by the built-in PII processor when redactions fire.
+
+Distinct from :data:`EVENT_PROCESSOR_APPLIED` (which the Manager emits once
+per processor invocation regardless of effect), so consumers can tell apart
+"this processor ran" from "this processor actually redacted something".
+"""
 
 # Agent Attributes
 ARGOX_AGENT_VERSION: Final[str] = "argox.agent.version"
@@ -60,23 +77,6 @@ ARGOX_AGENT_NAME: Final[str] = "argox.agent.name"
 
 ARGOX_PROCESSOR_STATUS: Final[str] = "argox.processor.status"
 """Outcome of a processor invocation. Possible values: 'applied', 'error'."""
-
-ARGOX_PII_REDACTIONS: Final[str] = "argox.pii.redactions"
-"""Per-entity redaction counts emitted by the built-in PII processor.
-
-Attached to the :data:`EVENT_PII_REDACTED` span event as a list of
-``"<ENTITY>:<count>"`` strings so it encodes cleanly through every
-OpenTelemetry exporter (attributes cannot hold nested dicts). The raw
-redacted values are never recorded.
-"""
-
-EVENT_PII_REDACTED: Final[str] = "argox.pii.redacted"
-"""Span event emitted by the built-in PII processor when redactions fire.
-
-Distinct from :data:`EVENT_PROCESSOR_APPLIED` (which the Manager emits once
-per processor invocation regardless of effect), so consumers can tell apart
-"this processor ran" from "this processor actually redacted something".
-"""
 
 # Metric instrument names
 METRIC_GEN_AI_TOKEN_USAGE: Final[str] = "gen_ai.client.token.usage"
