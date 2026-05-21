@@ -8,6 +8,7 @@ ARGOX_PROJECT = Path(__file__).parent.parent
 
 PACKAGES: dict[str, Path] = {
     "argox-core": ARGOX_PROJECT / "argox-core",
+    "argox-collector": ARGOX_PROJECT / "argox-collector",
     "argox-plugin-debug": ARGOX_PROJECT / "argox-plugins" / "argox-plugin-debug",
     "argox-plugin-openai": ARGOX_PROJECT / "argox-plugins" / "argox-plugin-openai",
     "argox-exporter-azure": ARGOX_PROJECT / "argox-exporters" / "argox-exporter-azure",
