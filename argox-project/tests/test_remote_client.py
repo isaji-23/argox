@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 import tempfile
 
+import httpx
 import pytest
 import pytest_asyncio
 
@@ -541,13 +542,16 @@ class TestRemotePolicyClientDiskFallback:
 
     @pytest.mark.asyncio
     async def test_disk_fallback_on_network_failure(self) -> None:
-        """Verifies disk fallback is used when network fetch fails."""
+        """Verifies disk fallback is used when network fetch fails during polling."""
         endpoint_url = "https://collector.example.com/policy"
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.text = SAMPLE_POLICY_YAML
 
         with tempfile.TemporaryDirectory() as tmpdir:
             cache_dir = Path(tmpdir)
 
-            # Pre-populate disk with a policy
+            # Start with a cached policy on disk
             policy_file = cache_dir / "policy.yaml"
             policy_file.write_text(SAMPLE_POLICY_YAML, encoding="utf-8")
 
@@ -557,12 +561,22 @@ class TestRemotePolicyClientDiskFallback:
                 policy_cache_dir=cache_dir,
             )
 
-            # Cache should be populated from disk despite network being down
-            result = await client.check_input("I need the secret password")
-            assert result.passed is False
-            assert result.rule_id == "block-secret-input"
+            # Mock network failure in the polling loop
+            with patch("httpx.AsyncClient") as mock_client_class:
+                mock_instance = AsyncMock()
+                # First call (start/eager fetch) raises error
+                mock_instance.get = AsyncMock(side_effect=httpx.ConnectError("Network down"))
+                type(mock_instance).is_closed = PropertyMock(return_value=False)
+                mock_client_class.return_value = mock_instance
 
-            if client._task is not None:
+                # Start should fail to fetch but keep disk policy
+                await client.start()
+
+                # Despite network failure during start, cache should have disk policy
+                result = await client.check_input("I need the secret password")
+                assert result.passed is False
+                assert result.rule_id == "block-secret-input"
+
                 await client.stop()
 
     def test_initialization_with_disk_fallback(self) -> None:

@@ -33,8 +33,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Union
 
 import httpx
 
@@ -53,12 +54,18 @@ logger = logging.getLogger(__name__)
 
 class RemotePolicyClient(PolicyClient):
     """
-    Remote policy client with background polling and fail-open semantics.
+    Remote policy client with background polling and fail-open network semantics.
 
     Fetches policy bundles periodically from a remote Collector API and maintains
     them in a local in-memory cache. The background polling task handles network
     resilience: transient failures do not interrupt service. Policy evaluation is
     completely synchronous and performs no network I/O.
+
+    Network Semantics:
+        - **Polling failures (network, parse errors)**: Fail-open. Retains the last
+          known valid policy and logs warnings. Service continues uninterrupted.
+        - **Evaluation errors (predicate failures)**: Fail-closed. Returns PolicyResult.block()
+          to prevent unsafe defaults during system errors.
 
     The client requires explicit lifecycle management via start() and stop() methods.
     Attempting to evaluate policies before calling start() will return PolicyResult.ok()
@@ -77,7 +84,7 @@ class RemotePolicyClient(PolicyClient):
         self,
         endpoint_url: str,
         refresh_interval_s: int = 60,
-        policy_cache_dir: Optional[str | Path] = None,
+        policy_cache_dir: Optional[Union[str, Path]] = None,
     ) -> None:
         """
         Initialize the RemotePolicyClient.
@@ -96,7 +103,11 @@ class RemotePolicyClient(PolicyClient):
         self.parser: PolicyParser = PolicyParser()
         self._client: Optional[httpx.AsyncClient] = None
         self._task: Optional[asyncio.Task[None]] = None
-        
+
+        # Ensure policy cache directory exists if configured (prepare for disk writes)
+        if self.policy_cache_dir is not None:
+            self.policy_cache_dir.mkdir(parents=True, exist_ok=True)
+
         # Load policy from disk on cold-start if available (issue #40 fallback)
         if self.policy_cache_dir is not None:
             self._load_policy_from_disk()
@@ -125,35 +136,42 @@ class RemotePolicyClient(PolicyClient):
                 policy_file,
             )
         except Exception:
-            logger.warning(
+            logger.exception(
                 "Failed to load policy from disk fallback at %s. "
                 "Cache remains empty until remote fetch succeeds.",
                 policy_file,
-                exc_info=True,
             )
 
     def _save_policy_to_disk(self, yaml_content: str) -> None:
         """
         Persist fetched policy to disk for cold-start fallback (issue #40).
-        
+
+        Uses atomic rename to ensure disk writes are not corrupted by process death
+        or concurrent reads during writing.
+
         Failures are logged as warnings; cache has already been updated
         so the service is not affected by disk write failures.
         """
         if self.policy_cache_dir is None:
             return
-            
+
         try:
-            self.policy_cache_dir.mkdir(parents=True, exist_ok=True)
             policy_file = self.policy_cache_dir / "policy.yaml"
-            with open(policy_file, "w", encoding="utf-8") as f:
+            tmp_file = self.policy_cache_dir / "policy.yaml.tmp"
+
+            # Write to temporary file first
+            with open(tmp_file, "w", encoding="utf-8") as f:
                 f.write(yaml_content)
+
+            # Atomic rename (POSIX and Windows)
+            os.replace(str(tmp_file), str(policy_file))
+
             logger.debug("RemotePolicyClient persisted policy to disk: %s", policy_file)
         except Exception:
-            logger.warning(
+            logger.exception(
                 "Failed to persist policy to disk fallback at %s. "
                 "Cache is updated but process restart will not have fallback.",
                 self.policy_cache_dir,
-                exc_info=True,
             )
 
     async def start(self) -> None:
