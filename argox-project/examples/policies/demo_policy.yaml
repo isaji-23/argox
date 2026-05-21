@@ -1,0 +1,48 @@
+id: argox-demo-policy
+version: 1
+status: active
+created_by: argox-demo
+updated_at: "2026-05-20T00:00:00Z"
+rules:
+  # ---------------------------------------------------------------------------
+  # Input guards: evaluated against the prompt BEFORE it reaches the LLM.
+  # ---------------------------------------------------------------------------
+  - id: DEMO-IN-01
+    trigger: on_input
+    condition:
+      metric: prompt
+      operator: contains
+      threshold: nuke-the-prod
+    action: block
+
+  - id: DEMO-IN-02
+    trigger: on_input
+    condition:
+      metric: prompt
+      operator: contains
+      threshold: password
+    action: alert
+
+  # ---------------------------------------------------------------------------
+  # Tool guards: evaluated for every tool exposed on the agent. Blocked tools
+  # are stripped from agent.tools before the run starts and restored after.
+  # ---------------------------------------------------------------------------
+  - id: DEMO-TOOL-01
+    trigger: on_tool_call
+    condition:
+      metric: tool_name
+      operator: eq
+      threshold: get_current_datetime
+    action: block
+
+  # ---------------------------------------------------------------------------
+  # Output guards: evaluated against the final answer BEFORE it is returned
+  # to the caller. Useful for catching obvious leaks (stack traces, secrets).
+  # ---------------------------------------------------------------------------
+  - id: DEMO-OUT-01
+    trigger: on_output
+    condition:
+      metric: output
+      operator: contains
+      threshold: STACK_TRACE
+    action: block
