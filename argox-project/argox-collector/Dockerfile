@@ -5,7 +5,8 @@ FROM python:3.11-slim AS base
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    ARGOX_PORT=8000
 
 WORKDIR /app
 
@@ -21,7 +22,8 @@ USER argox
 EXPOSE 8000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD python -c "import urllib.request, sys; \
-sys.exit(0) if urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=3).status == 200 else sys.exit(1)"
+    CMD python -c "import os, sys, urllib.request; \
+port = os.environ.get('ARGOX_PORT', '8000'); \
+sys.exit(0) if urllib.request.urlopen(f'http://127.0.0.1:{port}/healthz', timeout=3).status == 200 else sys.exit(1)"
 
-CMD ["uvicorn", "argox_collector.app:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["python", "-m", "argox_collector"]

@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from pydantic import BaseModel
 
 from argox_collector import __version__
+from argox_collector.settings import CollectorSettings
 
 router = APIRouter(tags=["health"])
 
@@ -27,14 +28,21 @@ class ReadinessResponse(BaseModel):
     checks: dict[str, str]
 
 
+def _service_name(request: Request) -> str:
+    settings: CollectorSettings = request.app.state.settings
+    return settings.service_name
+
+
 @router.get("/healthz", response_model=HealthResponse, summary="Liveness probe")
-async def healthz() -> HealthResponse:
+async def healthz(request: Request) -> HealthResponse:
     """Return ``ok`` when the process is alive and serving requests."""
-    return HealthResponse(status="ok", service="argox-collector", version=__version__)
+    return HealthResponse(
+        status="ok", service=_service_name(request), version=__version__
+    )
 
 
 @router.get("/readyz", response_model=ReadinessResponse, summary="Readiness probe")
-async def readyz() -> ReadinessResponse:
+async def readyz(request: Request) -> ReadinessResponse:
     """Return ``ok`` when the service is ready to accept traffic.
 
     Downstream dependency checks (storage backend, DuckDB index) will be wired
@@ -42,7 +50,7 @@ async def readyz() -> ReadinessResponse:
     """
     return ReadinessResponse(
         status="ok",
-        service="argox-collector",
+        service=_service_name(request),
         version=__version__,
         checks={"process": "ok"},
     )

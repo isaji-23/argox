@@ -25,7 +25,7 @@ argox-collector/
 
 ```bash
 pip install -e ".[dev]"
-argox-collector            # equivalent to: uvicorn argox_collector.app:app
+argox-collector            # equivalent to: uvicorn --factory argox_collector.app:create_app
 ```
 
 Then probe:

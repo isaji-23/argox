@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import pytest
-from argox_collector import __version__, create_app
+from argox_collector import __version__
+from argox_collector.app import create_app
 from argox_collector.settings import CollectorSettings
 from fastapi.testclient import TestClient
 
@@ -53,6 +54,13 @@ def test_openapi_schema_is_served(client: TestClient) -> None:
     assert schema["info"]["title"] == "Argox Collector"
     assert "/healthz" in schema["paths"]
     assert "/readyz" in schema["paths"]
+
+
+def test_health_endpoints_reflect_configured_service_name() -> None:
+    settings = CollectorSettings(service_name="argox-collector-canary")
+    client = TestClient(create_app(settings))
+    assert client.get("/healthz").json()["service"] == "argox-collector-canary"
+    assert client.get("/readyz").json()["service"] == "argox-collector-canary"
 
 
 def test_default_settings_values() -> None:
