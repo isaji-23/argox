@@ -53,7 +53,7 @@ async def healthz(request: Request) -> HealthResponse:
     responses={503: {"model": ReadinessResponse}},
     summary="Readiness probe",
 )
-async def readyz(request: Request) -> JSONResponse:
+def readyz(request: Request) -> JSONResponse:
     """Report whether the service is ready to accept traffic.
 
     Probes the configured storage backend so orchestrators can drop the
@@ -62,6 +62,10 @@ async def readyz(request: Request) -> JSONResponse:
     so standard readiness probes react without parsing the body.
     Index-layer checks (DuckDB, audit log) will be added in later
     COL-* tickets.
+
+    Declared as a synchronous handler so FastAPI runs it in the thread
+    pool: the storage health check performs blocking network I/O on the
+    Azure driver and would otherwise stall the event loop.
     """
     checks = {"process": "ok"}
     status_code = 200

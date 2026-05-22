@@ -115,6 +115,51 @@ def test_local_health_check_passes_for_writable_root(
     local_backend.health_check()
 
 
+def test_local_health_check_fails_when_root_not_writable(tmp_path: Path) -> None:
+    import os
+    import stat
+
+    root = tmp_path / "ro-root"
+    backend = LocalStorageBackend(root=root)
+    root.chmod(stat.S_IRUSR | stat.S_IXUSR)
+    try:
+        if os.geteuid() == 0:
+            pytest.skip("running as root bypasses POSIX write permissions")
+        with pytest.raises(StorageError):
+            backend.health_check()
+    finally:
+        root.chmod(stat.S_IRWXU)
+
+
+def test_local_handles_non_object_sidecar(
+    local_backend: LocalStorageBackend,
+) -> None:
+    # Manually corrupt the sidecar to be a JSON array instead of an object.
+    # Neither ``get`` nor ``list`` should crash; defaults must be returned.
+    local_backend.put("spans/a.jsonl", b"x", content_type="application/jsonl")
+    sidecar = local_backend.root / "spans" / "a.jsonl.meta.json"
+    sidecar.write_text("[]", encoding="utf-8")
+
+    stored = local_backend.get("spans/a.jsonl")
+    assert stored.data == b"x"
+    assert stored.metadata.content_type is None
+    assert stored.metadata.metadata == {}
+
+    listed = next(iter(local_backend.list("spans/")))
+    assert listed.content_type is None
+    assert listed.metadata == {}
+
+
+def test_local_list_empty_when_scan_root_missing(
+    local_backend: LocalStorageBackend,
+) -> None:
+    # The early-return branch in ``list`` must yield an
+    # ``Iterator[BlobMetadata]`` (not ``Iterator[tuple[()]]``); iterate it
+    # exhaustively to make sure the generator path is taken.
+    items = list(local_backend.list("does/not/exist/"))
+    assert items == []
+
+
 def test_local_atomic_write_does_not_leave_tempfiles(
     local_backend: LocalStorageBackend,
 ) -> None:
@@ -152,6 +197,15 @@ def test_normalize_key_rejects_dotdot_segments() -> None:
         normalize_key("a/../b")
     with pytest.raises(ValueError):
         normalize_key("a//b")
+
+
+def test_normalize_key_rejects_backslash_segments() -> None:
+    # Backslashes are pathlib separators on Windows; rejecting them keeps
+    # key semantics consistent across platforms.
+    with pytest.raises(ValueError):
+        normalize_key("a\\b")
+    with pytest.raises(ValueError):
+        normalize_key("spans\\..\\evil")
 
 
 def test_local_metadata_records_last_modified(

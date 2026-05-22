@@ -9,7 +9,7 @@ import tempfile
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterator, Mapping, Optional
+from typing import Any, Iterator, Mapping, Optional
 
 from argox_collector.storage.base import (
     BlobData,
@@ -109,9 +109,8 @@ class LocalStorageBackend(StorageBackend):
 
         scan_root = prefix_path if prefix_path.is_dir() else prefix_path.parent
         if not scan_root.exists():
-            return iter(())
-
-        return self._walk(scan_root, prefix)
+            return
+        yield from self._walk(scan_root, prefix)
 
     def delete(self, key: str) -> None:
         normalize_key(key)
@@ -132,12 +131,27 @@ class LocalStorageBackend(StorageBackend):
         return self._resolve(key).is_file()
 
     def health_check(self) -> None:
+        # Probe the root by creating and deleting a tiny temp file: this is
+        # what `put` actually needs and avoids the well-known false
+        # positives/negatives of ``os.access`` on directories under POSIX
+        # ACLs or container-mount permission quirks.
         try:
             self._root.mkdir(parents=True, exist_ok=True)
-            if not os.access(self._root, os.W_OK):
-                raise StorageError(f"storage root is not writable: {self._root}")
         except OSError as exc:
             raise StorageError(f"local storage unreachable: {exc}") from exc
+        try:
+            fd, probe_path = tempfile.mkstemp(
+                prefix=".argox-health-", dir=self._root
+            )
+        except OSError as exc:
+            raise StorageError(f"local storage not writable: {exc}") from exc
+        try:
+            os.close(fd)
+        finally:
+            try:
+                os.unlink(probe_path)
+            except FileNotFoundError:
+                pass
 
     def _resolve(self, key: str) -> Path:
         target = (self._root / key).resolve()
@@ -163,14 +177,17 @@ class LocalStorageBackend(StorageBackend):
                 pass
             raise
 
-    def _read_sidecar(self, payload_path: Path) -> dict:
+    def _read_sidecar(self, payload_path: Path) -> dict[str, Any]:
         meta_path = self._meta_path_for(payload_path)
         if not meta_path.is_file():
             return {}
         try:
-            return json.loads(meta_path.read_text(encoding="utf-8"))
+            parsed = json.loads(meta_path.read_text(encoding="utf-8"))
         except json.JSONDecodeError:
             return {}
+        if not isinstance(parsed, dict):
+            return {}
+        return parsed
 
     def _walk(self, scan_root: Path, prefix: str) -> Iterator[BlobMetadata]:
         # Stream entries via os.scandir; never read payload bytes here. etag

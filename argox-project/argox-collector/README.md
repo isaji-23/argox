@@ -82,4 +82,16 @@ through a single `StorageBackend` interface (`put`, `get`, `list`, `delete`,
   not yet exist.
 
 `/readyz` reports `checks.storage: ok` once the configured backend responds
-to a `health_check()` call, and `degraded` otherwise.
+to a `health_check()` call, and returns HTTP `503` with
+`checks.storage: unavailable: …` otherwise so standard orchestrator probes
+can react without parsing the body.
+
+Developers who need to exercise the Azure driver end-to-end (e.g. against
+Azurite) install both extras at once:
+
+```bash
+pip install -e ".[dev,azure]"
+```
+
+The bundled tests inject a fake Azure client and therefore run with just
+`[dev]`.

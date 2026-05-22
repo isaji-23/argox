@@ -140,14 +140,18 @@ class StorageBackend(ABC):
 def normalize_key(key: str) -> str:
     """Validate and normalize a blob key.
 
-    Empty keys, absolute paths and parent-directory traversal segments are
-    rejected so that local-filesystem drivers cannot be tricked into writing
-    outside their root.
+    Keys are forward-slash separated only. Empty keys, absolute paths,
+    parent-directory traversal segments and backslashes are rejected so
+    that local-filesystem drivers cannot be tricked into writing outside
+    their root — backslashes are explicitly forbidden because
+    :mod:`pathlib` treats them as path separators on Windows.
     """
     if not key:
         raise ValueError("blob key must not be empty")
     if key.startswith("/"):
         raise ValueError(f"blob key must be relative: {key!r}")
+    if "\\" in key:
+        raise ValueError(f"blob key must use forward slashes only: {key!r}")
     parts = key.split("/")
     if any(segment in {"", ".", ".."} for segment in parts):
         raise ValueError(f"blob key contains invalid segment: {key!r}")
