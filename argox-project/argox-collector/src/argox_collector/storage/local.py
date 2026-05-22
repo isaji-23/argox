@@ -107,10 +107,19 @@ class LocalStorageBackend(StorageBackend):
         if prefix and not _is_inside(prefix_path.resolve(), self._root):
             raise ValueError(f"prefix escapes storage root: {prefix!r}")
 
-        scan_root = prefix_path if prefix_path.is_dir() else prefix_path.parent
-        if not scan_root.exists():
+        if prefix_path.is_dir():
+            yield from self._walk(prefix_path, prefix)
             return
-        yield from self._walk(scan_root, prefix)
+        if prefix_path.is_file() and not prefix_path.name.endswith(
+            _METADATA_SUFFIX
+        ):
+            # Non-directory prefix that points at an existing blob: yield
+            # just that entry instead of scanning the parent directory.
+            yield from self._walk_single(prefix_path)
+            return
+        # Missing prefix: do not fall back to scanning the parent — that
+        # would make a no-op listing O(total files in root).
+        return
 
     def delete(self, key: str) -> None:
         normalize_key(key)
@@ -165,7 +174,14 @@ class LocalStorageBackend(StorageBackend):
     def _atomic_write(self, target: Path, payload: bytes) -> None:
         tmp_fd, tmp_path = tempfile.mkstemp(prefix=".tmp-", dir=target.parent)
         try:
-            with os.fdopen(tmp_fd, "wb") as handle:
+            try:
+                handle = os.fdopen(tmp_fd, "wb")
+            except Exception:
+                # Ownership of tmp_fd has not transferred to a file object
+                # yet; close it explicitly to avoid leaking the descriptor.
+                os.close(tmp_fd)
+                raise
+            with handle:
                 handle.write(payload)
                 handle.flush()
                 os.fsync(handle.fileno())
@@ -188,6 +204,19 @@ class LocalStorageBackend(StorageBackend):
         if not isinstance(parsed, dict):
             return {}
         return parsed
+
+    def _walk_single(self, path: Path) -> Iterator[BlobMetadata]:
+        relative = path.relative_to(self._root).as_posix()
+        meta = self._read_sidecar(path)
+        stat = path.stat()
+        yield BlobMetadata(
+            key=relative,
+            size=stat.st_size,
+            content_type=meta.get("content_type"),
+            etag=None,
+            last_modified=datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc),
+            metadata=dict(meta.get("metadata") or {}),
+        )
 
     def _walk(self, scan_root: Path, prefix: str) -> Iterator[BlobMetadata]:
         # Stream entries via os.scandir; never read payload bytes here. etag

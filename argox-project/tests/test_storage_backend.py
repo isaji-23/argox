@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Iterator, Mapping, Optional
 from unittest.mock import MagicMock
 
@@ -109,6 +110,46 @@ def test_local_list_returns_empty_for_unknown_prefix(
     assert list(local_backend.list("does/not/exist/")) == []
 
 
+def test_local_list_missing_prefix_does_not_scan_root(
+    local_backend: LocalStorageBackend,
+) -> None:
+    # When the prefix directory does not exist, ``list`` must NOT fall back
+    # to scanning the storage root — otherwise large stores pay O(total
+    # files) for a no-op listing. Populate an unrelated directory and
+    # assert the missing-prefix call yields nothing without touching it.
+    local_backend.put("policies/p.yaml", b"yaml")
+
+    scan_calls: list[Path] = []
+    from argox_collector.storage import local as local_module
+
+    original = local_module._scan_files
+
+    def _tracking_scan(root: Path) -> Iterator[Path]:
+        scan_calls.append(root)
+        yield from original(root)
+
+    local_module._scan_files = _tracking_scan  # type: ignore[assignment]
+    try:
+        assert list(local_backend.list("spans/")) == []
+    finally:
+        local_module._scan_files = original  # type: ignore[assignment]
+
+    assert scan_calls == []
+
+
+def test_local_list_yields_single_entry_for_file_prefix(
+    local_backend: LocalStorageBackend,
+) -> None:
+    # A prefix that points directly at a blob (no trailing slash) yields
+    # just that one entry. The no-fallback branch must not regress this.
+    local_backend.put("spans/a.jsonl", b"a", content_type="application/jsonl")
+    local_backend.put("spans/b.jsonl", b"bb")
+
+    items = list(local_backend.list("spans/a.jsonl"))
+    assert [item.key for item in items] == ["spans/a.jsonl"]
+    assert items[0].content_type == "application/jsonl"
+
+
 def test_local_health_check_passes_for_writable_root(
     local_backend: LocalStorageBackend,
 ) -> None:
@@ -119,12 +160,15 @@ def test_local_health_check_fails_when_root_not_writable(tmp_path: Path) -> None
     import os
     import stat
 
+    if not hasattr(os, "geteuid"):
+        pytest.skip("requires POSIX uid/permission semantics")
+    if os.geteuid() == 0:
+        pytest.skip("running as root bypasses POSIX write permissions")
+
     root = tmp_path / "ro-root"
     backend = LocalStorageBackend(root=root)
     root.chmod(stat.S_IRUSR | stat.S_IXUSR)
     try:
-        if os.geteuid() == 0:
-            pytest.skip("running as root bypasses POSIX write permissions")
         with pytest.raises(StorageError):
             backend.health_check()
     finally:
@@ -409,6 +453,51 @@ def test_azure_health_check_raises_storage_error_on_failure() -> None:
     backend = AzureBlobStorageBackend(container_client=container, container_name="c")
     with pytest.raises(StorageError):
         backend.health_check()
+
+
+def test_azure_put_handles_attribute_style_upload_result() -> None:
+    # The real azure-storage-blob client returns objects (not dicts) from
+    # upload_blob. The backend must read etag/last_modified via attribute
+    # access too — otherwise both fields silently drop to None in prod.
+    expected_modified = datetime(2026, 5, 22, 12, 0, tzinfo=timezone.utc)
+    upload_result = SimpleNamespace(
+        etag='"abc123"', last_modified=expected_modified
+    )
+    container = FakeAzureContainerClient()
+    blob_client = MagicMock()
+    blob_client.upload_blob.return_value = upload_result
+    container.get_blob_client = lambda key: blob_client  # type: ignore[assignment]
+    backend = AzureBlobStorageBackend(container_client=container, container_name="c")
+
+    meta = backend.put("spans/a.jsonl", b"x", content_type="application/jsonl")
+    assert meta.etag == "abc123"
+    assert meta.last_modified == expected_modified
+
+
+def test_azure_content_type_helper_returns_attribute_carrier_without_sdk(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Simulate the ``azure-storage-blob`` extra not being installed: the
+    # helper must still return an object exposing ``.content_type`` so
+    # injected fake clients (and the eventual SDK upload path) observe
+    # the value.
+    import builtins
+
+    real_import = builtins.__import__
+
+    def _fail_azure_sdk_import(name: str, *args: Any, **kwargs: Any) -> Any:
+        if name == "azure.storage.blob":
+            raise ImportError("simulated missing dependency")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", _fail_azure_sdk_import)
+
+    from argox_collector.storage.azure import _build_content_settings
+
+    fallback = _build_content_settings("application/jsonl")
+    assert fallback is not None
+    assert fallback.content_type == "application/jsonl"
+    assert _build_content_settings(None) is None
 
 
 # ---------------------------------------------------------------------------

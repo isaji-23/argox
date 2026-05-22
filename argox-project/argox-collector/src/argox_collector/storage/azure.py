@@ -11,6 +11,7 @@ the local driver are not forced to pull in the Azure SDK.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any, Iterator, Mapping, Optional
 
 from argox_collector.storage.base import (
@@ -95,10 +96,8 @@ class AzureBlobStorageBackend(StorageBackend):
         except Exception as exc:
             raise StorageError(f"failed to upload {key!r}: {exc}") from exc
 
-        etag = _strip_quotes(result.get("etag") if isinstance(result, dict) else None)
-        last_modified = (
-            result.get("last_modified") if isinstance(result, dict) else None
-        )
+        etag = _strip_quotes(_attr(result, "etag", None))
+        last_modified = _attr(result, "last_modified", None)
         return BlobMetadata(
             key=key,
             size=len(payload),
@@ -169,8 +168,12 @@ def _build_content_settings(content_type: Optional[str]) -> Any:
         return None
     try:
         from azure.storage.blob import ContentSettings
-    except ImportError:  # pragma: no cover - same guard as from_connection_string
-        return None
+    except ImportError:  # pragma: no cover - exercised when SDK is absent
+        # Fall back to a lightweight stand-in so injected fake clients still
+        # observe the content type via attribute access. The real SDK code
+        # path uses ContentSettings; this branch only matters in tests that
+        # run without the ``azure`` extra installed.
+        return SimpleNamespace(content_type=content_type)
     return ContentSettings(content_type=content_type)
 
 
