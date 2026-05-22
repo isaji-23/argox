@@ -104,11 +104,9 @@ class LocalStorageBackend(StorageBackend):
 
     def list(self, prefix: str = "") -> Iterator[BlobMetadata]:
         prefix_path = self._root if not prefix else (self._root / prefix)
-        if prefix and not str(prefix_path.resolve()).startswith(str(self._root)):
+        if prefix and not _is_inside(prefix_path.resolve(), self._root):
             raise ValueError(f"prefix escapes storage root: {prefix!r}")
 
-        # When the prefix targets a single file (no trailing slash) the
-        # caller still gets it back through the directory walk below.
         scan_root = prefix_path if prefix_path.is_dir() else prefix_path.parent
         if not scan_root.exists():
             return iter(())
@@ -143,7 +141,7 @@ class LocalStorageBackend(StorageBackend):
 
     def _resolve(self, key: str) -> Path:
         target = (self._root / key).resolve()
-        if not str(target).startswith(str(self._root)):
+        if not _is_inside(target, self._root):
             raise ValueError(f"key escapes storage root: {key!r}")
         return target
 
@@ -175,25 +173,46 @@ class LocalStorageBackend(StorageBackend):
             return {}
 
     def _walk(self, scan_root: Path, prefix: str) -> Iterator[BlobMetadata]:
-        for path in sorted(scan_root.rglob("*")):
-            if not path.is_file():
-                continue
+        # Stream entries via os.scandir; never read payload bytes here. etag
+        # is intentionally omitted in listings — callers that need it should
+        # `get()` the blob, since computing it requires hashing the payload.
+        for path in _scan_files(scan_root):
             if path.name.endswith(_METADATA_SUFFIX):
                 continue
             relative = path.relative_to(self._root).as_posix()
             if prefix and not relative.startswith(prefix):
                 continue
-            payload = path.read_bytes()
             meta = self._read_sidecar(path)
             stat = path.stat()
             yield BlobMetadata(
                 key=relative,
-                size=len(payload),
+                size=stat.st_size,
                 content_type=meta.get("content_type"),
-                etag=_etag_for(payload),
+                etag=None,
                 last_modified=datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc),
                 metadata=dict(meta.get("metadata") or {}),
             )
+
+
+def _scan_files(root: Path) -> Iterator[Path]:
+    """Yield every regular file under ``root`` without materializing the list."""
+    with os.scandir(root) as scanner:
+        for entry in scanner:
+            if entry.is_dir(follow_symlinks=False):
+                yield from _scan_files(Path(entry.path))
+            elif entry.is_file(follow_symlinks=False):
+                yield Path(entry.path)
+
+
+def _is_inside(candidate: Path, root: Path) -> bool:
+    """Return ``True`` when ``candidate`` is ``root`` or one of its descendants."""
+    if candidate == root:
+        return True
+    try:
+        candidate.relative_to(root)
+    except ValueError:
+        return False
+    return True
 
 
 def _etag_for(payload: bytes) -> str:

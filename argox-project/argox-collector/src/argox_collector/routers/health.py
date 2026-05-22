@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from argox_collector import __version__
@@ -46,27 +47,37 @@ async def healthz(request: Request) -> HealthResponse:
     )
 
 
-@router.get("/readyz", response_model=ReadinessResponse, summary="Readiness probe")
-async def readyz(request: Request) -> ReadinessResponse:
-    """Return ``ok`` when the service is ready to accept traffic.
+@router.get(
+    "/readyz",
+    response_model=ReadinessResponse,
+    responses={503: {"model": ReadinessResponse}},
+    summary="Readiness probe",
+)
+async def readyz(request: Request) -> JSONResponse:
+    """Report whether the service is ready to accept traffic.
 
-    The readiness probe pings the configured storage backend so orchestrators
-    can drop the replica from rotation when the blob layer is unreachable.
-    Index-layer checks (DuckDB, audit log) will be added in subsequent
+    Probes the configured storage backend so orchestrators can drop the
+    replica from rotation when the blob layer is unreachable. Returns
+    ``503`` (still with the structured ``checks`` payload) on degradation
+    so standard readiness probes react without parsing the body.
+    Index-layer checks (DuckDB, audit log) will be added in later
     COL-* tickets.
     """
     checks = {"process": "ok"}
+    status_code = 200
+    overall = "ok"
     try:
         _storage(request).health_check()
         checks["storage"] = "ok"
-        status = "ok"
     except StorageError as exc:
         checks["storage"] = f"unavailable: {exc}"
-        status = "degraded"
+        overall = "degraded"
+        status_code = 503
 
-    return ReadinessResponse(
-        status=status,
+    payload = ReadinessResponse(
+        status=overall,
         service=_service_name(request),
         version=__version__,
         checks=checks,
     )
+    return JSONResponse(status_code=status_code, content=payload.model_dump())

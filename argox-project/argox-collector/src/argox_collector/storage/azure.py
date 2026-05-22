@@ -49,6 +49,7 @@ class AzureBlobStorageBackend(StorageBackend):
     ) -> "AzureBlobStorageBackend":
         """Build a backend from a standard Azure connection string."""
         try:
+            from azure.core.exceptions import ResourceExistsError
             from azure.storage.blob import BlobServiceClient
         except ImportError as exc:  # pragma: no cover - exercised via factory
             raise StorageError(
@@ -60,11 +61,12 @@ class AzureBlobStorageBackend(StorageBackend):
         container = service.get_container_client(container_name)
         try:
             container.create_container()
-        except Exception:
-            # Container already exists; ignore. We deliberately do not narrow
-            # the exception type so the backend can be exercised against the
-            # mocked Azure SDK in tests.
+        except ResourceExistsError:
             pass
+        except Exception as exc:
+            raise StorageError(
+                f"failed to ensure container {container_name!r}: {exc}"
+            ) from exc
         return cls(container_client=container, container_name=container_name)
 
     @property

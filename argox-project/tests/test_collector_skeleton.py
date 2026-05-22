@@ -8,6 +8,7 @@ import pytest
 from argox_collector import __version__
 from argox_collector.app import create_app
 from argox_collector.settings import CollectorSettings
+from argox_collector.storage import LocalStorageBackend, StorageError
 from fastapi.testclient import TestClient
 
 
@@ -83,3 +84,21 @@ def test_default_settings_values() -> None:
     assert settings.host == "0.0.0.0"
     assert settings.port == 8000
     assert settings.storage_backend == "local"
+
+
+def test_readyz_returns_503_when_storage_health_check_fails(
+    settings: CollectorSettings,
+) -> None:
+    class _BrokenBackend(LocalStorageBackend):
+        def health_check(self) -> None:
+            raise StorageError("simulated outage")
+
+    storage = _BrokenBackend(root=settings.storage_local_root)
+    client = TestClient(create_app(settings, storage=storage))
+
+    response = client.get("/readyz")
+    assert response.status_code == 503
+    payload = response.json()
+    assert payload["status"] == "degraded"
+    assert payload["checks"]["process"] == "ok"
+    assert "simulated outage" in payload["checks"]["storage"]

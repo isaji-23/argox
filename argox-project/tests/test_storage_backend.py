@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Mapping, Optional
+from typing import Any, Iterator, Mapping, Optional
 from unittest.mock import MagicMock
 
 import pytest
@@ -134,6 +134,19 @@ def test_local_key_must_be_relative_and_safe(
         local_backend.put("", b"x")
 
 
+def test_local_root_containment_rejects_sibling_prefix(tmp_path: Path) -> None:
+    # ``/tmp/root`` is a string-prefix of ``/tmp/root_evil`` but is not a
+    # parent directory; the path-aware containment check must reject it.
+    root = tmp_path / "root"
+    sibling = tmp_path / "root_evil"
+    root.mkdir()
+    sibling.mkdir()
+    (sibling / "leaked.bin").write_bytes(b"x")
+    backend = LocalStorageBackend(root=root)
+    with pytest.raises(ValueError):
+        list(backend.list("../root_evil/"))
+
+
 def test_normalize_key_rejects_dotdot_segments() -> None:
     with pytest.raises(ValueError):
         normalize_key("a/../b")
@@ -191,8 +204,8 @@ class FakeAzureContainerClient:
     """Minimal stand-in for ``azure.storage.blob.ContainerClient``."""
 
     def __init__(self) -> None:
-        self._blobs: Dict[str, FakeBlob] = {}
-        self.calls: List[str] = []
+        self._blobs: dict[str, FakeBlob] = {}
+        self.calls: list[str] = []
 
     def get_blob_client(self, key: str) -> "FakeAzureBlobClient":
         return FakeAzureBlobClient(self, key)
@@ -205,7 +218,7 @@ class FakeAzureContainerClient:
                 continue
             yield FakeBlobProperties(name=key, blob=blob)
 
-    def get_container_properties(self) -> Dict[str, Any]:
+    def get_container_properties(self) -> dict[str, Any]:
         self.calls.append("get_container_properties")
         return {"name": "argox"}
 
@@ -227,7 +240,7 @@ class FakeAzureBlobClient:
         overwrite: bool,
         content_settings: Any,
         metadata: Mapping[str, str],
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         if not overwrite and self._key in self._container._blobs:
             raise RuntimeError("blob exists")
         content_type = (
