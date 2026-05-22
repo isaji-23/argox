@@ -17,8 +17,13 @@ argox-collector/
     ├── app.py             # FastAPI application factory
     ├── logging.py         # structlog configuration
     ├── settings.py        # pydantic-settings configuration
-    └── routers/
-        └── health.py      # /healthz and /readyz endpoints
+    ├── routers/
+    │   └── health.py      # /healthz and /readyz endpoints
+    └── storage/           # StorageBackend abstraction (COL-02)
+        ├── base.py        # abstract interface + value objects
+        ├── local.py       # filesystem driver (dev / CI)
+        ├── azure.py       # Azure Blob driver (production)
+        └── factory.py     # build_storage(settings)
 ```
 
 ## Running locally
@@ -51,8 +56,30 @@ Settings are read from `ARGOX_*` environment variables (see
 
 | Variable             | Default               |
 | -------------------- | --------------------- |
-| `ARGOX_SERVICE_NAME` | `argox-collector`     |
-| `ARGOX_ENVIRONMENT`  | `development`         |
-| `ARGOX_HOST`         | `0.0.0.0`             |
-| `ARGOX_PORT`         | `8000`                |
-| `ARGOX_LOG_LEVEL`    | `INFO`                |
+| `ARGOX_SERVICE_NAME`                    | `argox-collector`         |
+| `ARGOX_ENVIRONMENT`                     | `development`             |
+| `ARGOX_HOST`                            | `0.0.0.0`                 |
+| `ARGOX_PORT`                            | `8000`                    |
+| `ARGOX_LOG_LEVEL`                       | `INFO`                    |
+| `ARGOX_STORAGE_BACKEND`                 | `local`                   |
+| `ARGOX_STORAGE_LOCAL_ROOT`              | `./var/argox/blobs`       |
+| `ARGOX_STORAGE_AZURE_CONNECTION_STRING` | _unset_ (required for `azure`) |
+| `ARGOX_STORAGE_AZURE_CONTAINER`         | `argox`                   |
+
+## Storage backend
+
+The Collector persists span batches, policy bundles and audit-log segments
+through a single `StorageBackend` interface (`put`, `get`, `list`, `delete`,
+`exists`). Two drivers ship in-tree:
+
+- **Local filesystem** (`ARGOX_STORAGE_BACKEND=local`, default). Blobs land
+  under `ARGOX_STORAGE_LOCAL_ROOT`; writes are atomic via `os.replace`.
+  Used for CI and developer workstations.
+- **Azure Blob Storage** (`ARGOX_STORAGE_BACKEND=azure`). Requires
+  `pip install -e ".[azure]"` (pulls `azure-storage-blob`) and an
+  `ARGOX_STORAGE_AZURE_CONNECTION_STRING` pointing at either real Azure or
+  Azurite. The configured container is created on first boot if it does
+  not yet exist.
+
+`/readyz` reports `checks.storage: ok` once the configured backend responds
+to a `health_check()` call, and `degraded` otherwise.

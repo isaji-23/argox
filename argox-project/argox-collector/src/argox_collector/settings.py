@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+from typing import Optional
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -25,3 +28,8 @@ class CollectorSettings(BaseSettings):
     host: str = "0.0.0.0"
     port: int = 8000
     log_level: str = "INFO"
+
+    storage_backend: str = "local"
+    storage_local_root: Path = Path("./var/argox/blobs")
+    storage_azure_connection_string: Optional[str] = None
+    storage_azure_container: str = "argox"

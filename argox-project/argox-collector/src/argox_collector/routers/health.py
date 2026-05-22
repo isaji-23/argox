@@ -7,6 +7,7 @@ from pydantic import BaseModel
 
 from argox_collector import __version__
 from argox_collector.settings import CollectorSettings
+from argox_collector.storage import StorageBackend, StorageError
 
 router = APIRouter(tags=["health"])
 
@@ -33,6 +34,10 @@ def _service_name(request: Request) -> str:
     return settings.service_name
 
 
+def _storage(request: Request) -> StorageBackend:
+    return request.app.state.storage
+
+
 @router.get("/healthz", response_model=HealthResponse, summary="Liveness probe")
 async def healthz(request: Request) -> HealthResponse:
     """Return ``ok`` when the process is alive and serving requests."""
@@ -45,12 +50,23 @@ async def healthz(request: Request) -> HealthResponse:
 async def readyz(request: Request) -> ReadinessResponse:
     """Return ``ok`` when the service is ready to accept traffic.
 
-    Downstream dependency checks (storage backend, DuckDB index) will be wired
-    in subsequent COL-* tickets; for now the probe only reports process health.
+    The readiness probe pings the configured storage backend so orchestrators
+    can drop the replica from rotation when the blob layer is unreachable.
+    Index-layer checks (DuckDB, audit log) will be added in subsequent
+    COL-* tickets.
     """
+    checks = {"process": "ok"}
+    try:
+        _storage(request).health_check()
+        checks["storage"] = "ok"
+        status = "ok"
+    except StorageError as exc:
+        checks["storage"] = f"unavailable: {exc}"
+        status = "degraded"
+
     return ReadinessResponse(
-        status="ok",
+        status=status,
         service=_service_name(request),
         version=__version__,
-        checks={"process": "ok"},
+        checks=checks,
     )
