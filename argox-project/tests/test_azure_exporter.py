@@ -80,11 +80,9 @@ def test_exporter_azure_error():
         provider = TracerProvider()
         tracer = provider.get_tracer("test")
         
-        # Create a real readable span to pass to export directly
-        with tracer.start_as_current_span("test") as span:
-            pass
+        span = tracer.start_span("test")
+        span.end()
             
-        # span is instance of _Span, which is ReadableSpan
         result = exporter.export([span])
         
         assert result == SpanExportResult.FAILURE
@@ -94,18 +92,9 @@ def test_exporter_initialization_failure():
     with patch("argox_azure.exporter.BlobServiceClient") as MockClient:
         MockClient.from_connection_string.side_effect = ValueError("Invalid connection string")
 
-        exporter = AzureBlobSpanExporter(
-            connection_string="bad_conn_str",
-            container_name="test",
-        )
-        
-        # It shouldn't crash, but just log the error and set client to None
-        assert exporter._blob_service_client is None
-        
-        provider = TracerProvider()
-        tracer = provider.get_tracer("test")
-        with tracer.start_as_current_span("test") as span:
-            pass
-            
-        result = exporter.export([span])
-        assert result == SpanExportResult.FAILURE
+        import pytest
+        with pytest.raises(ValueError, match="Invalid connection string"):
+            exporter = AzureBlobSpanExporter(
+                connection_string="bad_conn_str",
+                container_name="test",
+            )

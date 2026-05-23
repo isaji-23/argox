@@ -30,17 +30,19 @@ class AzureBlobSpanExporter(SpanExporter):
     ) -> None:
         self._container_name = container_name
         self._prefix = prefix
+        self._healthy = False
         try:
             self._blob_service_client = BlobServiceClient.from_connection_string(
                 connection_string
             )
-        except Exception as e:
-            logger.error("Failed to initialize AzureBlobSpanExporter: %s", e)
-            self._blob_service_client = None
+            self._healthy = True
+        except ValueError as e:
+            logger.exception("Invalid connection string for AzureBlobSpanExporter: %s", e)
+            raise
 
     def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
         """Export spans to Azure Blob Storage as a single JSONL blob."""
-        if not self._blob_service_client:
+        if not self._healthy:
             return SpanExportResult.FAILURE
 
         if not spans:
@@ -77,10 +79,11 @@ class AzureBlobSpanExporter(SpanExporter):
 
     def shutdown(self) -> None:
         """Clean up resources."""
-        if self._blob_service_client:
+        if self._healthy and self._blob_service_client:
             self._blob_service_client.close()
-            self._blob_service_client = None
+            self._healthy = False
 
     def force_flush(self, timeout_millis: int = 30000) -> bool:
         """Nothing to flush, blobs are uploaded synchronously."""
         return True
+
