@@ -10,7 +10,7 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.trace import StatusCode
 
-from argox.observability.span_loggers import ConsoleSpanLogger
+from argox.observability import ConsoleSpanLogger
 from argox.semconv.attributes import (
     ARGOX_POLICY_DECISION,
     ARGOX_POLICY_RULE_ID,

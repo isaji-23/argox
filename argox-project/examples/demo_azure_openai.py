@@ -56,7 +56,7 @@ import argox
 from argox.core import init_metrics, init_telemetry
 from argox.core.context import RunContext
 from argox.core.state import AgentRunMetrics
-from argox.observability.span_loggers import ConsoleSpanLogger
+from argox.observability import ConsoleSpanLogger
 from argox.interfaces.exporter import ExporterBase
 from argox.interfaces.policy import PolicyClient, PolicyResult
 from argox.interfaces.processor import ArgoxProcessor

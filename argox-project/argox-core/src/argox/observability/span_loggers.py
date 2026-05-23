@@ -80,7 +80,7 @@ class ConsoleSpanLogger(_OtelConsoleSpanExporter):
     Example::
 
         from argox.core import init_telemetry
-        from argox.observability.span_loggers import ConsoleSpanLogger
+        from argox.observability import ConsoleSpanLogger
 
         init_telemetry(exporters=[ConsoleSpanLogger()])
     """
