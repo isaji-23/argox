@@ -7,9 +7,10 @@ import json
 import os
 import tempfile
 import threading
+from collections.abc import Iterator, Mapping
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterator, Mapping, Optional
+from typing import Any, Optional
 
 from argox_collector.storage.base import (
     BlobData,
@@ -24,6 +25,20 @@ from argox_collector.storage.base import (
 )
 
 _METADATA_SUFFIX = ".meta.json"
+# Filenames the backend creates for its own bookkeeping. They live under the
+# storage root but are never blobs, so listings must skip them and ``put``
+# must never accept a key that would collide with them.
+_TMP_PREFIX = ".tmp-"
+_HEALTH_PREFIX = ".argox-health-"
+
+
+def _is_internal_name(name: str) -> bool:
+    """Return ``True`` for backend bookkeeping files that are not blobs."""
+    return (
+        name.endswith(_METADATA_SUFFIX)
+        or name.startswith(_TMP_PREFIX)
+        or name.startswith(_HEALTH_PREFIX)
+    )
 
 
 class LocalStorageBackend(StorageBackend):
@@ -100,15 +115,16 @@ class LocalStorageBackend(StorageBackend):
             except FileNotFoundError:
                 raise BlobNotFoundError(key) from None
             meta = self._read_sidecar(target)
+        content_type, metadata = _sidecar_fields(meta)
         return StoredBlob(
             data=payload,
             metadata=BlobMetadata(
                 key=key,
                 size=len(payload),
-                content_type=meta.get("content_type"),
+                content_type=content_type,
                 etag=_etag_for(payload),
                 last_modified=datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc),
-                metadata=dict(meta.get("metadata") or {}),
+                metadata=metadata,
             ),
         )
 
@@ -165,7 +181,7 @@ class LocalStorageBackend(StorageBackend):
             raise StorageError(f"local storage unreachable: {exc}") from exc
         try:
             fd, probe_path = tempfile.mkstemp(
-                prefix=".argox-health-", dir=self._root
+                prefix=_HEALTH_PREFIX, dir=self._root
             )
         except OSError as exc:
             raise StorageError(f"local storage not writable: {exc}") from exc
@@ -187,7 +203,7 @@ class LocalStorageBackend(StorageBackend):
         return payload_path.with_name(payload_path.name + _METADATA_SUFFIX)
 
     def _atomic_write(self, target: Path, payload: bytes) -> None:
-        tmp_fd, tmp_path = tempfile.mkstemp(prefix=".tmp-", dir=target.parent)
+        tmp_fd, tmp_path = tempfile.mkstemp(prefix=_TMP_PREFIX, dir=target.parent)
         try:
             try:
                 handle = os.fdopen(tmp_fd, "wb")
@@ -227,7 +243,10 @@ class LocalStorageBackend(StorageBackend):
         # is intentionally omitted in listings — callers that need it should
         # `get()` the blob, since computing it requires hashing the payload.
         for path in _scan_files(scan_root):
-            if path.name.endswith(_METADATA_SUFFIX):
+            # Skip sidecars and the backend's own temp/health-probe files: a
+            # ``list`` racing a ``put``/``health_check`` must never surface
+            # these transient internals as blobs.
+            if _is_internal_name(path.name):
                 continue
             relative = path.relative_to(self._root).as_posix()
             if prefix and not relative.startswith(prefix):
@@ -239,13 +258,14 @@ class LocalStorageBackend(StorageBackend):
                 # Concurrent delete removed the blob mid-scan; skip it rather
                 # than aborting the whole listing.
                 continue
+            content_type, metadata = _sidecar_fields(meta)
             yield BlobMetadata(
                 key=relative,
                 size=stat.st_size,
-                content_type=meta.get("content_type"),
+                content_type=content_type,
                 etag=None,
                 last_modified=datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc),
-                metadata=dict(meta.get("metadata") or {}),
+                metadata=metadata,
             )
 
 
@@ -270,6 +290,23 @@ def _scan_files(root: Path) -> Iterator[Path]:
                 yield from _scan_files(Path(entry.path))
             elif is_file:
                 yield Path(entry.path)
+
+
+def _sidecar_fields(meta: Mapping[str, Any]) -> tuple[Optional[str], dict[str, str]]:
+    """Extract ``content_type`` and ``metadata`` from a sidecar record safely.
+
+    Sidecars can be hand-edited or corrupted, so the inner fields are not
+    trusted: ``content_type`` is dropped unless it is a string, and
+    ``metadata`` falls back to ``{}`` unless it is a mapping. This keeps a bad
+    sidecar from raising ``TypeError``/``ValueError`` and crashing reads or
+    listings.
+    """
+    content_type = meta.get("content_type")
+    if not isinstance(content_type, str):
+        content_type = None
+    raw_metadata = meta.get("metadata")
+    metadata = dict(raw_metadata) if isinstance(raw_metadata, Mapping) else {}
+    return content_type, metadata
 
 
 def _is_inside(candidate: Path, root: Path) -> bool:

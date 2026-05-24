@@ -213,6 +213,42 @@ def test_local_handles_non_object_sidecar(
     assert listed.metadata == {}
 
 
+def test_local_tolerates_malformed_sidecar_fields(
+    local_backend: LocalStorageBackend,
+) -> None:
+    # A sidecar that is a JSON object but whose inner fields have wrong types
+    # (scalar/list ``metadata``, non-string ``content_type``) must not crash
+    # ``get`` or ``list``; both fall back to safe defaults.
+    local_backend.put("spans/a.jsonl", b"x", content_type="application/jsonl")
+    sidecar = local_backend.root / "spans" / "a.jsonl.meta.json"
+    sidecar.write_text(
+        '{"content_type": 123, "metadata": [1, 2]}', encoding="utf-8"
+    )
+
+    stored = local_backend.get("spans/a.jsonl")
+    assert stored.data == b"x"
+    assert stored.metadata.content_type is None
+    assert stored.metadata.metadata == {}
+
+    listed = next(iter(local_backend.list("spans/")))
+    assert listed.content_type is None
+    assert listed.metadata == {}
+
+
+def test_local_list_excludes_internal_files(
+    local_backend: LocalStorageBackend,
+) -> None:
+    # Temp files (``.tmp-*`` from atomic writes) and health probes
+    # (``.argox-health-*``) can exist under the root during concurrent ops.
+    # ``list`` must never surface backend internals as blobs.
+    local_backend.put("spans/a.jsonl", b"a")
+    (local_backend.root / ".argox-health-probe").write_bytes(b"")
+    (local_backend.root / "spans" / ".tmp-inflight").write_bytes(b"partial")
+
+    keys = [item.key for item in local_backend.list()]
+    assert keys == ["spans/a.jsonl"]
+
+
 def test_local_list_empty_when_scan_root_missing(
     local_backend: LocalStorageBackend,
 ) -> None:
