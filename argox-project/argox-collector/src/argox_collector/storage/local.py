@@ -304,15 +304,26 @@ def _sidecar_fields(meta: Mapping[str, Any]) -> tuple[Optional[str], dict[str, s
 
     Sidecars can be hand-edited or corrupted, so the inner fields are not
     trusted: ``content_type`` is dropped unless it is a string, and
-    ``metadata`` falls back to ``{}`` unless it is a mapping. This keeps a bad
-    sidecar from raising ``TypeError``/``ValueError`` and crashing reads or
-    listings.
+    ``metadata`` is filtered down to ASCII ``str``->``str`` items (mirroring
+    :func:`validate_metadata` but without raising) so the result always honors
+    the ``BlobMetadata.metadata: Mapping[str, str]`` contract. Anything else
+    falls back to ``{}``. This keeps a bad sidecar from raising
+    ``TypeError``/``ValueError`` and crashing reads or listings.
     """
     content_type = meta.get("content_type")
     if not isinstance(content_type, str):
         content_type = None
     raw_metadata = meta.get("metadata")
-    metadata = dict(raw_metadata) if isinstance(raw_metadata, Mapping) else {}
+    metadata: dict[str, str] = {}
+    if isinstance(raw_metadata, Mapping):
+        for key, value in raw_metadata.items():
+            if (
+                isinstance(key, str)
+                and isinstance(value, str)
+                and key.isascii()
+                and value.isascii()
+            ):
+                metadata[key] = value
     return content_type, metadata
 
 

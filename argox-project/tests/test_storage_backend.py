@@ -236,6 +236,23 @@ def test_local_tolerates_malformed_sidecar_fields(
     assert listed.metadata == {}
 
 
+def test_local_sanitizes_non_string_sidecar_metadata_items(
+    local_backend: LocalStorageBackend,
+) -> None:
+    # A sidecar whose ``metadata`` is a Mapping but carries non-ASCII/non-str
+    # items must be filtered down to str->str so the result honors the
+    # BlobMetadata.metadata contract instead of leaking ints/None.
+    local_backend.put("spans/a.jsonl", b"x")
+    sidecar = local_backend.root / "spans" / "a.jsonl.meta.json"
+    sidecar.write_text(
+        '{"metadata": {"ok": "yes", "num": 1, "bad": null, "uni": "olé"}}',
+        encoding="utf-8",
+    )
+
+    assert local_backend.get("spans/a.jsonl").metadata.metadata == {"ok": "yes"}
+    assert next(iter(local_backend.list("spans/"))).metadata == {"ok": "yes"}
+
+
 def test_local_put_rejects_internal_lookalike_keys(
     local_backend: LocalStorageBackend,
 ) -> None:
