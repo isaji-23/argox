@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Request
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, Request, Response
 from pydantic import BaseModel
 
 from argox_collector import __version__
@@ -53,7 +52,7 @@ async def healthz(request: Request) -> HealthResponse:
     responses={503: {"model": ReadinessResponse}},
     summary="Readiness probe",
 )
-def readyz(request: Request) -> JSONResponse:
+def readyz(request: Request, response: Response) -> ReadinessResponse:
     """Report whether the service is ready to accept traffic.
 
     Probes the configured storage backend so orchestrators can drop the
@@ -68,7 +67,6 @@ def readyz(request: Request) -> JSONResponse:
     Azure driver and would otherwise stall the event loop.
     """
     checks = {"process": "ok"}
-    status_code = 200
     overall = "ok"
     try:
         _storage(request).health_check()
@@ -76,12 +74,11 @@ def readyz(request: Request) -> JSONResponse:
     except StorageError as exc:
         checks["storage"] = f"unavailable: {exc}"
         overall = "degraded"
-        status_code = 503
+        response.status_code = 503
 
-    payload = ReadinessResponse(
+    return ReadinessResponse(
         status=overall,
         service=_service_name(request),
         version=__version__,
         checks=checks,
     )
-    return JSONResponse(status_code=status_code, content=payload.model_dump())
