@@ -197,6 +197,13 @@ class LocalStorageBackend(StorageBackend):
         target = (self._root / key).resolve()
         if not _is_inside(target, self._root):
             raise ValueError(f"key escapes storage root: {key!r}")
+        if _is_internal_name(target.name):
+            # A key whose basename matches a sidecar/temp/health-probe name
+            # would collide with backend bookkeeping (e.g. ``foo.meta.json``
+            # is the sidecar of ``foo``) and be hidden from ``list``.
+            raise ValueError(
+                f"blob key collides with backend bookkeeping files: {key!r}"
+            )
         return target
 
     def _meta_path_for(self, payload_path: Path) -> Path:

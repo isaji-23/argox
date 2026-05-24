@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Iterator, Mapping, Optional, Union
+from typing import Optional, Union
 
 BlobData = Union[bytes, bytearray, memoryview]
 """Raw payload types accepted by :meth:`StorageBackend.put`."""

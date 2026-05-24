@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator, Mapping
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Iterator, Mapping, Optional
+from typing import Any, Optional
 from unittest.mock import MagicMock
 
 import pytest
@@ -233,6 +234,23 @@ def test_local_tolerates_malformed_sidecar_fields(
     listed = next(iter(local_backend.list("spans/")))
     assert listed.content_type is None
     assert listed.metadata == {}
+
+
+def test_local_put_rejects_internal_lookalike_keys(
+    local_backend: LocalStorageBackend,
+) -> None:
+    # Keys whose basename matches a sidecar/temp/health-probe name would
+    # collide with backend bookkeeping (``foo.meta.json`` is the sidecar of
+    # ``foo``) and be hidden from ``list``; reject them at write time.
+    for bad in (
+        "data.meta.json",
+        "spans/x.meta.json",
+        ".tmp-x",
+        "spans/.tmp-y",
+        ".argox-health-z",
+    ):
+        with pytest.raises(ValueError):
+            local_backend.put(bad, b"x")
 
 
 def test_local_list_excludes_internal_files(
