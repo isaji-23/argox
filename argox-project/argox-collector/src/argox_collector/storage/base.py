@@ -83,8 +83,9 @@ class StorageBackend(ABC):
                 permitted.
             data: Raw bytes to persist.
             content_type: Optional MIME type recorded alongside the blob.
-            metadata: Optional user metadata. Keys and values must be ASCII;
-                backends may impose additional limits.
+            metadata: Optional user metadata. Keys and values must be ASCII
+                strings; non-ASCII input raises ``ValueError``. Backends may
+                impose additional limits.
 
         Returns:
             Metadata describing the persisted blob.
@@ -156,3 +157,56 @@ def normalize_key(key: str) -> str:
     if any(segment in {"", ".", ".."} for segment in parts):
         raise ValueError(f"blob key contains invalid segment: {key!r}")
     return key
+
+
+def normalize_prefix(prefix: str) -> str:
+    """Validate a blob key prefix used by :meth:`StorageBackend.list`.
+
+    Unlike :func:`normalize_key`, a prefix may be empty (matches everything)
+    and may end with a single trailing slash to select a "directory". All
+    other rules mirror :func:`normalize_key`: backslashes, absolute paths,
+    parent-directory traversal and empty/``.`` interior segments are rejected
+    so prefix semantics stay consistent across every backend.
+    """
+    if not prefix:
+        return prefix
+    if prefix.startswith("/"):
+        raise ValueError(f"blob prefix must be relative: {prefix!r}")
+    if "\\" in prefix:
+        raise ValueError(f"blob prefix must use forward slashes only: {prefix!r}")
+    segments = prefix.split("/")
+    # A single trailing slash is allowed; drop the empty final segment it
+    # produces before validating the rest.
+    if segments and segments[-1] == "":
+        segments = segments[:-1]
+    if any(segment in {"", ".", ".."} for segment in segments):
+        raise ValueError(f"blob prefix contains invalid segment: {prefix!r}")
+    return prefix
+
+
+def validate_metadata(
+    metadata: Optional[Mapping[str, str]],
+) -> dict[str, str]:
+    """Validate user metadata and return a plain ``dict`` copy.
+
+    Azure Blob metadata keys and values must be ASCII strings; the same rule
+    is enforced for every backend so behavior is consistent and bad metadata
+    fails fast at write time instead of deep inside a driver.
+
+    Raises:
+        ValueError: If any key or value is not an ASCII string.
+    """
+    if not metadata:
+        return {}
+    result: dict[str, str] = {}
+    for key, value in metadata.items():
+        if not isinstance(key, str) or not isinstance(value, str):
+            raise ValueError(
+                f"blob metadata keys and values must be strings: {key!r}={value!r}"
+            )
+        if not key.isascii() or not value.isascii():
+            raise ValueError(
+                f"blob metadata keys and values must be ASCII: {key!r}={value!r}"
+            )
+        result[key] = value
+    return result

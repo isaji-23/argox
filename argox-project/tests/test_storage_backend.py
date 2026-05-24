@@ -19,7 +19,11 @@ from argox_collector.storage import (
     StorageError,
     build_storage,
 )
-from argox_collector.storage.base import normalize_key
+from argox_collector.storage.base import (
+    normalize_key,
+    normalize_prefix,
+    validate_metadata,
+)
 
 # ---------------------------------------------------------------------------
 # LocalStorageBackend
@@ -251,6 +255,88 @@ def test_local_root_containment_rejects_sibling_prefix(tmp_path: Path) -> None:
         list(backend.list("../root_evil/"))
 
 
+def test_local_list_matches_partial_segment_prefix(
+    local_backend: LocalStorageBackend,
+) -> None:
+    # String-prefix semantics: a partial trailing segment must match, mirroring
+    # Azure's ``name_starts_with``. ``spans/2026/05/2`` selects day 22/23 but
+    # not 30, and must not depend on a directory boundary.
+    local_backend.put("spans/2026/05/22/batch.jsonl", b"a")
+    local_backend.put("spans/2026/05/23/batch.jsonl", b"b")
+    local_backend.put("spans/2026/05/30/batch.jsonl", b"c")
+
+    keys = sorted(item.key for item in local_backend.list("spans/2026/05/2"))
+    assert keys == [
+        "spans/2026/05/22/batch.jsonl",
+        "spans/2026/05/23/batch.jsonl",
+    ]
+
+
+def test_local_list_partial_prefix_matches_sibling_files(
+    local_backend: LocalStorageBackend,
+) -> None:
+    # A prefix with no slash must match keys across sibling names, not just a
+    # same-named directory (``span`` matches both ``spans/...`` and ``span.txt``).
+    local_backend.put("spans/a.jsonl", b"a")
+    local_backend.put("span.txt", b"b")
+    local_backend.put("policies/p.yaml", b"c")
+
+    keys = sorted(item.key for item in local_backend.list("span"))
+    assert keys == ["span.txt", "spans/a.jsonl"]
+
+
+def test_local_list_rejects_empty_and_dot_segments(
+    local_backend: LocalStorageBackend,
+) -> None:
+    # Prefix validation matches ``normalize_key``: empty (``a//b``) and ``.``
+    # (``a/./b``) interior segments are rejected for cross-backend consistency.
+    with pytest.raises(ValueError):
+        list(local_backend.list("a//b"))
+    with pytest.raises(ValueError):
+        list(local_backend.list("a/./b"))
+
+
+def test_local_get_maps_vanished_payload_to_blob_not_found(
+    local_backend: LocalStorageBackend,
+) -> None:
+    # A blob whose payload disappears between resolution and read (concurrent
+    # delete) must surface as BlobNotFoundError, not a raw FileNotFoundError.
+    local_backend.put("spans/a.jsonl", b"x")
+    (local_backend.root / "spans" / "a.jsonl").unlink()
+    with pytest.raises(BlobNotFoundError):
+        local_backend.get("spans/a.jsonl")
+
+
+def test_local_list_skips_blob_that_vanishes_mid_scan(
+    local_backend: LocalStorageBackend,
+) -> None:
+    # If a blob is deleted while ``list`` is walking the tree, that entry is
+    # skipped instead of aborting the whole listing.
+    local_backend.put("spans/a.jsonl", b"a")
+    local_backend.put("spans/b.jsonl", b"b")
+
+    original = local_backend._read_sidecar
+
+    def _delete_a_then_read(path: Path) -> dict[str, Any]:
+        if path.name == "a.jsonl":
+            path.unlink()  # vanish before the subsequent stat() call
+        return original(path)
+
+    local_backend._read_sidecar = _delete_a_then_read  # type: ignore[assignment]
+    keys = [item.key for item in local_backend.list("spans/")]
+    assert "spans/b.jsonl" in keys
+    assert "spans/a.jsonl" not in keys
+
+
+def test_local_put_rejects_non_ascii_metadata(
+    local_backend: LocalStorageBackend,
+) -> None:
+    with pytest.raises(ValueError):
+        local_backend.put("a/b", b"x", metadata={"agent": "démo"})
+    with pytest.raises(ValueError):
+        local_backend.put("a/b", b"x", metadata={"agénte": "demo"})
+
+
 def test_normalize_key_rejects_dotdot_segments() -> None:
     with pytest.raises(ValueError):
         normalize_key("a/../b")
@@ -265,6 +351,27 @@ def test_normalize_key_rejects_backslash_segments() -> None:
         normalize_key("a\\b")
     with pytest.raises(ValueError):
         normalize_key("spans\\..\\evil")
+
+
+def test_normalize_prefix_allows_empty_and_trailing_slash() -> None:
+    assert normalize_prefix("") == ""
+    assert normalize_prefix("spans/") == "spans/"
+    assert normalize_prefix("spans/2026/05/2") == "spans/2026/05/2"
+
+
+def test_normalize_prefix_rejects_invalid_segments() -> None:
+    for bad in ("/abs", "a\\b", "a/../b", "a//b", "a/./b"):
+        with pytest.raises(ValueError):
+            normalize_prefix(bad)
+
+
+def test_validate_metadata_normalizes_and_rejects() -> None:
+    assert validate_metadata(None) == {}
+    assert validate_metadata({"k": "v"}) == {"k": "v"}
+    with pytest.raises(ValueError):
+        validate_metadata({"k": "válue"})
+    with pytest.raises(ValueError):
+        validate_metadata({"k": 1})  # type: ignore[dict-item]
 
 
 def test_local_metadata_records_last_modified(
@@ -425,6 +532,39 @@ def test_azure_list_filters_by_prefix(
     azure_backend.put("policies/p.yaml", b"yaml")
     span_keys = sorted(item.key for item in azure_backend.list("spans/"))
     assert span_keys == ["spans/a.jsonl", "spans/b.jsonl"]
+
+
+def test_azure_list_matches_partial_segment_prefix(
+    azure_backend: AzureBlobStorageBackend,
+) -> None:
+    # Parity with the local driver: partial trailing segments match.
+    azure_backend.put("spans/2026/05/22/batch.jsonl", b"a")
+    azure_backend.put("spans/2026/05/23/batch.jsonl", b"b")
+    azure_backend.put("spans/2026/05/30/batch.jsonl", b"c")
+    keys = sorted(item.key for item in azure_backend.list("spans/2026/05/2"))
+    assert keys == [
+        "spans/2026/05/22/batch.jsonl",
+        "spans/2026/05/23/batch.jsonl",
+    ]
+
+
+def test_azure_list_rejects_invalid_prefix(
+    azure_backend: AzureBlobStorageBackend,
+) -> None:
+    # The Azure driver applies the same prefix contract as the local driver.
+    with pytest.raises(ValueError):
+        list(azure_backend.list("spans\\evil"))
+    with pytest.raises(ValueError):
+        list(azure_backend.list("a/../b"))
+    with pytest.raises(ValueError):
+        list(azure_backend.list("a//b"))
+
+
+def test_azure_put_rejects_non_ascii_metadata(
+    azure_backend: AzureBlobStorageBackend,
+) -> None:
+    with pytest.raises(ValueError):
+        azure_backend.put("a/b", b"x", metadata={"agent": "démo"})
 
 
 def test_azure_delete_is_idempotent(

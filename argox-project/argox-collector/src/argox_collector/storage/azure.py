@@ -23,6 +23,8 @@ from argox_collector.storage.base import (
     StorageError,
     StoredBlob,
     normalize_key,
+    normalize_prefix,
+    validate_metadata,
 )
 
 
@@ -84,6 +86,7 @@ class AzureBlobStorageBackend(StorageBackend):
         metadata: Optional[Mapping[str, str]] = None,
     ) -> BlobMetadata:
         normalize_key(key)
+        clean_metadata = validate_metadata(metadata)
         payload = bytes(data)
         blob = self._container.get_blob_client(key)
         content_settings = _build_content_settings(content_type)
@@ -92,7 +95,7 @@ class AzureBlobStorageBackend(StorageBackend):
                 payload,
                 overwrite=True,
                 content_settings=content_settings,
-                metadata=dict(metadata or {}),
+                metadata=clean_metadata,
             )
         except Exception as exc:
             raise StorageError(f"failed to upload {key!r}: {exc}") from exc
@@ -105,7 +108,7 @@ class AzureBlobStorageBackend(StorageBackend):
             content_type=content_type,
             etag=etag,
             last_modified=last_modified,
-            metadata=dict(metadata or {}),
+            metadata=clean_metadata,
         )
 
     def get(self, key: str) -> StoredBlob:
@@ -126,6 +129,7 @@ class AzureBlobStorageBackend(StorageBackend):
         )
 
     def list(self, prefix: str = "") -> Iterator[BlobMetadata]:
+        normalize_prefix(prefix)
         try:
             iterator = self._container.list_blobs(name_starts_with=prefix or None)
         except Exception as exc:

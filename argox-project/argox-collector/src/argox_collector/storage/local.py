@@ -19,6 +19,8 @@ from argox_collector.storage.base import (
     StorageError,
     StoredBlob,
     normalize_key,
+    normalize_prefix,
+    validate_metadata,
 )
 
 _METADATA_SUFFIX = ".meta.json"
@@ -57,6 +59,7 @@ class LocalStorageBackend(StorageBackend):
         metadata: Optional[Mapping[str, str]] = None,
     ) -> BlobMetadata:
         normalize_key(key)
+        clean_metadata = validate_metadata(metadata)
         payload = bytes(data)
         target = self._resolve(key)
         meta_path = self._meta_path_for(target)
@@ -64,7 +67,7 @@ class LocalStorageBackend(StorageBackend):
 
         meta_record = {
             "content_type": content_type,
-            "metadata": dict(metadata or {}),
+            "metadata": clean_metadata,
         }
         meta_bytes = json.dumps(meta_record, sort_keys=True).encode("utf-8")
 
@@ -79,17 +82,24 @@ class LocalStorageBackend(StorageBackend):
             content_type=content_type,
             etag=_etag_for(payload),
             last_modified=datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc),
-            metadata=dict(metadata or {}),
+            metadata=clean_metadata,
         )
 
     def get(self, key: str) -> StoredBlob:
         normalize_key(key)
         target = self._resolve(key)
-        if not target.is_file():
-            raise BlobNotFoundError(key)
-        payload = target.read_bytes()
-        meta = self._read_sidecar(target)
-        stat = target.stat()
+        # Read payload and sidecar under the write lock so a concurrent
+        # ``put`` (which holds the same lock across both atomic writes) can
+        # never expose a new payload paired with a stale sidecar, and a
+        # concurrent ``delete`` surfaces as ``BlobNotFoundError`` rather than
+        # a raw ``FileNotFoundError``.
+        with self._lock:
+            try:
+                payload = target.read_bytes()
+                stat = target.stat()
+            except FileNotFoundError:
+                raise BlobNotFoundError(key) from None
+            meta = self._read_sidecar(target)
         return StoredBlob(
             data=payload,
             metadata=BlobMetadata(
@@ -103,32 +113,28 @@ class LocalStorageBackend(StorageBackend):
         )
 
     def list(self, prefix: str = "") -> Iterator[BlobMetadata]:
-        # Keep prefix semantics consistent with ``normalize_key``: forward
-        # slashes only and no parent-directory traversal. Unlike a full key,
-        # a prefix may be empty or end with a slash, so we cannot reuse
-        # ``normalize_key`` verbatim.
-        if "\\" in prefix:
-            raise ValueError(f"prefix must use forward slashes only: {prefix!r}")
-        if ".." in prefix.split("/"):
-            raise ValueError(f"prefix contains invalid segment: {prefix!r}")
+        # String-prefix semantics matching the Azure driver and the
+        # StorageBackend contract: a key matches when it *starts with* the
+        # prefix, including partial trailing segments (``spans/2024/0`` matches
+        # ``spans/2024/01.jsonl``). To stay O(matching subtree) rather than
+        # O(total files), scan only the deepest fully-named directory implied
+        # by the prefix and filter entries by ``startswith``.
+        normalize_prefix(prefix)
+        if not prefix:
+            yield from self._walk(self._root, "")
+            return
 
-        prefix_path = self._root if not prefix else (self._root / prefix)
-        if prefix and not _is_inside(prefix_path.resolve(), self._root):
+        # ``head`` is the directory portion of the prefix; the remainder is a
+        # partial filename used purely as a ``startswith`` filter. A trailing
+        # slash means the whole prefix names a directory.
+        head = prefix.rstrip("/") if prefix.endswith("/") else prefix.rpartition("/")[0]
+        scan_root = (self._root / head).resolve() if head else self._root
+        if not _is_inside(scan_root, self._root):
             raise ValueError(f"prefix escapes storage root: {prefix!r}")
-
-        if prefix_path.is_dir():
-            yield from self._walk(prefix_path, prefix)
+        if not scan_root.is_dir():
+            # Nothing under the implied directory: no key can match.
             return
-        if prefix_path.is_file() and not prefix_path.name.endswith(
-            _METADATA_SUFFIX
-        ):
-            # Non-directory prefix that points at an existing blob: yield
-            # just that entry instead of scanning the parent directory.
-            yield from self._walk_single(prefix_path)
-            return
-        # Missing prefix: do not fall back to scanning the parent — that
-        # would make a no-op listing O(total files in root).
-        return
+        yield from self._walk(scan_root, prefix)
 
     def delete(self, key: str) -> None:
         normalize_key(key)
@@ -204,28 +210,17 @@ class LocalStorageBackend(StorageBackend):
 
     def _read_sidecar(self, payload_path: Path) -> dict[str, Any]:
         meta_path = self._meta_path_for(payload_path)
-        if not meta_path.is_file():
+        try:
+            raw = meta_path.read_text(encoding="utf-8")
+        except FileNotFoundError:
             return {}
         try:
-            parsed = json.loads(meta_path.read_text(encoding="utf-8"))
+            parsed = json.loads(raw)
         except json.JSONDecodeError:
             return {}
         if not isinstance(parsed, dict):
             return {}
         return parsed
-
-    def _walk_single(self, path: Path) -> Iterator[BlobMetadata]:
-        relative = path.relative_to(self._root).as_posix()
-        meta = self._read_sidecar(path)
-        stat = path.stat()
-        yield BlobMetadata(
-            key=relative,
-            size=stat.st_size,
-            content_type=meta.get("content_type"),
-            etag=None,
-            last_modified=datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc),
-            metadata=dict(meta.get("metadata") or {}),
-        )
 
     def _walk(self, scan_root: Path, prefix: str) -> Iterator[BlobMetadata]:
         # Stream entries via os.scandir; never read payload bytes here. etag
@@ -237,8 +232,13 @@ class LocalStorageBackend(StorageBackend):
             relative = path.relative_to(self._root).as_posix()
             if prefix and not relative.startswith(prefix):
                 continue
-            meta = self._read_sidecar(path)
-            stat = path.stat()
+            try:
+                meta = self._read_sidecar(path)
+                stat = path.stat()
+            except FileNotFoundError:
+                # Concurrent delete removed the blob mid-scan; skip it rather
+                # than aborting the whole listing.
+                continue
             yield BlobMetadata(
                 key=relative,
                 size=stat.st_size,
@@ -250,12 +250,25 @@ class LocalStorageBackend(StorageBackend):
 
 
 def _scan_files(root: Path) -> Iterator[Path]:
-    """Yield every regular file under ``root`` without materializing the list."""
-    with os.scandir(root) as scanner:
+    """Yield every regular file under ``root`` without materializing the list.
+
+    Tolerates concurrent deletes: directories or entries that vanish mid-scan
+    are skipped instead of raising ``FileNotFoundError``.
+    """
+    try:
+        scanner = os.scandir(root)
+    except FileNotFoundError:
+        return
+    with scanner:
         for entry in scanner:
-            if entry.is_dir(follow_symlinks=False):
+            try:
+                is_dir = entry.is_dir(follow_symlinks=False)
+                is_file = entry.is_file(follow_symlinks=False)
+            except FileNotFoundError:
+                continue
+            if is_dir:
                 yield from _scan_files(Path(entry.path))
-            elif entry.is_file(follow_symlinks=False):
+            elif is_file:
                 yield Path(entry.path)
 
 
