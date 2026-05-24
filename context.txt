@@ -1,0 +1,222 @@
+# Argox — Contexto de desarrollo (continuar desde aquí)
+
+## Qué es Argox
+
+SDK open source para monitorización, gobernanza y auditoría de agentes de IA.
+Proyecto de TFM (Master en IA y Big Data, Tajamar Tech) desarrollado en colaboración
+con una empresa partner. Tiene dos supervisores técnicos (AI Lead + senior AI engineer)
+que revisan pero no contribuyen código.
+
+Licencia: **Apache 2.0**.
+Objetivo: adopción enterprise + flexibilidad de monetización futura.
+Cumplimiento AI Act como requisito de diseño.
+
+---
+
+## Stack técnico
+
+- **Integración principal**: OpenAI Agents SDK (vía `TracingProcessor` nativo)
+- **Storage**: Azure Blob Storage (MVP) → Azure Table Storage (escala)
+- **Indexado MVP**: SQLite
+- **Despliegue**: Docker Compose (dev) + Azure Container Apps (prod)
+- **Repositorio**: GitHub (monorepo)
+
+---
+
+## Arquitectura del monorepo
+
+```
+argox-project/
+├── argox-core/
+│   ├── pyproject.toml
+│   └── src/
+│       └── argox/
+│           ├── __init__.py
+│           ├── core/
+│           │   ├── __init__.py
+│           │   ├── manager.py        # ArgoxManager — orquesta plugins y exportadores
+│           │   └── state.py          # AgentRunMetrics, ToolCallRecord, ApiCallRecord
+│           └── interfaces/
+│               ├── __init__.py
+│               ├── plugin.py         # ABC ArgoxPlugin ✅ IMPLEMENTADO
+│               ├── exporter.py       # ABC ExporterBase ✅ IMPLEMENTADO
+│               └── policy.py         # ABC PolicyClient + PolicyResult ✅ IMPLEMENTADO
+├── argox-plugins/
+│   └── argox-plugin-openai/
+│       ├── pyproject.toml
+│       └── src/
+│           └── argox_openai/
+│               ├── __init__.py
+│               └── plugin.py
+└── tests/
+    └── test_openai_agent.py
+```
+
+Cada paquete (`argox-core`, `argox-plugin-openai`, etc.) es instalable de forma
+independiente con su propio `pyproject.toml`. Un usuario puede hacer:
+
+```bash
+pip install argox-core
+pip install argox-plugin-openai
+```
+
+---
+
+## Sistema de plugins
+
+### Filosofía
+
+El core es agnóstico a cualquier framework. Cada integración vive en su propio
+paquete `argox-plugin-<framework>`. La comunidad puede publicar plugins propios.
+
+### Contratos definidos (`argox/interfaces/`)
+
+#### `ArgoxPlugin` (plugin.py)
+
+Tres métodos abstractos:
+
+```python
+@property
+def name(self) -> str: ...           # identificador único, ej: "openai"
+
+def instrument(self, target, metrics) -> Any: ...
+# Inyecta hooks/callbacks en el agente ANTES de ejecutar.
+# Escribe eventos en metrics durante la ejecución.
+
+def extract_tokens(self, raw_result, metrics) -> None: ...
+# Extrae consumo de tokens del resultado crudo DESPUÉS de ejecutar.
+# Escribe en metrics.api_calls.
+
+def extract_output(self, raw_result) -> str: ...
+# Normaliza el output del framework a string puro.
+```
+
+#### `ExporterBase` (exporter.py)
+
+```python
+def export(self, metrics: AgentRunMetrics) -> None: ...
+# Recibe métricas completas y las envía a su destino.
+# Debe ser tolerante a fallos (no relanzar excepciones).
+```
+
+#### `PolicyClient` + `PolicyResult` (policy.py)
+
+```python
+# PolicyResult — dataclass inmutable
+PolicyResult.ok()                        # veredicto positivo
+PolicyResult.block(reason, rule_id)      # veredicto negativo
+
+# PolicyClient — tres puntos de evaluación, todos async
+async def check_input(self, text: str) -> PolicyResult: ...
+async def check_tool(self, tool_name: str) -> PolicyResult: ...
+async def check_output(self, text: str) -> PolicyResult: ...
+```
+
+Los métodos son `async` porque el cliente real usará SSE con red.
+
+---
+
+## Sistema de políticas
+
+El `PolicyEngine` del archivo de prueba es un **stub local hardcodeado**,
+solo para desbloquear el desarrollo. La implementación real es un **servicio
+externo que sirve políticas vía SSE con caché local** (hybrid policy engine,
+ya definido en arquitectura v2.0).
+
+Dos implementaciones previstas de `PolicyClient`:
+- `LocalPolicyClient` — stub sin red, para desarrollo
+- `SsePolicyClient` — cliente real contra el servicio externo
+
+---
+
+## Archivo de prueba de concepto (referencia)
+
+`metrics_export_prueba.py` — todo en un solo fichero, acoplado a OpenAI.
+Tiene cuatro capas lógicas que ya están mapeadas a la nueva estructura:
+
+| Código del archivo de prueba | Destino en la nueva arquitectura |
+|---|---|
+| `AgentRunMetrics`, `ToolCallRecord`, `ApiCallRecord` | `argox/core/state.py` |
+| `PolicyEngine` (hardcodeado) | `argox/core/policy.py` (stub) + `PolicyClient` ABC |
+| `AgentLogger.log_run()` | `argox/exporters/jsonl.py` impl. de `ExporterBase` |
+| `AgentLogger.print_summary()` | `argox/exporters/console.py` impl. de `ExporterBase` |
+| `AgentRegistry` | `argox/core/registry.py` |
+| `MonitorHooks` | detalle interno de `argox-plugin-openai` |
+| `monitor_agent` decorador | `@argox.monitor(framework="openai")` — API pública futura |
+
+### Uso objetivo (cómo quedará la API pública)
+
+```python
+import argox
+from argox_openai import ArgoxOpenAIPlugin
+from argox.exporters.jsonl import JsonlExporter
+from argox.exporters.console import ConsoleExporter
+
+argox.manager.register_plugin(ArgoxOpenAIPlugin())
+argox.manager.register_exporter(JsonlExporter("agent_runs.jsonl"))
+argox.manager.register_exporter(ConsoleExporter())
+
+@argox.monitor(framework="openai", version="1.0")
+def run_agent(prompt: str):
+    return Runner.run_sync(agent, prompt)
+```
+
+---
+
+## Issues del GitHub Project
+
+Organizados con labels, sin milestones. Detalle: solo título + descripción breve.
+
+### `core`
+- **[CORE-01]** Definir modelo de datos central (`AgentRunMetrics`) — dataclasses de ejecución: tiempo, tokens, tools, resultado. ⬅ **SIGUIENTE**
+- **[CORE-02]** Implementar `PolicyEngine` stub para desarrollo local — reglas hardcodeadas, sin red, para desbloquear el desarrollo.
+- **[CORE-03]** Definir contrato del cliente de políticas externas — ABC que abstrae comunicación con el servicio SSE externo.
+- **[CORE-04]** Implementar `ArgoxManager` como punto de entrada único — gestiona plugins, exportadores y orquesta el ciclo de vida.
+- **[CORE-05]** Diseñar sistema de registro de versiones (`AgentRegistry`) — metadatos de agente al inicializar.
+
+### `interface`
+- **[IFACE-01]** Definir ABC `ArgoxPlugin` ✅ IMPLEMENTADO
+- **[IFACE-02]** Definir ABC `ExporterBase` ✅ IMPLEMENTADO
+- **[IFACE-03]** Definir ABC `PolicyClient` ✅ IMPLEMENTADO
+
+### `plugin`
+- **[PLUGIN-01]** Implementar `argox-plugin-openai` — hooks nativos del OpenAI Agents SDK.
+- ~~[PLUGIN-02] argox-plugin-anthropic~~ — descartado por ahora
+- ~~[PLUGIN-03] argox-plugin-langchain~~ — descartado por ahora
+
+### `exporter`
+- **[EXP-01]** Implementar `JsonlExporter` — una línea JSON por ejecución en `.jsonl`.
+- **[EXP-02]** Implementar `ConsoleExporter` — resumen legible para desarrollo local.
+- **[EXP-03]** Implementar `AzureBlobExporter` — Azure Blob con WORM y jerarquía por fecha/agente.
+
+### `dx`
+- **[DX-01]** Diseñar API pública del decorador `@argox.monitor`.
+- **[DX-02]** Crear `PLUGIN_GUIDE.md` — guía para plugins de comunidad.
+- **[DX-03]** Configurar autodescubrimiento de plugins via `importlib.metadata`.
+
+### `infra`
+- **[INFRA-01]** Configurar estructura de monorepo con `pyproject.toml` por paquete.
+- **[INFRA-02]** Configurar suite de tests con `pytest` y fixtures compartidos.
+
+---
+
+## Orden de implementación acordado
+
+1. `INFRA-01` (estructura monorepo — mínimo, solo carpetas y pyproject.toml vacíos)
+2. `IFACE-01` → `IFACE-02` → `IFACE-03` ✅ COMPLETADO
+3. `CORE-01` → `CORE-02` → `CORE-03` → `CORE-04` → `CORE-05`
+4. `PLUGIN-01`
+5. `EXP-01` → `EXP-02` → `EXP-03`
+6. `DX-01` → `DX-03` → `DX-02`
+7. `INFRA-02`
+
+---
+
+## Decisiones de diseño relevantes
+
+- El core no importa nada de ningún framework de agentes — dependencia cero.
+- Los plugins son tolerantes a fallos: no deben interrumpir la ejecución del agente si fallan.
+- `PolicyClient` es async por diseño (el cliente SSE real necesita red).
+- `PolicyResult` es un dataclass `frozen=True` — inmutable por contrato.
+- El `__init__.py` de `argox.interfaces` exporta todo desde un único punto de entrada.
+- Control de versiones entre paquetes: pendiente de definir.

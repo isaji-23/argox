@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from unittest.mock import MagicMock, patch
 
+import pytest
 from azure.core.exceptions import AzureError
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
@@ -92,9 +93,27 @@ def test_exporter_initialization_failure():
     with patch("argox_azure.exporter.BlobServiceClient") as MockClient:
         MockClient.from_connection_string.side_effect = ValueError("Invalid connection string")
 
-        import pytest
         with pytest.raises(ValueError, match="Invalid connection string"):
-            exporter = AzureBlobSpanExporter(
+            AzureBlobSpanExporter(
                 connection_string="bad_conn_str",
                 container_name="test",
             )
+
+
+def test_exporter_shutdown():
+    with patch("argox_azure.exporter.BlobServiceClient") as MockClient:
+        mock_client_instance = MockClient.from_connection_string.return_value
+
+        exporter = AzureBlobSpanExporter(
+            connection_string="fake_conn_str",
+            container_name="test",
+        )
+
+        assert exporter._healthy is True
+        assert exporter._blob_service_client is not None
+
+        exporter.shutdown()
+
+        assert exporter._healthy is False
+        assert exporter._blob_service_client is None
+        mock_client_instance.close.assert_called_once()

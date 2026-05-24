@@ -81,6 +81,7 @@ class AzureBlobSpanExporter(SpanExporter):
         """Clean up resources."""
         if self._healthy and self._blob_service_client:
             self._blob_service_client.close()
+            self._blob_service_client = None
             self._healthy = False
 
     def force_flush(self, timeout_millis: int = 30000) -> bool:
