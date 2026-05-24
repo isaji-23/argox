@@ -680,6 +680,18 @@ def test_azure_health_check_calls_container_properties(
     assert "get_container_properties" in container.calls
 
 
+def test_azure_health_check_creates_container_on_fresh_deploy() -> None:
+    # With ensure_container enabled, the readiness probe must create a missing
+    # container itself; otherwise /readyz deadlocks at 503 before any write.
+    container = FakeAzureContainerClient()
+    backend = AzureBlobStorageBackend(
+        container_client=container, container_name="argox", ensure_container=True
+    )
+    backend.health_check()
+    assert container.create_calls == 1
+    assert "get_container_properties" in container.calls
+
+
 def test_azure_health_check_raises_storage_error_on_failure() -> None:
     container = MagicMock()
     container.get_container_properties.side_effect = RuntimeError("dns failure")

@@ -190,6 +190,15 @@ class AzureBlobStorageBackend(StorageBackend):
             raise StorageError(f"failed to probe {key!r}: {exc}") from exc
 
     def health_check(self) -> None:
+        """Report whether the backend can serve writes.
+
+        Ensures the container exists first (creating it on a fresh deployment
+        when ``ensure_container`` is enabled) so readiness does not deadlock:
+        otherwise ``/readyz`` would stay 503, traffic would never arrive, and
+        the first ``put()`` that would create the container would never run.
+        Then probes reachability via ``get_container_properties``.
+        """
+        self._ensure_container()
         try:
             self._container.get_container_properties()
         except Exception as exc:
