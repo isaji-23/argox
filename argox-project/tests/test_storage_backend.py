@@ -110,6 +110,21 @@ def test_local_list_returns_empty_for_unknown_prefix(
     assert list(local_backend.list("does/not/exist/")) == []
 
 
+def test_local_list_rejects_backslash_prefix(
+    local_backend: LocalStorageBackend,
+) -> None:
+    # Prefixes follow the same forward-slash-only contract as keys.
+    with pytest.raises(ValueError):
+        list(local_backend.list("spans\\evil"))
+
+
+def test_local_list_rejects_dotdot_prefix(
+    local_backend: LocalStorageBackend,
+) -> None:
+    with pytest.raises(ValueError):
+        list(local_backend.list("a/../b"))
+
+
 def test_local_list_missing_prefix_does_not_scan_root(
     local_backend: LocalStorageBackend,
 ) -> None:
@@ -453,6 +468,18 @@ def test_azure_health_check_raises_storage_error_on_failure() -> None:
     backend = AzureBlobStorageBackend(container_client=container, container_name="c")
     with pytest.raises(StorageError):
         backend.health_check()
+
+
+def test_azure_attr_reads_mapping_and_object() -> None:
+    # ``_attr`` must handle both dict-shaped and object-shaped SDK results.
+    # The Mapping branch relies on collections.abc.Mapping so the isinstance
+    # check is safe under Python 3.9.
+    from argox_collector.storage.azure import _attr
+
+    assert _attr({"etag": "abc"}, "etag", None) == "abc"
+    assert _attr(SimpleNamespace(etag="xyz"), "etag", None) == "xyz"
+    assert _attr({}, "etag", "fallback") == "fallback"
+    assert _attr(None, "etag", "fallback") == "fallback"
 
 
 def test_azure_put_handles_attribute_style_upload_result() -> None:

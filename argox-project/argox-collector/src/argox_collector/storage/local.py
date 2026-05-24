@@ -103,6 +103,15 @@ class LocalStorageBackend(StorageBackend):
         )
 
     def list(self, prefix: str = "") -> Iterator[BlobMetadata]:
+        # Keep prefix semantics consistent with ``normalize_key``: forward
+        # slashes only and no parent-directory traversal. Unlike a full key,
+        # a prefix may be empty or end with a slash, so we cannot reuse
+        # ``normalize_key`` verbatim.
+        if "\\" in prefix:
+            raise ValueError(f"prefix must use forward slashes only: {prefix!r}")
+        if ".." in prefix.split("/"):
+            raise ValueError(f"prefix contains invalid segment: {prefix!r}")
+
         prefix_path = self._root if not prefix else (self._root / prefix)
         if prefix and not _is_inside(prefix_path.resolve(), self._root):
             raise ValueError(f"prefix escapes storage root: {prefix!r}")

@@ -11,8 +11,9 @@ the local driver are not forced to pull in the Azure SDK.
 
 from __future__ import annotations
 
+from collections.abc import Iterator, Mapping
 from types import SimpleNamespace
-from typing import Any, Iterator, Mapping, Optional
+from typing import Any, Optional
 
 from argox_collector.storage.base import (
     BlobData,
