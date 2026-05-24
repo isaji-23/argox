@@ -41,19 +41,37 @@ class AzureBlobStorageBackend(StorageBackend):
             production code wires it from a connection string via
             :meth:`from_connection_string`, while tests inject a stub.
         container_name: Name of the underlying container, kept for logging.
+        ensure_container: When ``True`` the container is created lazily on the
+            first write (see :meth:`_ensure_container`). Left ``False`` for
+            injected clients that already point at an existing container.
     """
 
-    def __init__(self, container_client: Any, container_name: str) -> None:
+    def __init__(
+        self,
+        container_client: Any,
+        container_name: str,
+        *,
+        ensure_container: bool = False,
+    ) -> None:
         self._container = container_client
         self._container_name = container_name
+        # Defer container creation to the first write so that selecting the
+        # Azure backend never performs blocking network I/O during app
+        # startup. A transient outage then degrades ``/readyz`` to 503 instead
+        # of crash-looping the process before it can serve probes.
+        self._container_ready = not ensure_container
 
     @classmethod
     def from_connection_string(
         cls, connection_string: str, container_name: str
     ) -> "AzureBlobStorageBackend":
-        """Build a backend from a standard Azure connection string."""
+        """Build a backend from a standard Azure connection string.
+
+        Client construction is offline; the container itself is created lazily
+        on the first write rather than here, keeping app startup free of
+        network I/O.
+        """
         try:
-            from azure.core.exceptions import ResourceExistsError
             from azure.storage.blob import BlobServiceClient
         except ImportError as exc:  # pragma: no cover - exercised via factory
             raise StorageError(
@@ -63,15 +81,26 @@ class AzureBlobStorageBackend(StorageBackend):
 
         service = BlobServiceClient.from_connection_string(connection_string)
         container = service.get_container_client(container_name)
+        return cls(
+            container_client=container,
+            container_name=container_name,
+            ensure_container=True,
+        )
+
+    def _ensure_container(self) -> None:
+        """Create the container on first write; tolerate races and reruns."""
+        if self._container_ready:
+            return
         try:
-            container.create_container()
-        except ResourceExistsError:
-            pass
+            self._container.create_container()
         except Exception as exc:
+            if _is_already_exists(exc):
+                self._container_ready = True
+                return
             raise StorageError(
-                f"failed to ensure container {container_name!r}: {exc}"
+                f"failed to ensure container {self._container_name!r}: {exc}"
             ) from exc
-        return cls(container_client=container, container_name=container_name)
+        self._container_ready = True
 
     @property
     def container_name(self) -> str:
@@ -88,6 +117,7 @@ class AzureBlobStorageBackend(StorageBackend):
         normalize_key(key)
         clean_metadata = validate_metadata(metadata)
         payload = bytes(data)
+        self._ensure_container()
         blob = self._container.get_blob_client(key)
         content_settings = _build_content_settings(content_type)
         try:
@@ -221,3 +251,11 @@ def _is_not_found(exc: BaseException) -> bool:
         return True
     status_code = getattr(exc, "status_code", None)
     return status_code == 404
+
+
+def _is_already_exists(exc: BaseException) -> bool:
+    error_code = getattr(exc, "error_code", None)
+    if error_code == "ContainerAlreadyExists":
+        return True
+    status_code = getattr(exc, "status_code", None)
+    return status_code == 409

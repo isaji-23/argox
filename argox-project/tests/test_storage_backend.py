@@ -477,9 +477,16 @@ class FakeBlobProperties:
 class FakeAzureContainerClient:
     """Minimal stand-in for ``azure.storage.blob.ContainerClient``."""
 
-    def __init__(self) -> None:
+    def __init__(self, create_error: Optional[Exception] = None) -> None:
         self._blobs: dict[str, FakeBlob] = {}
         self.calls: list[str] = []
+        self.create_calls = 0
+        self._create_error = create_error
+
+    def create_container(self) -> None:
+        self.create_calls += 1
+        if self._create_error is not None:
+            raise self._create_error
 
     def get_blob_client(self, key: str) -> "FakeAzureBlobClient":
         return FakeAzureBlobClient(self, key)
@@ -662,6 +669,47 @@ def test_azure_health_check_raises_storage_error_on_failure() -> None:
     backend = AzureBlobStorageBackend(container_client=container, container_name="c")
     with pytest.raises(StorageError):
         backend.health_check()
+
+
+def test_azure_injected_backend_never_creates_container(
+    azure_backend: AzureBlobStorageBackend,
+) -> None:
+    # The default fixture injects a client at an existing container, so writes
+    # must not attempt creation (ensure_container defaults to False).
+    azure_backend.put("spans/x.jsonl", b"hi")
+    container = azure_backend._container  # type: ignore[attr-defined]
+    assert container.create_calls == 0
+
+
+def test_azure_ensure_container_creates_once_across_writes() -> None:
+    container = FakeAzureContainerClient()
+    backend = AzureBlobStorageBackend(
+        container_client=container, container_name="argox", ensure_container=True
+    )
+    backend.put("spans/a.jsonl", b"a")
+    backend.put("spans/b.jsonl", b"b")
+    assert container.create_calls == 1
+
+
+def test_azure_ensure_container_swallows_already_exists() -> None:
+    already_exists = type(
+        "_Exists", (Exception,), {"error_code": "ContainerAlreadyExists"}
+    )()
+    container = FakeAzureContainerClient(create_error=already_exists)
+    backend = AzureBlobStorageBackend(
+        container_client=container, container_name="argox", ensure_container=True
+    )
+    backend.put("spans/a.jsonl", b"a")
+    assert backend.get("spans/a.jsonl").data == b"a"
+
+
+def test_azure_ensure_container_maps_other_errors_to_storage_error() -> None:
+    container = FakeAzureContainerClient(create_error=RuntimeError("boom"))
+    backend = AzureBlobStorageBackend(
+        container_client=container, container_name="argox", ensure_container=True
+    )
+    with pytest.raises(StorageError):
+        backend.put("spans/a.jsonl", b"a")
 
 
 def test_azure_attr_reads_mapping_and_object() -> None:

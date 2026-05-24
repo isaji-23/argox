@@ -70,7 +70,7 @@ Settings are read from `ARGOX_*` environment variables (see
 
 The Collector persists span batches, policy bundles and audit-log segments
 through a single `StorageBackend` interface (`put`, `get`, `list`, `delete`,
-`exists`). Two drivers ship in-tree:
+`exists`, `health_check`). Two drivers ship in-tree:
 
 - **Local filesystem** (`ARGOX_STORAGE_BACKEND=local`, default). Blobs land
   under `ARGOX_STORAGE_LOCAL_ROOT`; writes are atomic via `os.replace`.
@@ -78,8 +78,8 @@ through a single `StorageBackend` interface (`put`, `get`, `list`, `delete`,
 - **Azure Blob Storage** (`ARGOX_STORAGE_BACKEND=azure`). Requires
   `pip install -e ".[azure]"` (pulls `azure-storage-blob`) and an
   `ARGOX_STORAGE_AZURE_CONNECTION_STRING` pointing at either real Azure or
-  Azurite. The configured container is created on first boot if it does
-  not yet exist.
+  Azurite. The configured container is created lazily on the first write if
+  it does not yet exist, so startup performs no blocking network I/O.
 
 `/readyz` reports `checks.storage: ok` once the configured backend responds
 to a `health_check()` call, and returns HTTP `503` with
