@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from unittest import mock
 
-from argox.exporters.otlp import OTLPSpanExporter
+from argox.observability import OTLPSpanExporter
 
 
 def test_otlp_exporter_instantiation():

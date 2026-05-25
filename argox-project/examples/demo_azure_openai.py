@@ -39,7 +39,7 @@ The demo exercises every Argox capability that is currently implemented:
    summary of the run (tokens, duration, tools called/blocked) from the
    in-memory ``AgentRunMetrics`` once the run completes.
 
-Expected output is a ``ConsoleSpanExporter`` span line for the run, the
+Expected output is a ``ConsoleSpanLogger`` span line for the run, the
 processor's redaction logs, the tools' "received" lines, the in-memory
 metrics summary, the LLM's final answer, and a ``spans.jsonl`` file
 written under ``examples/run_artifacts/``.
@@ -67,7 +67,7 @@ from openai import AsyncOpenAI
 import argox
 from argox.core import init_telemetry
 from argox.core.state import AgentRunMetrics
-from argox.exporters import ConsoleSpanExporter, JsonlSpanExporter
+from argox.observability import ConsoleSpanLogger
 from argox.interfaces.exporter import ExporterBase
 from argox.policies import LocalPolicyClient
 from argox.processors import PiiRedactionProcessor

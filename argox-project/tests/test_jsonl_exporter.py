@@ -11,7 +11,7 @@ from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor, SpanExportResult
 
-from argox.exporters.jsonl import JsonlSpanExporter
+from argox.observability import JsonlSpanExporter
 
 
 def _make_tracer(exporter: JsonlSpanExporter):
