@@ -31,7 +31,7 @@ The demo exercises every Argox capability that is currently implemented:
 3. **Span export — multi-sink** — every run emits a single
    ``argox.agent.run`` span carrying token usage, policy decision,
    blocked-tool list, and processor events. The demo wires two span
-   exporters in parallel: ``ConsoleSpanExporter`` for a human-readable
+   exporters in parallel: ``ConsoleSpanLogger`` for a human-readable
    one-line summary on stdout, and ``JsonlSpanExporter`` writing the full
    OTel JSON payload to ``examples/run_artifacts/spans.jsonl`` for
    offline inspection.
@@ -52,6 +52,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -67,7 +68,7 @@ from openai import AsyncOpenAI
 import argox
 from argox.core import init_telemetry
 from argox.core.state import AgentRunMetrics
-from argox.observability import ConsoleSpanLogger
+from argox.observability import ConsoleSpanLogger, JsonlSpanExporter
 from argox.interfaces.exporter import ExporterBase
 from argox.policies import LocalPolicyClient
 from argox.processors import PiiRedactionProcessor
@@ -160,7 +161,7 @@ class _PrintMetricsExporter(ExporterBase):
 
 init_telemetry(
     exporters=[
-        ConsoleSpanExporter(),
+        ConsoleSpanLogger(),
         JsonlSpanExporter(_SPANS_PATH),
     ],
 )
@@ -189,12 +190,42 @@ async def run_agent(agent: Agent, prompt: str):
     return await Runner.run(agent, prompt)
 
 
+async def run_agent_baseline(prompt: str):
+    """Run the same agent directly, bypassing the Argox SDK.
+
+    Used as a timing baseline against ``run_agent`` so the per-run overhead of
+    policy evaluation, processor mutation, and span/metrics export is visible.
+    """
+    return await Runner.run(agent, prompt)
+
+
 async def main() -> None:
-    output = await run_agent(
+    prompt = (
         "Log that user@example.com just checked the forecast, "
         "and tell me the weather in Madrid."
     )
-    print("\nFinal output:", output)
+
+    # Baseline first: identical agent, no Argox monitoring.
+    print("=== Baseline run (no Argox monitoring) ===")
+    baseline_start = time.perf_counter()
+    baseline_output = await run_agent_baseline(prompt)
+    baseline_elapsed = time.perf_counter() - baseline_start
+
+    # Monitored: same agent wrapped with @argox.monitor.
+    print("\n=== Monitored run (Argox SDK) ===")
+    monitored_start = time.perf_counter()
+    monitored_output = await run_agent(prompt)
+    monitored_elapsed = time.perf_counter() - monitored_start
+
+    print("\nFinal output (baseline):\n", baseline_output)
+    print("\nFinal output (monitored):\n", monitored_output)
+
+    # LLM latency dominates and varies per call, so treat this as indicative,
+    # not a benchmark — the delta is the Argox per-run instrumentation cost.
+    overhead = monitored_elapsed - baseline_elapsed
+    print(f"\n[timing] baseline:  {baseline_elapsed:.2f}s")
+    print(f"[timing] monitored: {monitored_elapsed:.2f}s")
+    print(f"[timing] overhead:  {overhead:+.2f}s")
 
 
 if __name__ == "__main__":
