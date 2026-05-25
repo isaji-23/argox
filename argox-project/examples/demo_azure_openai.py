@@ -11,23 +11,38 @@ Run from ``argox-project/``::
 
     python examples/demo_azure_openai.py
 
-The demo exercises three Argox capabilities end-to-end:
+The demo exercises every Argox capability that is currently implemented:
 
-1. **Policy-based tool blocking** — ``get_current_datetime`` is denied by the
-   inline policy, so the LLM must answer using only the other tools.
-2. **In-flight argument redaction (PLUGIN-02)** — a ``PiiRedactingProcessor``
-   scrubs anything that looks like an email address from tool arguments
-   *before* the tool function receives them. The processor prints each
-   redaction it performs, and the recipient tool prints exactly what it ends
-   up seeing so the in-flight mutation is visible side-by-side.
-3. **Metrics export** — a tiny custom exporter prints a one-line summary of
-   the run (tokens, duration, tools called/blocked) once the run completes,
-   and an OTel ``ConsoleMetricExporter`` dump is flushed once at the very
-   end via ``MeterProvider.force_flush()``.
+1. **YAML-backed policy evaluation** — ``LocalPolicyClient`` loads
+   ``examples/policies/demo_policy.yaml``, compiles its rules into the
+   in-process ``PolicyCache``, and evaluates them at the three policy
+   hooks (``on_input``, ``on_tool_call``, ``on_output``). The shipped
+   policy blocks ``get_current_datetime`` at tool-filter time, alerts on
+   prompts that mention "password", and blocks any output containing
+   ``STACK_TRACE``. Swap the YAML to retune the run — no code change.
+2. **In-flight argument redaction (PLUGIN-02 + PROC-01)** — the built-in
+   ``PiiRedactionProcessor`` from ``argox.processors`` scrubs PII (emails,
+   phones, IPs, IBAN, credit cards, ES_DNI/ES_NIE) from tool arguments
+   *before* the tool function receives them, and from the LLM's final
+   output before it returns to the caller. The recipient tool prints
+   exactly what it ends up seeing so the in-flight mutation is visible.
+   See the docstring of ``_CustomPiiProcessor`` below for a minimal
+   example of how to build your own processor against the same contract.
+3. **Span export — multi-sink** — every run emits a single
+   ``argox.agent.run`` span carrying token usage, policy decision,
+   blocked-tool list, and processor events. The demo wires two span
+   exporters in parallel: ``ConsoleSpanExporter`` for a human-readable
+   one-line summary on stdout, and ``JsonlSpanExporter`` writing the full
+   OTel JSON payload to ``examples/run_artifacts/spans.jsonl`` for
+   offline inspection.
+4. **Metrics export** — a tiny custom ``ExporterBase`` prints a one-line
+   summary of the run (tokens, duration, tools called/blocked) from the
+   in-memory ``AgentRunMetrics`` once the run completes.
 
 Expected output is a ``ConsoleSpanLogger`` span line for the run, the
 processor's redaction logs, the tools' "received" lines, the in-memory
-metrics summary, the LLM's final answer, and finally the OTel metric dump.
+metrics summary, the LLM's final answer, and a ``spans.jsonl`` file
+written under ``examples/run_artifacts/``.
 
 This example uses the public ``@argox.monitor`` decorator, which replaces the
 manual ``ArgoxManager`` wiring with a single declaration on the runner.
@@ -37,9 +52,8 @@ from __future__ import annotations
 
 import asyncio
 import os
-import re
 from datetime import datetime
-from typing import Any
+from pathlib import Path
 
 from agents import (
     Agent,
@@ -50,17 +64,18 @@ from agents import (
 )
 from dotenv import load_dotenv
 from openai import AsyncOpenAI
-from opentelemetry.sdk.metrics.export import ConsoleMetricExporter
-
 import argox
-from argox.core import init_metrics, init_telemetry
-from argox.core.context import RunContext
+from argox.core import init_telemetry
 from argox.core.state import AgentRunMetrics
 from argox.observability import ConsoleSpanLogger
 from argox.interfaces.exporter import ExporterBase
-from argox.interfaces.policy import PolicyClient, PolicyResult
-from argox.interfaces.processor import ArgoxProcessor
+from argox.policies import LocalPolicyClient
+from argox.processors import PiiRedactionProcessor
 from argox_openai import ArgoxOpenAIPlugin
+
+_EXAMPLES_DIR = Path(__file__).resolve().parent
+_POLICY_PATH = _EXAMPLES_DIR / "policies" / "demo_policy.yaml"
+_SPANS_PATH = _EXAMPLES_DIR / "run_artifacts" / "spans.jsonl"
 
 
 load_dotenv()
@@ -93,77 +108,35 @@ def log_user_activity(email: str, action: str) -> str:
     return f"logged action={action!r} for {email}"
 
 
-class _InlinePolicy(PolicyClient):
-    """Toy in-memory policy used solely for the demo.
+class _CustomPiiProcessor:
+    """Reference implementation kept here as a tutorial for custom processors.
 
-    Blocks ``get_current_datetime`` to exercise the Manager's tool-filtering path.
-    All other inputs and outputs pass through unchanged.
+    Production code should use the built-in ``argox.processors.PiiRedactionProcessor``
+    (registered below) which covers EMAIL/PHONE/IPV4/IPV6/IBAN/CREDIT_CARD/ES_DNI/ES_NIE,
+    nested-dict traversal, MASK/HASH/DROP modes, and span events. This stub is
+    *not* registered with the manager — it exists only to document the minimal
+    contract a custom processor must satisfy. To roll your own::
+
+        import re
+
+        from argox.interfaces.processor import ArgoxProcessor
+
+
+        class MyProcessor(ArgoxProcessor):
+            _EMAIL_PATTERN = re.compile(r"[\\w.+-]+@[\\w-]+\\.[\\w.-]+")
+
+            async def process_input(self, text, ctx):
+                return text  # opt-out of input scrubbing
+
+            async def process_tool_args(self, tool_name, args, ctx):
+                return {
+                    k: self._EMAIL_PATTERN.sub("[REDACTED]", v) if isinstance(v, str) else v
+                    for k, v in args.items()
+                }
+
+            async def process_output(self, text, ctx):
+                return self._EMAIL_PATTERN.sub("[REDACTED]", text)
     """
-
-    BLOCKED_TOOLS = {"get_current_datetime"}
-
-    async def check_input(self, text: str) -> PolicyResult:
-        return PolicyResult.ok()
-
-    async def is_tool_allowed(self, tool_name: str) -> PolicyResult:
-        if tool_name in self.BLOCKED_TOOLS:
-            return PolicyResult.block(
-                reason=f"{tool_name} disabled by demo policy",
-                rule_id="DEMO-01",
-            )
-        return PolicyResult.ok()
-
-    async def check_output(self, text: str) -> PolicyResult:
-        return PolicyResult.ok()
-
-
-class _PiiRedactingProcessor(ArgoxProcessor):
-    """Scrubs email-shaped substrings from tool args and LLM output in flight.
-
-    Demonstrates two of the three ``ArgoxProcessor`` phases:
-
-    - ``process_tool_args`` (PLUGIN-02) — ``ArgoxOpenAIPlugin`` wraps each
-      function tool so this method runs on the arguments *before* the tool
-      body executes. The original LLM-emitted args never reach the tool.
-    - ``process_output`` — the Manager runs this on the LLM's final answer
-      *before* it is returned to the caller, so any email the model echoed
-      back in plain text is scrubbed too.
-
-    ``process_input`` is left as a pass-through on purpose: the demo wants
-    the LLM to see the email in the prompt so it actually emits a tool call
-    carrying that email — that is what makes the tool-args redaction visible.
-    """
-
-    _EMAIL_PATTERN = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
-
-    def _scrub(self, value: str) -> str:
-        return self._EMAIL_PATTERN.sub("[REDACTED]", value)
-
-    async def process_input(self, text: str, ctx: RunContext) -> str:
-        return text
-
-    async def process_tool_args(
-        self, tool_name: str, args: dict, ctx: RunContext,
-    ) -> dict:
-        scrubbed: dict[str, Any] = {}
-        for key, value in args.items():
-            if isinstance(value, str):
-                redacted = self._scrub(value)
-                if redacted != value:
-                    print(
-                        f"[processor] redacted email in tool={tool_name!r} "
-                        f"arg={key!r}: {value!r} -> {redacted!r}"
-                    )
-                scrubbed[key] = redacted
-            else:
-                scrubbed[key] = value
-        return scrubbed
-
-    async def process_output(self, text: str, ctx: RunContext) -> str:
-        redacted = self._scrub(text)
-        if redacted != text:
-            print("[processor] redacted email(s) in LLM output before returning to caller")
-        return redacted
 
 
 class _PrintMetricsExporter(ExporterBase):
@@ -185,12 +158,11 @@ class _PrintMetricsExporter(ExporterBase):
             print("[metrics] violations:   ", metrics.policy_violations)
 
 
-init_telemetry(exporters=[ConsoleSpanLogger()])
-# A 1-hour export interval keeps the periodic reader from interleaving its
-# output with the run; ``force_flush`` at the end prints one clean dump.
-_meter_provider = init_metrics(
-    exporters=[ConsoleMetricExporter()],
-    export_interval_ms=3_600_000,
+init_telemetry(
+    exporters=[
+        ConsoleSpanExporter(),
+        JsonlSpanExporter(_SPANS_PATH),
+    ],
 )
 
 agent = Agent(
@@ -209,8 +181,8 @@ agent = Agent(
 @argox.monitor(
     plugin=ArgoxOpenAIPlugin(),
     agent=agent,
-    policy=_InlinePolicy(),
-    processors=[_PiiRedactingProcessor()],
+    policy=LocalPolicyClient(_POLICY_PATH),
+    processors=[PiiRedactionProcessor()],
     exporters=[_PrintMetricsExporter()],
 )
 async def run_agent(agent: Agent, prompt: str):
@@ -218,14 +190,11 @@ async def run_agent(agent: Agent, prompt: str):
 
 
 async def main() -> None:
-    try:
-        output = await run_agent(
-            "Log that user@example.com just checked the forecast, "
-            "and tell me the weather in Madrid."
-        )
-        print("\nFinal output:", output)
-    finally:
-        _meter_provider.force_flush()
+    output = await run_agent(
+        "Log that user@example.com just checked the forecast, "
+        "and tell me the weather in Madrid."
+    )
+    print("\nFinal output:", output)
 
 
 if __name__ == "__main__":

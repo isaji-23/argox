@@ -8,6 +8,7 @@ from argox.interfaces.policy import (
 from argox.policies.cache import PolicyCache
 from argox.policies.local_client import LocalPolicyClient
 from argox.policies.parser import PolicyDocument, PolicyParser, PolicyRule
+from argox.policies.remote_client import RemotePolicyClient
 
 __all__ = [
     # Triggers
@@ -21,4 +22,5 @@ __all__ = [
     "PolicyRule",
     # Clients
     "LocalPolicyClient",
+    "RemotePolicyClient",
 ]

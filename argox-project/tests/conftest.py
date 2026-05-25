@@ -5,12 +5,14 @@ All fixtures simulate agent runs without making real API calls.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from typing import Any
 
 import pytest
 
 from argox.core.context import RunContext
+from argox_collector.settings import CollectorSettings
 from argox.core.state import AgentRunMetrics, ApiCallRecord
 from argox.interfaces.exporter import ExporterBase
 from argox.interfaces.plugin import ArgoxPlugin
@@ -121,6 +123,22 @@ class CapturingExporter(ExporterBase):
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _isolate_argox_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep ``CollectorSettings`` deterministic across machines.
+
+    Ambient ``ARGOX_*`` environment variables or a developer ``.env`` in the
+    working directory would otherwise leak into every test (e.g.
+    ``ARGOX_STORAGE_BACKEND=azure`` flipping the backend). Strip the env vars
+    and disable ``.env`` loading for the whole suite; ``monkeypatch`` restores
+    both afterwards.
+    """
+    for key in list(os.environ):
+        if key.startswith("ARGOX_"):
+            monkeypatch.delenv(key, raising=False)
+    monkeypatch.setitem(CollectorSettings.model_config, "env_file", None)
 
 
 @pytest.fixture
