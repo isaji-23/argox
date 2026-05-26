@@ -7,6 +7,7 @@ from typing import Optional
 from fastapi import FastAPI
 
 from argox_collector import __version__
+from argox_collector.index import TraceIndex, build_index
 from argox_collector.logging import configure_logging
 from argox_collector.routers import health
 from argox_collector.settings import CollectorSettings
@@ -17,6 +18,7 @@ def create_app(
     settings: Optional[CollectorSettings] = None,
     *,
     storage: Optional[StorageBackend] = None,
+    index: Optional[TraceIndex] = None,
 ) -> FastAPI:
     """Build and return a configured FastAPI application.
 
@@ -26,10 +28,12 @@ def create_app(
         storage: Optional pre-built storage backend. When omitted, one is
             constructed from ``settings``. Tests inject in-memory or local
             backends through this argument.
+        index: Optional pre-built trace index. When omitted, one is
+            constructed from ``settings``.
 
     Returns:
         A FastAPI app with health endpoints registered, structlog wired and
-        the storage backend attached to ``app.state``.
+        the storage and index backends attached to ``app.state``.
     """
     settings = settings or CollectorSettings()
     configure_logging(level=settings.log_level)
@@ -44,5 +48,6 @@ def create_app(
     )
     app.state.settings = settings
     app.state.storage = storage if storage is not None else build_storage(settings)
+    app.state.index = index if index is not None else build_index(settings)
     app.include_router(health.router)
     return app

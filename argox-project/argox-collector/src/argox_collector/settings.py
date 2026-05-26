@@ -33,3 +33,6 @@ class CollectorSettings(BaseSettings):
     storage_local_root: Path = Path("./var/argox/blobs")
     storage_azure_connection_string: Optional[str] = None
     storage_azure_container: str = "argox"
+
+    index_backend: str = "duckdb"
+    index_duckdb_path: Path = Path("./var/argox/index.duckdb")

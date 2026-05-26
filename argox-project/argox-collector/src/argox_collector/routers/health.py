@@ -6,6 +6,7 @@ from fastapi import APIRouter, Request, Response
 from pydantic import BaseModel
 
 from argox_collector import __version__
+from argox_collector.index import TraceIndex, TraceIndexError
 from argox_collector.settings import CollectorSettings
 from argox_collector.storage import StorageBackend, StorageError
 
@@ -36,6 +37,10 @@ def _service_name(request: Request) -> str:
 
 def _storage(request: Request) -> StorageBackend:
     return request.app.state.storage
+
+
+def _index(request: Request) -> TraceIndex:
+    return request.app.state.index
 
 
 @router.get("/healthz", response_model=HealthResponse, summary="Liveness probe")
@@ -73,6 +78,14 @@ def readyz(request: Request, response: Response) -> ReadinessResponse:
         checks["storage"] = "ok"
     except StorageError as exc:
         checks["storage"] = f"unavailable: {exc}"
+        overall = "degraded"
+        response.status_code = 503
+
+    try:
+        _index(request).health_check()
+        checks["index"] = "ok"
+    except TraceIndexError as exc:
+        checks["index"] = f"unavailable: {exc}"
         overall = "degraded"
         response.status_code = 503
 
