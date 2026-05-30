@@ -11,14 +11,14 @@ from typing import Any, Mapping, Optional
 @dataclass(frozen=True)
 class SpanRecord:
     """Relational record representing a single span's metadata.
-    
+
     This matches the flattened schema stored in the index (DuckDB).
     """
     trace_id: str
     span_id: str
     parent_span_id: Optional[str] = None
-    name: str = ""
-    start_time: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    name: Optional[str] = None
+    start_time: Optional[datetime] = None
     end_time: Optional[datetime] = None
     duration_ms: Optional[float] = None
     

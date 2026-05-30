@@ -4,10 +4,9 @@ from __future__ import annotations
 
 import json
 import threading
-from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Optional
 
 import duckdb
 
@@ -104,7 +103,7 @@ class DuckDBTraceIndex(TraceIndex):
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (trace_id, span_id) DO UPDATE SET
                     parent_span_id = COALESCE(excluded.parent_span_id, spans.parent_span_id),
-                    name = COALESCE(excluded.name, spans.name),
+                    name = COALESCE(NULLIF(excluded.name, ''), spans.name),
                     start_time = COALESCE(excluded.start_time, spans.start_time),
                     end_time = COALESCE(excluded.end_time, spans.end_time),
                     duration_ms = COALESCE(excluded.duration_ms, spans.duration_ms),

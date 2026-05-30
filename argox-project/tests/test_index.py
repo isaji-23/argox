@@ -89,6 +89,48 @@ def test_duckdb_index_upsert_behavior(index: DuckDBTraceIndex):
         assert count == 1
 
 
+def test_duckdb_index_upsert_partial(index: DuckDBTraceIndex):
+    now = datetime.now(timezone.utc)
+    record1 = SpanRecord(
+        trace_id="t1", 
+        span_id="s1", 
+        name="original", 
+        start_time=now,
+        duration_ms=100.0
+    )
+    index.insert_span(record1)
+    
+    # Partial update: name and start_time are missing (None by default)
+    record2 = SpanRecord(
+        trace_id="t1", 
+        span_id="s1", 
+        duration_ms=200.0,
+        run_success=True
+    )
+    index.insert_span(record2)
+    
+    with index._lock:
+        row = index._conn.execute("SELECT name, start_time, duration_ms, run_success FROM spans WHERE trace_id='t1'").fetchone()
+        assert row[0] == "original"  # Should NOT be None/empty
+        assert row[1].replace(tzinfo=timezone.utc) == now  # Should NOT be overwritten
+        assert row[2] == 200.0  # Should be updated
+        assert row[3] is True  # Should be updated
+
+    # Partial update with empty string for name
+    record3 = SpanRecord(
+        trace_id="t1", 
+        span_id="s1", 
+        name="",
+        duration_ms=300.0
+    )
+    index.insert_span(record3)
+    
+    with index._lock:
+        row = index._conn.execute("SELECT name, duration_ms FROM spans WHERE trace_id='t1'").fetchone()
+        assert row[0] == "original"
+        assert row[1] == 300.0
+
+
 def test_duckdb_index_health_check(index: DuckDBTraceIndex):
     # Should not raise
     index.health_check()
