@@ -5,13 +5,21 @@ from __future__ import annotations
 import json
 import threading
 from collections.abc import Mapping
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
 import duckdb
 
 from argox_collector.index.base import SpanRecord, TraceIndex, TraceIndexError
+
+
+def _to_naive_utc(dt: Optional[datetime]) -> Optional[datetime]:
+    if not dt:
+        return None
+    if dt.tzinfo:
+        return dt.astimezone(timezone.utc).replace(tzinfo=None)
+    return dt
 
 
 class DuckDBTraceIndex(TraceIndex):
@@ -56,7 +64,6 @@ class DuckDBTraceIndex(TraceIndex):
                 )
             """)
             # Create indexes for common query patterns
-            self._conn.execute("CREATE INDEX IF NOT EXISTS idx_spans_trace_id ON spans (trace_id)")
             self._conn.execute("CREATE INDEX IF NOT EXISTS idx_spans_start_time ON spans (start_time)")
             self._conn.execute("CREATE INDEX IF NOT EXISTS idx_spans_agent_name ON spans (agent_name)")
 
@@ -74,8 +81,8 @@ class DuckDBTraceIndex(TraceIndex):
                 r.span_id,
                 r.parent_span_id,
                 r.name,
-                r.start_time,
-                r.end_time,
+                _to_naive_utc(r.start_time),
+                _to_naive_utc(r.end_time),
                 r.duration_ms,
                 r.agent_name,
                 r.agent_version,
@@ -89,12 +96,24 @@ class DuckDBTraceIndex(TraceIndex):
 
         with self._lock:
             self._conn.executemany("""
-                INSERT OR REPLACE INTO spans (
+                INSERT INTO spans (
                     trace_id, span_id, parent_span_id, name, 
                     start_time, end_time, duration_ms,
                     agent_name, agent_version, policy_decision, 
                     run_cost, run_success, attributes
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (trace_id, span_id) DO UPDATE SET
+                    parent_span_id = COALESCE(excluded.parent_span_id, spans.parent_span_id),
+                    name = COALESCE(excluded.name, spans.name),
+                    start_time = COALESCE(excluded.start_time, spans.start_time),
+                    end_time = COALESCE(excluded.end_time, spans.end_time),
+                    duration_ms = COALESCE(excluded.duration_ms, spans.duration_ms),
+                    agent_name = COALESCE(excluded.agent_name, spans.agent_name),
+                    agent_version = COALESCE(excluded.agent_version, spans.agent_version),
+                    policy_decision = COALESCE(excluded.policy_decision, spans.policy_decision),
+                    run_cost = COALESCE(excluded.run_cost, spans.run_cost),
+                    run_success = COALESCE(excluded.run_success, spans.run_success),
+                    attributes = COALESCE(excluded.attributes, spans.attributes)
             """, data)
 
     def health_check(self) -> None:

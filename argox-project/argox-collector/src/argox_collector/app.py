@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Optional
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
@@ -12,6 +13,15 @@ from argox_collector.logging import configure_logging
 from argox_collector.routers import health
 from argox_collector.settings import CollectorSettings
 from argox_collector.storage import StorageBackend, build_storage
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    yield
+    # Clean up index connections
+    if hasattr(app.state, "index") and app.state.index is not None:
+        if hasattr(app.state.index, "close"):
+            app.state.index.close()
 
 
 def create_app(
@@ -45,6 +55,7 @@ def create_app(
             "Server-side ingestion, indexing and policy distribution service "
             "for the Argox observability platform."
         ),
+        lifespan=lifespan,
     )
     app.state.settings = settings
     app.state.storage = storage if storage is not None else build_storage(settings)

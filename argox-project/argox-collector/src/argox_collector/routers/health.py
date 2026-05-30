@@ -64,8 +64,7 @@ def readyz(request: Request, response: Response) -> ReadinessResponse:
     replica from rotation when the blob layer is unreachable. Returns
     ``503`` (still with the structured ``checks`` payload) on degradation
     so standard readiness probes react without parsing the body.
-    Index-layer checks (DuckDB, audit log) will be added in later
-    COL-* tickets.
+    Audit log checks will be added in later COL-* tickets.
 
     Declared as a synchronous handler so FastAPI runs it in the thread
     pool: the storage health check performs blocking network I/O on the
