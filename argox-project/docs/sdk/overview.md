@@ -116,13 +116,31 @@ When the `@argox.monitor`-decorated function is called, `ArgoxManager`
 6. **Supports sync and async** — clear error if a sync wrapper is invoked inside
    an already-running event loop.
 
-## 6. Available today vs. pending
+## 6. OTel span exporters
+
+These are standard `SpanExporter` implementations for `init_telemetry(exporters=[...])`.
+They are distinct from `ExporterBase` — they receive OTel `ReadableSpan` objects
+produced by the `TracerProvider`, not the `AgentRunMetrics` object.
+
+| Class | Import | Output |
+|---|---|---|
+| `ConsoleSpanLogger` | `argox.observability` | One-line summary per span to stdout: name, duration, status, tokens, cost, policy decision. |
+| `JsonlSpanExporter` | `argox.observability` | Appends spans as JSONL lines to a file. |
+| `OTLPSpanExporter` | `argox.observability` | Sends spans to the Argox Collector via HTTP/protobuf (thin wrapper over OTel's OTLP exporter). |
+| `AzureBlobSpanExporter` | `argox_azure` | Writes each export batch as a JSONL blob to Azure Blob Storage under `spans/{YYYY}/{MM}/{DD}/{HH}/{batch_id}.jsonl`. Initialised with a connection string and container name. |
+
+`argox.exporters` is reserved for `ExporterBase` implementations (which receive
+`AgentRunMetrics`). It is currently empty — concrete `ExporterBase` implementations
+live in the integration packages (e.g. a future `argox-exporter-dashboard`).
+
+## 7. Available today vs. pending
 
 **Available:** `argox-core` (Manager, decorator, interfaces, state, OTel init,
-semconv, policy parser + local cache, `ConsoleSpanExporter`),
-`argox-plugin-openai` (real plugin), `argox-plugin-debug` (stub),
-`argox-exporter-azure` (skeleton), end-to-end Azure OpenAI demo.
+semconv, policy parser + local cache, `ConsoleSpanLogger`, `JsonlSpanExporter`,
+`OTLPSpanExporter`), `argox-plugin-openai` (real plugin),
+`argox-plugin-debug` (stub), `argox-exporter-azure` (`AzureBlobSpanExporter`
+— fully implemented), end-to-end Azure OpenAI demo.
 
 **Not yet:** no real `SsePolicyClient` (only the contract + in-process cache),
 no durable audit storage or dashboard from the SDK (only the `metrics` object
-and OTel spans ready to export), Azure exporter is a skeleton.
+and OTel spans ready to export).
