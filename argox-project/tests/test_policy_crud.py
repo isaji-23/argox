@@ -8,7 +8,7 @@ from argox_collector.storage.local import LocalStorageBackend
 
 @pytest.fixture
 def memory_storage(tmp_path):
-    return LocalStorageBackend(str(tmp_path))
+    return LocalStorageBackend(tmp_path)
 
 
 @pytest.fixture

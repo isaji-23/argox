@@ -1,14 +1,16 @@
+from __future__ import annotations
+
 import hashlib
 import json
 import logging
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import yaml
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict
 
-from argox_collector.storage import StorageBackend
+from argox_collector.storage import BlobNotFoundError, StorageBackend
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +29,7 @@ class PolicyRule(BaseModel):
     condition: RuleCondition
     action: str
     enforcement: str = "strict"
-    ai_act_ref: Optional[str] = None
+    ai_act_ref: str | None = None
 
 
 class PolicyDocument(BaseModel):
@@ -36,23 +38,23 @@ class PolicyDocument(BaseModel):
     id: str
     version: int
     status: str
-    rules: List[PolicyRule]
-    created_by: Optional[str] = None
-    updated_at: Optional[str] = None
-    content_hash: Optional[str] = None
+    rules: list[PolicyRule]
+    created_by: str | None = None
+    updated_at: str | None = None
+    content_hash: str | None = None
 
 
 class PolicyCreate(BaseModel):
     id: str
     status: str = "draft"
-    rules: List[PolicyRule]
-    created_by: Optional[str] = None
+    rules: list[PolicyRule]
+    created_by: str | None = None
 
 
 class PolicyUpdate(BaseModel):
     status: str
-    rules: List[PolicyRule]
-    created_by: Optional[str] = None
+    rules: list[PolicyRule]
+    created_by: str | None = None
 
 
 def get_storage(request: Request) -> StorageBackend:
@@ -63,7 +65,7 @@ def _read_manifest(storage: StorageBackend) -> dict:
     try:
         blob = storage.get("policies/manifest.json")
         return json.loads(blob.data.decode("utf-8"))
-    except Exception:
+    except BlobNotFoundError:
         return {"policies": {}, "bundle_hash": ""}
 
 
@@ -77,7 +79,7 @@ def _compute_yaml_hash(yaml_content: str) -> str:
 
 
 @router.get("")
-async def list_policies(skip: int = 0, limit: int = 50, storage: StorageBackend = Depends(get_storage)):
+def list_policies(skip: int = 0, limit: int = 50, storage: StorageBackend = Depends(get_storage)) -> dict:
     manifest = _read_manifest(storage)
     result = []
     policies_items = list(manifest.get("policies", {}).items())
@@ -93,7 +95,7 @@ async def list_policies(skip: int = 0, limit: int = 50, storage: StorageBackend 
 
 
 @router.get("/bundle")
-async def get_bundle(request: Request, response: Response, storage: StorageBackend = Depends(get_storage)):
+def get_bundle(request: Request, storage: StorageBackend = Depends(get_storage)) -> Response:
     manifest = _read_manifest(storage)
     bundle_hash = manifest.get("bundle_hash", "")
     
@@ -101,7 +103,6 @@ async def get_bundle(request: Request, response: Response, storage: StorageBacke
         etag = f'"{bundle_hash}"'
         if request.headers.get("if-none-match") == etag:
             return Response(status_code=304, headers={"ETag": etag})
-        response.headers["ETag"] = etag
 
     # Build the bundle by merging all active policies
     all_rules = []
@@ -138,7 +139,7 @@ async def get_bundle(request: Request, response: Response, storage: StorageBacke
 
 
 @router.get("/{policy_id}")
-async def get_active_policy(policy_id: str, storage: StorageBackend = Depends(get_storage)):
+def get_active_policy(policy_id: str, storage: StorageBackend = Depends(get_storage)) -> dict:
     manifest = _read_manifest(storage)
     meta = manifest.get("policies", {}).get(policy_id)
     if not meta:
@@ -156,7 +157,7 @@ async def get_active_policy(policy_id: str, storage: StorageBackend = Depends(ge
 
 
 @router.get("/{policy_id}/v{version}")
-async def get_policy_version(policy_id: str, version: int, storage: StorageBackend = Depends(get_storage)):
+def get_policy_version(policy_id: str, version: int, storage: StorageBackend = Depends(get_storage)) -> dict:
     try:
         blob = storage.get(f"policies/{policy_id}/v{version}.yaml")
         return yaml.safe_load(blob.data.decode("utf-8"))
@@ -165,7 +166,7 @@ async def get_policy_version(policy_id: str, version: int, storage: StorageBacke
 
 
 @router.post("")
-async def create_policy(policy_in: PolicyCreate, storage: StorageBackend = Depends(get_storage)):
+def create_policy(policy_in: PolicyCreate, storage: StorageBackend = Depends(get_storage)) -> dict:
     manifest = _read_manifest(storage)
     if policy_in.id in manifest.get("policies", {}):
         raise HTTPException(status_code=400, detail="Policy already exists")
@@ -203,7 +204,7 @@ async def create_policy(policy_in: PolicyCreate, storage: StorageBackend = Depen
 
 
 @router.put("/{policy_id}")
-async def update_policy(policy_id: str, policy_in: PolicyUpdate, storage: StorageBackend = Depends(get_storage)):
+def update_policy(policy_id: str, policy_in: PolicyUpdate, storage: StorageBackend = Depends(get_storage)) -> dict:
     manifest = _read_manifest(storage)
     meta = manifest.get("policies", {}).get(policy_id)
     if not meta:
@@ -230,6 +231,8 @@ async def update_policy(policy_id: str, policy_in: PolicyUpdate, storage: Storag
     meta["status"] = policy_in.status
     if policy_in.status == "active":
         meta["active_version"] = new_version
+    else:
+        meta["active_version"] = None
 
     # Invalidate bundle hash
     manifest["bundle_hash"] = ""
@@ -239,14 +242,18 @@ async def update_policy(policy_id: str, policy_in: PolicyUpdate, storage: Storag
 
 
 @router.delete("/{policy_id}")
-async def archive_policy(policy_id: str, storage: StorageBackend = Depends(get_storage)):
+def archive_policy(policy_id: str, storage: StorageBackend = Depends(get_storage)) -> dict:
     manifest = _read_manifest(storage)
     meta = manifest.get("policies", {}).get(policy_id)
     if not meta:
         raise HTTPException(status_code=404, detail="Policy not found")
 
     if meta["status"] == "archived":
-        return {"status": "archived"}
+        try:
+            blob = storage.get(f"policies/{policy_id}/v{meta['latest_version']}.yaml")
+            return yaml.safe_load(blob.data.decode("utf-8"))
+        except Exception:
+            raise HTTPException(status_code=500, detail="Failed to read latest policy version") from None
 
     new_version = meta["latest_version"] + 1
     
@@ -255,7 +262,7 @@ async def archive_policy(policy_id: str, storage: StorageBackend = Depends(get_s
         blob = storage.get(f"policies/{policy_id}/v{meta['latest_version']}.yaml")
         last_doc = yaml.safe_load(blob.data.decode("utf-8"))
     except Exception:
-        raise HTTPException(status_code=500, detail="Failed to read latest policy version")
+        raise HTTPException(status_code=500, detail="Failed to read latest policy version") from None
 
     doc = {
         "id": policy_id,
@@ -274,6 +281,7 @@ async def archive_policy(policy_id: str, storage: StorageBackend = Depends(get_s
 
     meta["latest_version"] = new_version
     meta["status"] = "archived"
+    meta["active_version"] = None
     
     # Invalidate bundle hash
     manifest["bundle_hash"] = ""
