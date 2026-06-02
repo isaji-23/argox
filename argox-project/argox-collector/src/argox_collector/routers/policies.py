@@ -3,12 +3,13 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import threading
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from argox_collector.storage import BlobNotFoundError, StorageBackend
 
@@ -16,18 +17,20 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/policies", tags=["policies"])
 
+_manifest_lock = threading.Lock()
+
 
 class RuleCondition(BaseModel):
     metric: str
-    operator: str
+    operator: Literal["eq", "neq", "gt", "gte", "lt", "lte", "contains", "in"]
     threshold: Any
 
 
 class PolicyRule(BaseModel):
-    id: str
+    id: str = Field(pattern=r"^[a-zA-Z0-9_-]+$")
     trigger: str
     condition: RuleCondition
-    action: str
+    action: Literal["block", "alert", "ok"]
     enforcement: str = "strict"
     ai_act_ref: str | None = None
 
@@ -35,9 +38,9 @@ class PolicyRule(BaseModel):
 class PolicyDocument(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
-    id: str
+    id: str = Field(pattern=r"^[a-zA-Z0-9_-]+$")
     version: int
-    status: str
+    status: Literal["active", "draft", "archived"]
     rules: list[PolicyRule]
     created_by: str | None = None
     updated_at: str | None = None
@@ -45,14 +48,14 @@ class PolicyDocument(BaseModel):
 
 
 class PolicyCreate(BaseModel):
-    id: str
-    status: str = "draft"
+    id: str = Field(pattern=r"^[a-zA-Z0-9_-]+$")
+    status: Literal["active", "draft", "archived"] = "draft"
     rules: list[PolicyRule]
     created_by: str | None = None
 
 
 class PolicyUpdate(BaseModel):
-    status: str
+    status: Literal["active", "draft", "archived"]
     rules: list[PolicyRule]
     created_by: str | None = None
 
@@ -80,59 +83,75 @@ def _compute_yaml_hash(yaml_content: str) -> str:
 
 @router.get("")
 def list_policies(skip: int = 0, limit: int = 50, storage: StorageBackend = Depends(get_storage)) -> dict:
-    manifest = _read_manifest(storage)
+    with _manifest_lock:
+        manifest = _read_manifest(storage)
+    
     result = []
-    policies_items = list(manifest.get("policies", {}).items())
+    # Sort by policy ID for deterministic pagination
+    policies_items = sorted(manifest.get("policies", {}).items(), key=lambda x: x[0])
     for pid, meta in policies_items[skip : skip + limit]:
         latest_ver = meta.get("latest_version", 1)
         try:
             blob = storage.get(f"policies/{pid}/v{latest_ver}.yaml")
             doc = yaml.safe_load(blob.data.decode("utf-8"))
             result.append(doc)
+        except BlobNotFoundError:
+            continue
+        except yaml.YAMLError as e:
+            logger.error(f"Failed to parse policy {pid} v{latest_ver}: {e}")
         except Exception:
+            logger.exception(f"Unexpected error loading policy {pid} v{latest_ver}")
             continue
     return {"items": result, "total": len(policies_items), "skip": skip, "limit": limit}
 
 
 @router.get("/bundle")
 def get_bundle(request: Request, storage: StorageBackend = Depends(get_storage)) -> Response:
-    manifest = _read_manifest(storage)
-    bundle_hash = manifest.get("bundle_hash", "")
-    
-    if bundle_hash:
-        etag = f'"{bundle_hash}"'
-        if request.headers.get("if-none-match") == etag:
-            return Response(status_code=304, headers={"ETag": etag})
+    with _manifest_lock:
+        manifest = _read_manifest(storage)
+        bundle_hash = manifest.get("bundle_hash", "")
+        
+        if bundle_hash:
+            etag = f'"{bundle_hash}"'
+            if request.headers.get("if-none-match") == etag:
+                return Response(status_code=304, headers={"ETag": etag})
 
-    # Build the bundle by merging all active policies
-    all_rules = []
-    policies_meta = manifest.get("policies", {})
-    
-    for pid, meta in policies_meta.items():
-        if meta.get("status") == "active":
+        # Build the bundle by merging all active policies
+        all_rules = []
+        policies_meta = manifest.get("policies", {})
+        
+        # Sort active policies by ID for deterministic rules order and ETag
+        sorted_pids = sorted([pid for pid, meta in policies_meta.items() if meta.get("status") == "active"])
+        
+        for pid in sorted_pids:
+            meta = policies_meta[pid]
             active_ver = meta.get("active_version", 1)
             try:
                 blob = storage.get(f"policies/{pid}/v{active_ver}.yaml")
                 doc = yaml.safe_load(blob.data.decode("utf-8"))
                 all_rules.extend(doc.get("rules", []))
-            except Exception as e:
-                logger.error(f"Failed to load active policy {pid} v{active_ver}: {e}")
+            except BlobNotFoundError:
+                logger.error(f"Missing blob for active policy {pid} v{active_ver}")
+            except yaml.YAMLError as e:
+                logger.error(f"Failed to parse active policy {pid} v{active_ver}: {e}")
+            except Exception:
+                logger.exception(f"Unexpected error loading active policy {pid} v{active_ver}")
 
-    bundle_doc = {
-        "id": "bundle_active",
-        "version": 1,
-        "status": "active",
-        "rules": all_rules,
-        "updated_at": datetime.now(timezone.utc).isoformat()
-    }
-    
-    yaml_content = yaml.dump(bundle_doc, sort_keys=False)
-    
-    # Update hash if needed
-    current_hash = _compute_yaml_hash(yaml_content)
-    if current_hash != bundle_hash:
-        manifest["bundle_hash"] = current_hash
-        _write_manifest(storage, manifest)
+        bundle_doc = {
+            "id": "bundle_active",
+            "version": 1,
+            "status": "active",
+            "rules": all_rules,
+            # Omitting updated_at to maintain ETag stability
+        }
+        
+        yaml_content = yaml.safe_dump(bundle_doc, sort_keys=False)
+        
+        # Update hash if needed
+        current_hash = _compute_yaml_hash(yaml_content)
+        if current_hash != bundle_hash:
+            manifest["bundle_hash"] = current_hash
+            _write_manifest(storage, manifest)
 
     headers = {"ETag": f'"{current_hash}"'}
     return Response(content=yaml_content, media_type="application/x-yaml", headers=headers)
@@ -140,7 +159,8 @@ def get_bundle(request: Request, storage: StorageBackend = Depends(get_storage))
 
 @router.get("/{policy_id}")
 def get_active_policy(policy_id: str, storage: StorageBackend = Depends(get_storage)) -> dict:
-    manifest = _read_manifest(storage)
+    with _manifest_lock:
+        manifest = _read_manifest(storage)
     meta = manifest.get("policies", {}).get(policy_id)
     if not meta:
         raise HTTPException(status_code=404, detail="Policy not found")
@@ -152,8 +172,13 @@ def get_active_policy(policy_id: str, storage: StorageBackend = Depends(get_stor
     try:
         blob = storage.get(f"policies/{policy_id}/v{active_ver}.yaml")
         return yaml.safe_load(blob.data.decode("utf-8"))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid policy ID") from None
+    except BlobNotFoundError:
+        raise HTTPException(status_code=404, detail="Policy version not found") from None
     except Exception:
-        raise HTTPException(status_code=404, detail="Policy version not found")
+        logger.exception(f"Unexpected error reading active policy {policy_id}")
+        raise HTTPException(status_code=500, detail="Internal server error") from None
 
 
 @router.get("/{policy_id}/v{version}")
@@ -161,130 +186,157 @@ def get_policy_version(policy_id: str, version: int, storage: StorageBackend = D
     try:
         blob = storage.get(f"policies/{policy_id}/v{version}.yaml")
         return yaml.safe_load(blob.data.decode("utf-8"))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid policy ID") from None
+    except BlobNotFoundError:
+        raise HTTPException(status_code=404, detail="Policy version not found") from None
     except Exception:
-        raise HTTPException(status_code=404, detail="Policy version not found")
+        logger.exception(f"Unexpected error reading policy {policy_id} v{version}")
+        raise HTTPException(status_code=500, detail="Internal server error") from None
 
 
-@router.post("")
+@router.post("", status_code=201)
 def create_policy(policy_in: PolicyCreate, storage: StorageBackend = Depends(get_storage)) -> dict:
-    manifest = _read_manifest(storage)
-    if policy_in.id in manifest.get("policies", {}):
-        raise HTTPException(status_code=400, detail="Policy already exists")
+    with _manifest_lock:
+        manifest = _read_manifest(storage)
+        if policy_in.id in manifest.get("policies", {}):
+            raise HTTPException(status_code=400, detail="Policy already exists")
 
-    doc = {
-        "id": policy_in.id,
-        "version": 1,
-        "status": policy_in.status,
-        "rules": [r.model_dump() for r in policy_in.rules],
-        "created_by": policy_in.created_by,
-        "updated_at": datetime.now(timezone.utc).isoformat()
-    }
-    yaml_content = yaml.dump(doc, sort_keys=False)
-    doc["content_hash"] = _compute_yaml_hash(yaml_content)
-    
-    # Re-dump to include content_hash
-    yaml_content = yaml.dump(doc, sort_keys=False)
-
-    storage.put(f"policies/{policy_in.id}/v1.yaml", yaml_content.encode("utf-8"), content_type="application/x-yaml")
-
-    if "policies" not in manifest:
-        manifest["policies"] = {}
+        doc = {
+            "id": policy_in.id,
+            "version": 1,
+            "status": policy_in.status,
+            "rules": [r.model_dump() for r in policy_in.rules],
+            "created_by": policy_in.created_by,
+            "updated_at": datetime.now(timezone.utc).isoformat()
+        }
+        yaml_content = yaml.safe_dump(doc, sort_keys=False)
+        doc["content_hash"] = _compute_yaml_hash(yaml_content)
         
-    manifest["policies"][policy_in.id] = {
-        "latest_version": 1,
-        "active_version": 1 if policy_in.status == "active" else None,
-        "status": policy_in.status
-    }
-    
-    # Invalidate bundle hash
-    manifest["bundle_hash"] = ""
-    _write_manifest(storage, manifest)
+        # Re-dump to include content_hash
+        yaml_content = yaml.safe_dump(doc, sort_keys=False)
+
+        try:
+            storage.put(f"policies/{policy_in.id}/v1.yaml", yaml_content.encode("utf-8"), content_type="application/x-yaml")
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid policy ID") from None
+
+        if "policies" not in manifest:
+            manifest["policies"] = {}
+            
+        manifest["policies"][policy_in.id] = {
+            "latest_version": 1,
+            "active_version": 1 if policy_in.status == "active" else None,
+            "status": policy_in.status
+        }
+        
+        # Invalidate bundle hash
+        manifest["bundle_hash"] = ""
+        _write_manifest(storage, manifest)
 
     return doc
 
 
 @router.put("/{policy_id}")
 def update_policy(policy_id: str, policy_in: PolicyUpdate, storage: StorageBackend = Depends(get_storage)) -> dict:
-    manifest = _read_manifest(storage)
-    meta = manifest.get("policies", {}).get(policy_id)
-    if not meta:
-        raise HTTPException(status_code=404, detail="Policy not found")
+    with _manifest_lock:
+        manifest = _read_manifest(storage)
+        meta = manifest.get("policies", {}).get(policy_id)
+        if not meta:
+            raise HTTPException(status_code=404, detail="Policy not found")
 
-    new_version = meta["latest_version"] + 1
+        new_version = meta["latest_version"] + 1
 
-    doc = {
-        "id": policy_id,
-        "version": new_version,
-        "status": policy_in.status,
-        "rules": [r.model_dump() for r in policy_in.rules],
-        "created_by": policy_in.created_by,
-        "updated_at": datetime.now(timezone.utc).isoformat()
-    }
-    yaml_content = yaml.dump(doc, sort_keys=False)
-    doc["content_hash"] = _compute_yaml_hash(yaml_content)
-    
-    yaml_content = yaml.dump(doc, sort_keys=False)
+        doc = {
+            "id": policy_id,
+            "version": new_version,
+            "status": policy_in.status,
+            "rules": [r.model_dump() for r in policy_in.rules],
+            "created_by": policy_in.created_by,
+            "updated_at": datetime.now(timezone.utc).isoformat()
+        }
+        yaml_content = yaml.safe_dump(doc, sort_keys=False)
+        doc["content_hash"] = _compute_yaml_hash(yaml_content)
+        
+        yaml_content = yaml.safe_dump(doc, sort_keys=False)
 
-    storage.put(f"policies/{policy_id}/v{new_version}.yaml", yaml_content.encode("utf-8"), content_type="application/x-yaml")
+        try:
+            storage.put(f"policies/{policy_id}/v{new_version}.yaml", yaml_content.encode("utf-8"), content_type="application/x-yaml")
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid policy ID") from None
 
-    meta["latest_version"] = new_version
-    meta["status"] = policy_in.status
-    if policy_in.status == "active":
-        meta["active_version"] = new_version
-    else:
-        meta["active_version"] = None
+        meta["latest_version"] = new_version
+        meta["status"] = policy_in.status
+        if policy_in.status == "active":
+            meta["active_version"] = new_version
+        else:
+            meta["active_version"] = None
 
-    # Invalidate bundle hash
-    manifest["bundle_hash"] = ""
-    _write_manifest(storage, manifest)
+        # Invalidate bundle hash
+        manifest["bundle_hash"] = ""
+        _write_manifest(storage, manifest)
 
     return doc
 
 
 @router.delete("/{policy_id}")
 def archive_policy(policy_id: str, storage: StorageBackend = Depends(get_storage)) -> dict:
-    manifest = _read_manifest(storage)
-    meta = manifest.get("policies", {}).get(policy_id)
-    if not meta:
-        raise HTTPException(status_code=404, detail="Policy not found")
+    with _manifest_lock:
+        manifest = _read_manifest(storage)
+        meta = manifest.get("policies", {}).get(policy_id)
+        if not meta:
+            raise HTTPException(status_code=404, detail="Policy not found")
 
-    if meta["status"] == "archived":
+        if meta["status"] == "archived":
+            try:
+                blob = storage.get(f"policies/{policy_id}/v{meta['latest_version']}.yaml")
+                return yaml.safe_load(blob.data.decode("utf-8"))
+            except ValueError:
+                raise HTTPException(status_code=400, detail="Invalid policy ID") from None
+            except BlobNotFoundError:
+                raise HTTPException(status_code=404, detail="Policy version not found") from None
+            except Exception:
+                logger.exception("Failed to read latest policy version during archive")
+                raise HTTPException(status_code=500, detail="Failed to read latest policy version") from None
+
+        new_version = meta["latest_version"] + 1
+        
+        # Read the latest to copy rules
         try:
             blob = storage.get(f"policies/{policy_id}/v{meta['latest_version']}.yaml")
-            return yaml.safe_load(blob.data.decode("utf-8"))
+            last_doc = yaml.safe_load(blob.data.decode("utf-8"))
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid policy ID") from None
+        except BlobNotFoundError:
+            raise HTTPException(status_code=404, detail="Policy version not found") from None
         except Exception:
+            logger.exception("Failed to read latest policy version during archive")
             raise HTTPException(status_code=500, detail="Failed to read latest policy version") from None
 
-    new_version = meta["latest_version"] + 1
-    
-    # Read the latest to copy rules
-    try:
-        blob = storage.get(f"policies/{policy_id}/v{meta['latest_version']}.yaml")
-        last_doc = yaml.safe_load(blob.data.decode("utf-8"))
-    except Exception:
-        raise HTTPException(status_code=500, detail="Failed to read latest policy version") from None
+        doc = {
+            "id": policy_id,
+            "version": new_version,
+            "status": "archived",
+            "rules": last_doc.get("rules", []),
+            "created_by": last_doc.get("created_by"),
+            "updated_at": datetime.now(timezone.utc).isoformat()
+        }
+        
+        yaml_content = yaml.safe_dump(doc, sort_keys=False)
+        doc["content_hash"] = _compute_yaml_hash(yaml_content)
+        yaml_content = yaml.safe_dump(doc, sort_keys=False)
 
-    doc = {
-        "id": policy_id,
-        "version": new_version,
-        "status": "archived",
-        "rules": last_doc.get("rules", []),
-        "created_by": last_doc.get("created_by"),
-        "updated_at": datetime.now(timezone.utc).isoformat()
-    }
-    
-    yaml_content = yaml.dump(doc, sort_keys=False)
-    doc["content_hash"] = _compute_yaml_hash(yaml_content)
-    yaml_content = yaml.dump(doc, sort_keys=False)
+        try:
+            storage.put(f"policies/{policy_id}/v{new_version}.yaml", yaml_content.encode("utf-8"), content_type="application/x-yaml")
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid policy ID") from None
 
-    storage.put(f"policies/{policy_id}/v{new_version}.yaml", yaml_content.encode("utf-8"), content_type="application/x-yaml")
-
-    meta["latest_version"] = new_version
-    meta["status"] = "archived"
-    meta["active_version"] = None
-    
-    # Invalidate bundle hash
-    manifest["bundle_hash"] = ""
-    _write_manifest(storage, manifest)
+        meta["latest_version"] = new_version
+        meta["status"] = "archived"
+        meta["active_version"] = None
+        
+        # Invalidate bundle hash
+        manifest["bundle_hash"] = ""
+        _write_manifest(storage, manifest)
 
     return doc
