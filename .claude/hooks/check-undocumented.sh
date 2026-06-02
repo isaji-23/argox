@@ -38,11 +38,11 @@ $(git diff --name-only --staged 2>/dev/null || true)
 $(git ls-files --others --exclude-standard 2>/dev/null || true)"
 
 # Source changed under any argox-* package src tree?
-src_changed="$(printf '%s\n' "$changed" | grep -E 'argox-[^/]+/src/.*\.py$' || true)"
+src_changed="$(printf '%s\n' "$changed" | grep -E 'argox-project/argox-[^/]+/src/.*\.py$' || true)"
 [ -z "$src_changed" ] && exit 0
 
 # Devlog already touched this round?
-devlog_touched="$(printf '%s\n' "$changed" | grep -E 'docs/devlog/.+\.md$' || true)"
+devlog_touched="$(printf '%s\n' "$changed" | grep -E 'argox-project/docs/devlog/.+\.md$' || true)"
 [ -n "$devlog_touched" ] && exit 0
 
 # Source changed, devlog not — nudge exactly once.

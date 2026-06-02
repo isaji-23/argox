@@ -11,23 +11,24 @@ for chronological change history see [`../devlog/_index.md`](../devlog/_index.md
 
 ## 1. Public surface
 
-Three names are exported from `argox/__init__.py` — the entire API a user needs:
+Four names are exported from `argox/__init__.py` — the entire API a user needs:
 
 | Symbol | Type | Purpose |
 |---|---|---|
 | `argox.monitor` | Decorator | Main entry point. Wraps the function that runs the agent. |
 | `argox.ArgoxManager` | Class | Orchestrator the decorator uses underneath. Available for manual wiring. |
 | `argox.init_telemetry` | Function | Configures the OpenTelemetry `TracerProvider` in one line. |
+| `argox.init_metrics` | Function | Configures the OpenTelemetry `MeterProvider` in one line. |
 
 Minimal integration:
 
 ```python
 import argox
 from argox.core import init_telemetry
-from argox.exporters import ConsoleSpanExporter
+from argox.observability import ConsoleSpanLogger
 from argox_openai import ArgoxOpenAIPlugin
 
-init_telemetry(exporters=[ConsoleSpanExporter()])
+init_telemetry(exporters=[ConsoleSpanLogger()])
 
 agent = Agent(name="weather-assistant", tools=[get_weather, ...], ...)
 

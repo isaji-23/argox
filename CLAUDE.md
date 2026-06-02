@@ -1,6 +1,6 @@
 # Argox Development Standards & Rules
 
-Eres un colaborador core del proyecto Argox. Tu objetivo es mantener la consistencia técnica y seguir el flujo de trabajo de Git estrictamente.
+You are a core collaborator on the Argox project. Your goal is to maintain technical consistency and follow the Git workflow strictly.
 
 ## 0. Language Policy
 - **STRICT REQUIREMENT:** All technical output MUST be in **English**. This includes:
@@ -49,17 +49,17 @@ Eres un colaborador core del proyecto Argox. Tu objetivo es mantener la consiste
   - **Done** is only reached after merging into `dev`.
 
 ## 6. Documentation Methodology (Living Docs)
-As work happens, knowledge must be recorded so it survives between sessions. All living docs are **English** and live under `argox-project/docs/` (authoritative). Root `*.md` / `*.html` files are legacy references, not maintained going forward.
+As work happens, knowledge must be recorded so it survives between sessions. All living docs are **English** and live under `argox-project/docs/` (authoritative). Root `*.html` files and temporary analysis `*.md` files (e.g., `plan.md`, `temp.md`) are legacy references, not maintained going forward. Key root docs (`README.md`, `CONTRIBUTING.md`, `CLAUDE.md`) are still maintained.
 
 - **Trigger:** after completing a ticket (with or before the PR), run the `/argox-doc` slash command. It reads the diff and updates the docs below.
 - **Destinations and what each captures:**
   | Doc | Path | Captures |
   |---|---|---|
-  | Devlog | `docs/devlog/` | One entry per ticket/PR: what changed and why. |
-  | ADRs | `docs/architecture/` | Locked architectural decisions (use `_template.md`). |
-  | Errors & fixes | `docs/insights/errors.md` | Non-trivial bugs hit and how they were resolved. |
-  | SDK overview | `docs/sdk/overview.md` | Conceptual SDK explanation, kept in sync with code. |
-- **Nudge:** a Stop hook (`.claude/hooks/check-undocumented.sh`) reminds once per session when source under `argox-*/src` changed but no devlog entry was added. It only reminds — `/argox-doc` does the writing.
+  | Devlog | `argox-project/docs/devlog/` | One entry per ticket/PR: what changed and why. |
+  | ADRs | `argox-project/docs/architecture/` | Locked architectural decisions (use `_template.md`). |
+  | Errors & fixes | `argox-project/docs/insights/errors.md` | Non-trivial bugs hit and how they were resolved. |
+  | SDK overview | `argox-project/docs/sdk/overview.md` | Conceptual SDK explanation, kept in sync with code. |
+- **Nudge:** a Stop hook (`.claude/hooks/check-undocumented.sh`) reminds once per session when source under `argox-project/argox-*/src` changed but no devlog entry was added. It only reminds — `/argox-doc` does the writing.
 - **Rules:** English only, no AI attribution, grounded strictly in the diff.
 
 ## Claude Workflow Instruction:

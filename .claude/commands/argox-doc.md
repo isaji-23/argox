@@ -14,7 +14,7 @@ this ticket/PR so knowledge is not lost between sessions. Optional argument:
 - **English only.** No AI attribution anywhere.
 - One devlog entry per ticket/PR.
 - Be concrete and concise — match the tone of existing docs
-  (`docs/architecture/plugin-interface-evolution.md`, `docs/sdk/overview.md`).
+  (`argox-project/docs/architecture/plugin-interface-evolution.md`, `argox-project/docs/sdk/overview.md`).
 - Do not invent changes: everything you write must be grounded in the diff.
 
 ## Steps
@@ -33,7 +33,7 @@ this ticket/PR so knowledge is not lost between sessions. Optional argument:
 4. **ADR (conditional).** If the diff embodies a locked architectural decision
    (new/changed interface or contract, failure-mode semantics, a deliberately
    deferred refactor), create `argox-project/docs/architecture/ADR-NNNN-<slug>.md`
-   from `docs/architecture/_template.md` and add it to that `_index.md`. Pick
+   from `argox-project/docs/architecture/_template.md` and add it to that `_index.md`. Pick
    the next free `NNNN`.
 5. **Errors & fixes (conditional).** If this session hit and fixed a non-trivial
    error, append an entry to `argox-project/docs/insights/errors.md`
