@@ -98,13 +98,13 @@ class StorageBackend(ABC):
                 impose additional limits.
             expected_etag: Optional ETag string to enforce a conditional write.
                 If provided, the write will only succeed if the existing blob's
-                ETag matches this value. If the blob does not exist, the write
-                will fail unless the expected_etag is appropriately formatted
-                (some backends might support explicit 'not exists' constraints,
-                but for exact match, it must match).
+                ETag matches this value. If the special value ``"*"`` is
+                provided, the backend must assert that the blob does not
+                exist (a "create-only" guard).
 
         Raises:
-            ConditionNotMetError: If expected_etag is provided and does not match.
+            ConditionNotMetError: If expected_etag is provided and does not match,
+                or if expected_etag is "*" and the blob already exists.
 
         Returns:
             Metadata describing the persisted blob.

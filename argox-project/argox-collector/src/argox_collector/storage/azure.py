@@ -124,11 +124,12 @@ class AzureBlobStorageBackend(StorageBackend):
         try:
             match_condition = None
             if expected_etag is not None:
-                try:
-                    from azure.core import MatchConditions
+                from azure.core import MatchConditions
+                if expected_etag == "*":
+                    match_condition = MatchConditions.IfNotExists
+                    expected_etag = None
+                else:
                     match_condition = MatchConditions.IfNotModified
-                except ImportError:
-                    pass
 
             result = blob.upload_blob(
                 payload,

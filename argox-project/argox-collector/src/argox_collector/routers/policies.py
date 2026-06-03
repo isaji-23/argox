@@ -61,15 +61,15 @@ def get_storage(request: Request) -> StorageBackend:
     return request.app.state.storage
 
 
-def _read_manifest(storage: StorageBackend) -> tuple[dict, str | None]:
+def _read_manifest(storage: StorageBackend) -> tuple[dict, str]:
     try:
         blob = storage.get("policies/manifest.json")
-        return json.loads(blob.data.decode("utf-8")), blob.metadata.etag
+        return json.loads(blob.data.decode("utf-8")), blob.metadata.etag or "*"
     except BlobNotFoundError:
-        return {"policies": {}}, None
+        return {"policies": {}}, "*"
 
 
-def _write_manifest(storage: StorageBackend, manifest: dict, expected_etag: str | None) -> None:
+def _write_manifest(storage: StorageBackend, manifest: dict, expected_etag: str) -> None:
     data = json.dumps(manifest, indent=2).encode("utf-8")
     storage.put("policies/manifest.json", data, content_type="application/json", expected_etag=expected_etag)
 
@@ -195,6 +195,28 @@ def get_policy_version(policy_id: str, version: int, storage: StorageBackend = D
 
 @router.post("", status_code=201)
 def create_policy(policy_in: PolicyCreate, storage: StorageBackend = Depends(get_storage)) -> dict:
+    for _ in range(5):
+        manifest, etag = _read_manifest(storage)
+        if policy_in.id in manifest.get("policies", {}):
+            raise HTTPException(status_code=400, detail="Policy already exists")
+
+        if "policies" not in manifest:
+            manifest["policies"] = {}
+            
+        manifest["policies"][policy_in.id] = {
+            "latest_version": 1,
+            "active_version": 1 if policy_in.status == "active" else None,
+            "status": policy_in.status
+        }
+        
+        try:
+            _write_manifest(storage, manifest, expected_etag=etag)
+            break
+        except ConditionNotMetError:
+            continue
+    else:
+        raise HTTPException(status_code=409, detail="Concurrent modification error")
+
     doc = {
         "id": policy_in.id,
         "version": 1,
@@ -214,31 +236,12 @@ def create_policy(policy_in: PolicyCreate, storage: StorageBackend = Depends(get
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid policy ID") from None
 
-    for _ in range(5):
-        manifest, etag = _read_manifest(storage)
-        if policy_in.id in manifest.get("policies", {}):
-            raise HTTPException(status_code=400, detail="Policy already exists")
-
-        if "policies" not in manifest:
-            manifest["policies"] = {}
-            
-        manifest["policies"][policy_in.id] = {
-            "latest_version": 1,
-            "active_version": 1 if policy_in.status == "active" else None,
-            "status": policy_in.status
-        }
-        
-        try:
-            _write_manifest(storage, manifest, expected_etag=etag)
-            return doc
-        except ConditionNotMetError:
-            continue
-            
-    raise HTTPException(status_code=409, detail="Concurrent modification error")
+    return doc
 
 
 @router.put("/{policy_id}")
 def update_policy(policy_id: str, policy_in: PolicyUpdate, storage: StorageBackend = Depends(get_storage)) -> dict:
+    new_version = None
     for _ in range(5):
         manifest, etag = _read_manifest(storage)
         meta = manifest.get("policies", {}).get(policy_id)
@@ -246,24 +249,6 @@ def update_policy(policy_id: str, policy_in: PolicyUpdate, storage: StorageBacke
             raise HTTPException(status_code=404, detail="Policy not found")
 
         new_version = meta["latest_version"] + 1
-
-        doc = {
-            "id": policy_id,
-            "version": new_version,
-            "status": policy_in.status,
-            "rules": [r.model_dump() for r in policy_in.rules],
-            "created_by": policy_in.created_by,
-            "updated_at": datetime.now(timezone.utc).isoformat()
-        }
-        yaml_content = yaml.safe_dump(doc, sort_keys=False)
-        doc["content_hash"] = _compute_yaml_hash(yaml_content)
-        
-        yaml_content = yaml.safe_dump(doc, sort_keys=False)
-
-        try:
-            storage.put(f"policies/{policy_id}/v{new_version}.yaml", yaml_content.encode("utf-8"), content_type="application/x-yaml")
-        except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid policy ID") from None
 
         meta["latest_version"] = new_version
         meta["status"] = policy_in.status
@@ -274,15 +259,38 @@ def update_policy(policy_id: str, policy_in: PolicyUpdate, storage: StorageBacke
 
         try:
             _write_manifest(storage, manifest, expected_etag=etag)
-            return doc
+            break
         except ConditionNotMetError:
             continue
-            
-    raise HTTPException(status_code=409, detail="Concurrent modification error")
+    else:
+        raise HTTPException(status_code=409, detail="Concurrent modification error")
+
+    doc = {
+        "id": policy_id,
+        "version": new_version,
+        "status": policy_in.status,
+        "rules": [r.model_dump() for r in policy_in.rules],
+        "created_by": policy_in.created_by,
+        "updated_at": datetime.now(timezone.utc).isoformat()
+    }
+    yaml_content = yaml.safe_dump(doc, sort_keys=False)
+    doc["content_hash"] = _compute_yaml_hash(yaml_content)
+    
+    yaml_content = yaml.safe_dump(doc, sort_keys=False)
+
+    try:
+        storage.put(f"policies/{policy_id}/v{new_version}.yaml", yaml_content.encode("utf-8"), content_type="application/x-yaml")
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid policy ID") from None
+
+    return doc
 
 
 @router.delete("/{policy_id}")
 def archive_policy(policy_id: str, storage: StorageBackend = Depends(get_storage)) -> dict:
+    already_archived = False
+    new_version = None
+
     for _ in range(5):
         manifest, etag = _read_manifest(storage)
         meta = manifest.get("policies", {}).get(policy_id)
@@ -290,57 +298,56 @@ def archive_policy(policy_id: str, storage: StorageBackend = Depends(get_storage
             raise HTTPException(status_code=404, detail="Policy not found")
 
         if meta["status"] == "archived":
-            try:
-                blob = storage.get(f"policies/{policy_id}/v{meta['latest_version']}.yaml")
-                return yaml.safe_load(blob.data.decode("utf-8"))
-            except ValueError:
-                raise HTTPException(status_code=400, detail="Invalid policy ID") from None
-            except BlobNotFoundError:
-                raise HTTPException(status_code=404, detail="Policy version not found") from None
-            except Exception:
-                logger.exception("Failed to read latest policy version during archive")
-                raise HTTPException(status_code=500, detail="Failed to read latest policy version") from None
+            already_archived = True
+            break
 
         new_version = meta["latest_version"] + 1
         
-        # Read the latest to copy rules
-        try:
-            blob = storage.get(f"policies/{policy_id}/v{meta['latest_version']}.yaml")
-            last_doc = yaml.safe_load(blob.data.decode("utf-8"))
-        except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid policy ID") from None
-        except BlobNotFoundError:
-            raise HTTPException(status_code=404, detail="Policy version not found") from None
-        except Exception:
-            logger.exception("Failed to read latest policy version during archive")
-            raise HTTPException(status_code=500, detail="Failed to read latest policy version") from None
-
-        doc = {
-            "id": policy_id,
-            "version": new_version,
-            "status": "archived",
-            "rules": last_doc.get("rules", []),
-            "created_by": last_doc.get("created_by"),
-            "updated_at": datetime.now(timezone.utc).isoformat()
-        }
-        
-        yaml_content = yaml.safe_dump(doc, sort_keys=False)
-        doc["content_hash"] = _compute_yaml_hash(yaml_content)
-        yaml_content = yaml.safe_dump(doc, sort_keys=False)
-
-        try:
-            storage.put(f"policies/{policy_id}/v{new_version}.yaml", yaml_content.encode("utf-8"), content_type="application/x-yaml")
-        except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid policy ID") from None
-
         meta["latest_version"] = new_version
         meta["status"] = "archived"
         meta["active_version"] = None
         
         try:
             _write_manifest(storage, manifest, expected_etag=etag)
-            return doc
+            break
         except ConditionNotMetError:
             continue
-            
-    raise HTTPException(status_code=409, detail="Concurrent modification error")
+    else:
+        raise HTTPException(status_code=409, detail="Concurrent modification error")
+
+    if already_archived:
+        try:
+            blob = storage.get(f"policies/{policy_id}/v{meta['latest_version']}.yaml")
+            return yaml.safe_load(blob.data.decode("utf-8"))
+        except BlobNotFoundError:
+            raise HTTPException(status_code=404, detail="Policy version not found") from None
+
+    # Read the previous latest to copy rules
+    try:
+        blob = storage.get(f"policies/{policy_id}/v{new_version - 1}.yaml")
+        last_doc = yaml.safe_load(blob.data.decode("utf-8"))
+    except BlobNotFoundError:
+        raise HTTPException(status_code=404, detail="Policy version not found") from None
+    except Exception:
+        logger.exception("Failed to read previous policy version during archive")
+        raise HTTPException(status_code=500, detail="Failed to read previous policy version") from None
+
+    doc = {
+        "id": policy_id,
+        "version": new_version,
+        "status": "archived",
+        "rules": last_doc.get("rules", []),
+        "created_by": last_doc.get("created_by"),
+        "updated_at": datetime.now(timezone.utc).isoformat()
+    }
+    
+    yaml_content = yaml.safe_dump(doc, sort_keys=False)
+    doc["content_hash"] = _compute_yaml_hash(yaml_content)
+    yaml_content = yaml.safe_dump(doc, sort_keys=False)
+
+    try:
+        storage.put(f"policies/{policy_id}/v{new_version}.yaml", yaml_content.encode("utf-8"), content_type="application/x-yaml")
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid policy ID") from None
+
+    return doc

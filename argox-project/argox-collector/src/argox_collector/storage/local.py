@@ -89,15 +89,20 @@ class LocalStorageBackend(StorageBackend):
 
         with self._lock:
             if expected_etag is not None:
-                try:
-                    current_payload = target.read_bytes()
-                    current_etag = _etag_for(current_payload)
-                except FileNotFoundError:
-                    current_etag = None
-                
-                if current_etag != expected_etag:
-                    from argox_collector.storage.base import ConditionNotMetError
-                    raise ConditionNotMetError(key)
+                if expected_etag == "*":
+                    if target.exists():
+                        from argox_collector.storage.base import ConditionNotMetError
+                        raise ConditionNotMetError(key)
+                else:
+                    try:
+                        current_payload = target.read_bytes()
+                        current_etag = _etag_for(current_payload)
+                    except FileNotFoundError:
+                        current_etag = None
+                    
+                    if current_etag != expected_etag:
+                        from argox_collector.storage.base import ConditionNotMetError
+                        raise ConditionNotMetError(key)
 
             self._atomic_write(target, payload)
             self._atomic_write(meta_path, meta_bytes)
