@@ -113,6 +113,7 @@ class AzureBlobStorageBackend(StorageBackend):
         *,
         content_type: Optional[str] = None,
         metadata: Optional[Mapping[str, str]] = None,
+        expected_etag: Optional[str] = None,
     ) -> BlobMetadata:
         normalize_key(key)
         clean_metadata = validate_metadata(metadata)
@@ -121,13 +122,26 @@ class AzureBlobStorageBackend(StorageBackend):
         blob = self._container.get_blob_client(key)
         content_settings = _build_content_settings(content_type)
         try:
+            match_condition = None
+            if expected_etag is not None:
+                try:
+                    from azure.core import MatchConditions
+                    match_condition = MatchConditions.IfNotModified
+                except ImportError:
+                    pass
+
             result = blob.upload_blob(
                 payload,
                 overwrite=True,
                 content_settings=content_settings,
                 metadata=clean_metadata,
+                match_condition=match_condition,
+                etag=expected_etag,
             )
         except Exception as exc:
+            from argox_collector.storage.base import ConditionNotMetError
+            if _is_condition_failed(exc):
+                raise ConditionNotMetError(key) from exc
             raise StorageError(f"failed to upload {key!r}: {exc}") from exc
 
         etag = _strip_quotes(_attr(result, "etag", None))
@@ -268,3 +282,11 @@ def _is_already_exists(exc: BaseException) -> bool:
         return True
     status_code = getattr(exc, "status_code", None)
     return status_code == 409
+
+
+def _is_condition_failed(exc: BaseException) -> bool:
+    error_code = getattr(exc, "error_code", None)
+    if error_code == "ConditionNotMet":
+        return True
+    status_code = getattr(exc, "status_code", None)
+    return status_code in {412, 409}

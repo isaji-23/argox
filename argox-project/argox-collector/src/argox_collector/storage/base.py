@@ -24,6 +24,14 @@ class BlobNotFoundError(StorageError):
         self.key = key
 
 
+class ConditionNotMetError(StorageError):
+    """Raised when a conditional write fails due to an ETag mismatch."""
+
+    def __init__(self, key: str) -> None:
+        super().__init__(f"condition not met for blob: {key!r}")
+        self.key = key
+
+
 @dataclass(frozen=True)
 class BlobMetadata:
     """Lightweight descriptor returned by ``put``/``list``.
@@ -72,6 +80,7 @@ class StorageBackend(ABC):
         *,
         content_type: Optional[str] = None,
         metadata: Optional[Mapping[str, str]] = None,
+        expected_etag: Optional[str] = None,
     ) -> BlobMetadata:
         """Write ``data`` to ``key`` and return its metadata.
 
@@ -87,6 +96,15 @@ class StorageBackend(ABC):
             metadata: Optional user metadata. Keys and values must be ASCII
                 strings; non-ASCII input raises ``ValueError``. Backends may
                 impose additional limits.
+            expected_etag: Optional ETag string to enforce a conditional write.
+                If provided, the write will only succeed if the existing blob's
+                ETag matches this value. If the blob does not exist, the write
+                will fail unless the expected_etag is appropriately formatted
+                (some backends might support explicit 'not exists' constraints,
+                but for exact match, it must match).
+
+        Raises:
+            ConditionNotMetError: If expected_etag is provided and does not match.
 
         Returns:
             Metadata describing the persisted blob.
