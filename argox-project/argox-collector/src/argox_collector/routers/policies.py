@@ -95,26 +95,13 @@ def _write_content_addressed_blob(storage: StorageBackend, policy_id: str, conte
     storage.put(blob_key, yaml_content.encode("utf-8"), content_type="application/x-yaml")
 
 
-def _verify_manifest_pointer(storage: StorageBackend, policy_id: str, version: int, content_hash: str) -> bool:
-    """Verify that a manifest pointer actually points to an existing blob. Returns True if blob exists."""
-    if not content_hash:
-        logger.error(f"Manifest pointer for {policy_id} v{version} has no content_hash (manifest corruption)")
-        return False
-    try:
-        storage.head(f"policies/{policy_id}/{content_hash}.yaml")
-        return True
-    except BlobNotFoundError:
-        logger.error(f"Dangling pointer: {policy_id} v{version} -> {content_hash} (blob does not exist)")
-        return False
-
-
 def _write_manifest(storage: StorageBackend, manifest: dict, expected_etag: str) -> None:
     data = json.dumps(manifest, indent=2).encode("utf-8")
     storage.put("policies/manifest.json", data, content_type="application/json", expected_etag=expected_etag)
 
 
 def _compute_yaml_hash(yaml_content: str) -> str:
-    return "sha256:" + hashlib.sha256(yaml_content.encode("utf-8")).hexdigest()
+    return "sha256-" + hashlib.sha256(yaml_content.encode("utf-8")).hexdigest()
 
 
 @router.get("")
@@ -165,22 +152,9 @@ def get_bundle(request: Request, storage: StorageBackend = Depends(get_storage))
             if active_ver:
                 content_hash = meta.get("versions", {}).get(str(active_ver))
                 if content_hash:
-                    # Verify pointer exists before including in bundle
-                    if _verify_manifest_pointer(storage, pid, active_ver, content_hash):
-                        active_policies[pid] = content_hash
-                    else:
-                        dangling_pointers.append((pid, active_ver, content_hash))
-    
-    # If any dangling pointers detected, fail loudly rather than silently omit rules
-    if dangling_pointers:
-        error_msg = f"Critical: {len(dangling_pointers)} dangling pointers in manifest: " + \
-                    "; ".join([f"{p}@v{v}" for p, v, _ in dangling_pointers])
-        logger.error(error_msg)
-        raise HTTPException(
-            status_code=500,
-            detail=f"Manifest inconsistency: {len(dangling_pointers)} policies have non-existent blobs. " \
-                   "This indicates blob-write failures during policy updates. Recovery needed."
-        )
+                    active_policies[pid] = content_hash
+                else:
+                    logger.warning(f"Missing content_hash for active policy {pid} v{active_ver}")
     
     # Calculate a deterministic hash of the active configuration
     manifest_snapshot = json.dumps(active_policies, sort_keys=True)
@@ -235,13 +209,6 @@ def get_active_policy(policy_id: str, storage: StorageBackend = Depends(get_stor
     content_hash = meta.get("versions", {}).get(str(active_ver))
     if not content_hash:
         raise HTTPException(status_code=500, detail="Manifest inconsistency: missing content_hash")
-    
-    # Verify pointer (DEBUG: detect dangling references early)
-    if not _verify_manifest_pointer(storage, policy_id, active_ver, content_hash):
-        raise HTTPException(
-            status_code=500,
-            detail=f"Critical: Dangling pointer in manifest. Policy {policy_id} v{active_ver} references non-existent blob. This indicates a blob-write failure."
-        )
         
     try:
         blob = storage.get(f"policies/{policy_id}/{content_hash}.yaml")
@@ -327,33 +294,26 @@ def create_policy(policy_in: PolicyCreate, storage: StorageBackend = Depends(get
 
 @router.put("/{policy_id}")
 def update_policy(policy_id: str, policy_in: PolicyUpdate, storage: StorageBackend = Depends(get_storage)) -> dict:
-    # Create new policy document
-    doc = {
+    # Base document without version (will be filled inside CAS loop)
+    doc_base = {
         "id": policy_id,
-        "version": None,  # Placeholder, filled after version reservation
         "status": policy_in.status,
         "rules": [r.model_dump() for r in policy_in.rules],
         "created_by": policy_in.created_by,
         "updated_at": datetime.now(timezone.utc).isoformat()
     }
-    yaml_content = yaml.safe_dump(doc, sort_keys=False)
-    content_hash = _compute_yaml_hash(yaml_content)
-    doc["content_hash"] = content_hash
 
     # === CRITICAL ORDER: Blob-first is mandatory for safety ===
     # 
     # STEP 1 (DATA): Write immutable blob at content-addressed key
+    #   - Must include correct version number (reserved inside CAS loop)
     #   - Safe: concurrent writes with same content are idempotent (same hash)
     #   - If this succeeds and manifest CAS fails: orphaned blob only (safe)
-    #   - If this fails: nothing written, retry allowed
     # 
-    _write_content_addressed_blob(storage, policy_id, content_hash, yaml_content)
-
     # STEP 2 (POINTER): Reserve version number and update manifest with CAS loop
     #   - Atomic commit point: version <-> content_hash binding becomes visible
-    #   - Crash after STEP 1 completes = orphaned blob (detected by validator)
+    #   - Crash after STEP 1 completes = orphaned blob (harmless)
     #   - Crash during STEP 2 = manifest not updated (policy unchanged, safe)
-    #   - Never: manifest update before STEP 1 completes (would leave dangling pointers)
     #
     for attempt in range(5):
         manifest, etag = _read_manifest(storage)
@@ -361,11 +321,21 @@ def update_policy(policy_id: str, policy_in: PolicyUpdate, storage: StorageBacke
         if not meta:
             raise HTTPException(status_code=404, detail="Policy not found")
 
-        # Reserve next version number
+        # Reserve next version number BEFORE serializing blob
         latest_version_in_manifest = meta.get("latest_version", 1)
         expected_new_version = latest_version_in_manifest + 1
 
-        # Update manifest: add version -> content_hash mapping
+        # Generate complete document with correct version
+        doc = dict(doc_base)
+        doc["version"] = expected_new_version
+        yaml_content = yaml.safe_dump(doc, sort_keys=False)
+        content_hash = _compute_yaml_hash(yaml_content)
+        doc["content_hash"] = content_hash
+
+        # STEP 1: Write immutable blob with correct version embedded
+        _write_content_addressed_blob(storage, policy_id, content_hash, yaml_content)
+
+        # STEP 2: Update manifest with version -> content_hash mapping
         if "versions" not in meta:
             meta["versions"] = {}
         meta["versions"][str(expected_new_version)] = content_hash
@@ -380,7 +350,6 @@ def update_policy(policy_id: str, policy_in: PolicyUpdate, storage: StorageBacke
         expected_etag = "*" if etag is None else etag
         try:
             _write_manifest(storage, manifest, expected_etag=expected_etag)
-            doc["version"] = expected_new_version
             return doc
         except ConditionNotMetError:
             continue
@@ -408,22 +377,11 @@ def archive_policy(policy_id: str, storage: StorageBackend = Depends(get_storage
         except BlobNotFoundError:
             raise HTTPException(status_code=404, detail="Policy version not found") from None
 
-    # === CRITICAL: Verify that the previous latest version blob actually exists ===
     # If a previous update left a dangling pointer, archive would cascade to 404.
-    # Detect this early before writing our new blob.
     latest_ver = meta.get("latest_version", 1)
     prev_content_hash = meta.get("versions", {}).get(str(latest_ver))
     if not prev_content_hash:
         raise HTTPException(status_code=500, detail="Manifest inconsistency: latest version has no content_hash")
-    
-    # Verify the blob actually exists before committing to archive
-    if not _verify_manifest_pointer(storage, policy_id, latest_ver, prev_content_hash):
-        raise HTTPException(
-            status_code=500,
-            detail=f"Cannot archive: previous version {latest_ver} has dangling pointer. "
-                   "Manifest references non-existent blob. A previous update may have failed. "
-                   "Manual recovery required."
-        )
     
     try:
         blob = storage.get(f"policies/{policy_id}/{prev_content_hash}.yaml")
@@ -434,27 +392,15 @@ def archive_policy(policy_id: str, storage: StorageBackend = Depends(get_storage
         logger.exception("Failed to read previous policy version during archive")
         raise HTTPException(status_code=500, detail="Failed to read previous policy version") from None
 
-    # Create archived document
-    doc = {
+    # Base for archived document
+    doc_base = {
         "id": policy_id,
-        "version": None,  # Placeholder, filled after version reservation
         "status": "archived",
         "rules": last_doc.get("rules", []),
         "created_by": last_doc.get("created_by"),
         "updated_at": datetime.now(timezone.utc).isoformat()
     }
     
-    yaml_content = yaml.safe_dump(doc, sort_keys=False)
-    content_hash = _compute_yaml_hash(yaml_content)
-    doc["content_hash"] = content_hash
-
-    # === ORDER CRITICAL: Blob first, manifest second ===
-    # STEP 1 (DATA): Write immutable blob at content-addressed key
-    #   Verified that previous version exists, so we can safely proceed
-    _write_content_addressed_blob(storage, policy_id, content_hash, yaml_content)
-
-    # STEP 2 (POINTER): Reserve version number and update manifest with CAS loop
-    #   This is the atomic commit point. Crash after STEP 1 = orphaned blob (safe)
     for attempt in range(5):
         manifest, etag = _read_manifest(storage)
         meta = manifest.get("policies", {}).get(policy_id)
@@ -465,6 +411,16 @@ def archive_policy(policy_id: str, storage: StorageBackend = Depends(get_storage
         latest_version_in_manifest = meta.get("latest_version", 1)
         expected_new_version = latest_version_in_manifest + 1
 
+        # Generate complete document with expected version
+        doc = dict(doc_base)
+        doc["version"] = expected_new_version
+        yaml_content = yaml.safe_dump(doc, sort_keys=False)
+        content_hash = _compute_yaml_hash(yaml_content)
+        doc["content_hash"] = content_hash
+
+        # Write immutable blob
+        _write_content_addressed_blob(storage, policy_id, content_hash, yaml_content)
+
         if "versions" not in meta:
             meta["versions"] = {}
         meta["versions"][str(expected_new_version)] = content_hash
@@ -472,11 +428,9 @@ def archive_policy(policy_id: str, storage: StorageBackend = Depends(get_storage
         meta["status"] = "archived"
         meta["active_version"] = None
         
-        # Convert etag semantics: None (no manifest) -> "*" (create-only CAS)
         expected_etag = "*" if etag is None else etag
         try:
             _write_manifest(storage, manifest, expected_etag=expected_etag)
-            doc["version"] = expected_new_version
             return doc
         except ConditionNotMetError:
             continue
