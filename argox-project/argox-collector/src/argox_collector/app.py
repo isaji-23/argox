@@ -10,7 +10,7 @@ from fastapi import FastAPI
 from argox_collector import __version__
 from argox_collector.index import TraceIndex, build_index
 from argox_collector.logging import configure_logging
-from argox_collector.routers import health
+from argox_collector.routers import health, query
 from argox_collector.settings import CollectorSettings
 from argox_collector.storage import StorageBackend, build_storage
 
@@ -61,4 +61,5 @@ def create_app(
     app.state.storage = storage if storage is not None else build_storage(settings)
     app.state.index = index if index is not None else build_index(settings)
     app.include_router(health.router)
+    app.include_router(query.router)
     return app

@@ -54,5 +54,25 @@ class TraceIndex(ABC):
         """Batch add multiple span records to the index."""
 
     @abstractmethod
+    def list_traces(self, skip: int = 0, limit: int = 50) -> list[dict]:
+        """List a summary of traces, sorted by newest first."""
+
+    @abstractmethod
+    def get_trace(self, trace_id: str) -> list[SpanRecord]:
+        """Get all spans belonging to a specific trace_id."""
+
+    @abstractmethod
+    def get_metrics_cost(self, window_hours: int = 24) -> dict:
+        """Calculate aggregated cost metric over a time window."""
+
+    @abstractmethod
+    def get_metrics_latency(self, window_hours: int = 24) -> dict:
+        """Calculate aggregated latency metric over a time window."""
+
+    @abstractmethod
+    def get_metrics_success(self, window_hours: int = 24) -> dict:
+        """Calculate aggregated success rate metric over a time window."""
+
+    @abstractmethod
     def health_check(self) -> None:
         """Verify the index is reachable and healthy."""

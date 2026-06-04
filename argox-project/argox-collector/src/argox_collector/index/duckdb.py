@@ -115,6 +115,131 @@ class DuckDBTraceIndex(TraceIndex):
                     attributes = COALESCE(excluded.attributes, spans.attributes)
             """, data)
 
+    def list_traces(self, skip: int = 0, limit: int = 50) -> list[dict]:
+        with self._lock:
+            # Aggregate trace summary: root span info, trace total cost, duration
+            query = """
+                SELECT 
+                    trace_id,
+                    MIN(start_time) as start_time,
+                    MAX(end_time) as end_time,
+                    SUM(duration_ms) as total_duration_ms,
+                    SUM(run_cost) as total_cost,
+                    MAX(agent_name) as agent_name,
+                    MAX(agent_version) as agent_version,
+                    COUNT(span_id) as span_count
+                FROM spans
+                GROUP BY trace_id
+                ORDER BY start_time DESC
+                LIMIT ? OFFSET ?
+            """
+            result = self._conn.execute(query, (limit, skip)).fetchall()
+            
+        traces = []
+        for row in result:
+            traces.append({
+                "trace_id": row[0],
+                "start_time": row[1].isoformat() + "Z" if row[1] else None,
+                "end_time": row[2].isoformat() + "Z" if row[2] else None,
+                "total_duration_ms": row[3],
+                "total_cost": row[4],
+                "agent_name": row[5],
+                "agent_version": row[6],
+                "span_count": row[7]
+            })
+        return traces
+
+    def get_trace(self, trace_id: str) -> list[SpanRecord]:
+        with self._lock:
+            query = """
+                SELECT 
+                    trace_id, span_id, parent_span_id, name, 
+                    start_time, end_time, duration_ms,
+                    agent_name, agent_version, policy_decision, 
+                    run_cost, run_success, attributes
+                FROM spans
+                WHERE trace_id = ?
+                ORDER BY start_time ASC
+            """
+            result = self._conn.execute(query, (trace_id,)).fetchall()
+            
+        spans = []
+        for row in result:
+            attr_dict = json.loads(row[12]) if row[12] else {}
+            spans.append(SpanRecord(
+                trace_id=row[0],
+                span_id=row[1],
+                parent_span_id=row[2],
+                name=row[3],
+                start_time=row[4].replace(tzinfo=timezone.utc) if row[4] else None,
+                end_time=row[5].replace(tzinfo=timezone.utc) if row[5] else None,
+                duration_ms=row[6],
+                agent_name=row[7],
+                agent_version=row[8],
+                policy_decision=row[9],
+                run_cost=row[10],
+                run_success=row[11],
+                attributes=attr_dict
+            ))
+        return spans
+
+    def get_metrics_cost(self, window_hours: int = 24) -> dict:
+        with self._lock:
+            query = """
+                SELECT SUM(run_cost) as total_cost, COUNT(DISTINCT trace_id) as trace_count
+                FROM spans
+                WHERE start_time >= CURRENT_TIMESTAMP - INTERVAL 1 HOUR * ?
+            """
+            result = self._conn.execute(query, (window_hours,)).fetchone()
+            
+        return {
+            "window_hours": window_hours,
+            "total_cost": result[0] or 0.0,
+            "trace_count": result[1] or 0
+        }
+
+    def get_metrics_latency(self, window_hours: int = 24) -> dict:
+        with self._lock:
+            # P95 latency approximation using approx_quantile
+            query = """
+                SELECT 
+                    avg(duration_ms) as avg_latency,
+                    approx_quantile(duration_ms, 0.95) as p95_latency
+                FROM spans
+                WHERE start_time >= CURRENT_TIMESTAMP - INTERVAL 1 HOUR * ?
+                  AND parent_span_id IS NULL -- Only consider root spans for trace latency
+            """
+            result = self._conn.execute(query, (window_hours,)).fetchone()
+            
+        return {
+            "window_hours": window_hours,
+            "avg_latency_ms": result[0] or 0.0,
+            "p95_latency_ms": result[1] or 0.0
+        }
+
+    def get_metrics_success(self, window_hours: int = 24) -> dict:
+        with self._lock:
+            query = """
+                SELECT 
+                    COUNT(*) as total_runs,
+                    SUM(CASE WHEN run_success = TRUE THEN 1 ELSE 0 END) as successful_runs
+                FROM spans
+                WHERE start_time >= CURRENT_TIMESTAMP - INTERVAL 1 HOUR * ?
+                  AND parent_span_id IS NULL -- Only root spans determine run success
+            """
+            result = self._conn.execute(query, (window_hours,)).fetchone()
+            
+        total = result[0] or 0
+        successes = result[1] or 0
+        success_rate = (successes / total) if total > 0 else 0.0
+        
+        return {
+            "window_hours": window_hours,
+            "total_runs": total,
+            "successful_runs": successes,
+            "success_rate": success_rate
+        }
+
     def health_check(self) -> None:
         try:
             with self._lock:
