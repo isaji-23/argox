@@ -65,7 +65,8 @@ Thumbs.db
 
 # -----------------------------------------------------------------------------
 # Argox — ficheros generados en runtime
-# -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------# Directorio var/ con archivos de datos (índices, blobs, logs)
+var/
 # Logs de ejecuciones de agentes (JsonlExporter)
 agent_runs.jsonl
 *.jsonl

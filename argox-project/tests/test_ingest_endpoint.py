@@ -79,21 +79,21 @@ class TestIngestTracesEndpoint:
         routes = {route.path for route in client.app.routes}
         assert "/v1/traces" in routes
 
-    def test_post_to_traces_returns_202(
+    def test_post_to_traces_returns_200(
         self, client: TestClient, sample_trace_payload: dict
     ) -> None:
-        """Fire-and-forget mode: POST /v1/traces returns 202 Accepted immediately."""
+        """Fire-and-forget mode: POST /v1/traces returns 200 OK immediately."""
         response = client.post("/v1/traces", json=sample_trace_payload)
-        assert response.status_code == 202
-        assert response.json() == {"status": "accepted"}
+        assert response.status_code == 200
+        assert response.json() == {}
 
     def test_fire_and_forget_mode_default(
         self, client: TestClient, sample_trace_payload: dict
     ) -> None:
         """Fire-and-forget is the default when x-argox-durable header is omitted."""
         response = client.post("/v1/traces", json=sample_trace_payload)
-        assert response.status_code == 202
-        assert response.json() == {"status": "accepted"}
+        assert response.status_code == 200
+        assert response.json() == {}
 
     def test_fire_and_forget_mode_explicit_false(
         self, client: TestClient, sample_trace_payload: dict
@@ -104,20 +104,20 @@ class TestIngestTracesEndpoint:
             json=sample_trace_payload,
             headers={"x-argox-durable": "false"},
         )
-        assert response.status_code == 202
-        assert response.json() == {"status": "accepted"}
+        assert response.status_code == 200
+        assert response.json() == {}
 
     def test_durable_mode_with_header(
         self, client: TestClient, sample_trace_payload: dict
     ) -> None:
-        """Durable mode: x-argox-durable: true returns 202 after processing."""
+        """Durable mode: x-argox-durable: true returns 200 after processing."""
         response = client.post(
             "/v1/traces",
             json=sample_trace_payload,
             headers={"x-argox-durable": "true"},
         )
-        assert response.status_code == 202
-        assert response.json() == {"status": "accepted_durable"}
+        assert response.status_code == 200
+        assert response.json() == {}
 
     def test_durable_mode_case_insensitive(
         self, client: TestClient, sample_trace_payload: dict
@@ -129,8 +129,8 @@ class TestIngestTracesEndpoint:
                 json=sample_trace_payload,
                 headers={"x-argox-durable": header_value},
             )
-            assert response.status_code == 202
-            assert response.json() == {"status": "accepted_durable"}
+            assert response.status_code == 200
+            assert response.json() == {}
 
     def test_payload_parsing_validates_schema(self, client: TestClient) -> None:
         """Invalid payloads are rejected with 422 Unprocessable Entity."""
@@ -142,8 +142,8 @@ class TestIngestTracesEndpoint:
         """Empty resourceSpans list is accepted (no traces to process)."""
         payload = {"resourceSpans": []}
         response = client.post("/v1/traces", json=payload)
-        assert response.status_code == 202
-        assert response.json() == {"status": "accepted"}
+        assert response.status_code == 200
+        assert response.json() == {}
 
     def test_multiple_resources_in_payload(self, client: TestClient) -> None:
         """Multiple resources in a single request are accepted."""
@@ -188,7 +188,7 @@ class TestIngestTracesEndpoint:
             ]
         }
         response = client.post("/v1/traces", json=payload)
-        assert response.status_code == 202
+        assert response.status_code == 200
 
     def test_persist_to_blob_storage(
         self, settings: CollectorSettings, sample_trace_payload: dict
@@ -202,7 +202,7 @@ class TestIngestTracesEndpoint:
             headers={"x-argox-durable": "true"},
         )
 
-        assert response.status_code == 202
+        assert response.status_code == 200
 
         # Verify blob was written (check storage directory)
         storage_root = settings.storage_local_root
@@ -236,14 +236,9 @@ class TestIngestTracesEndpoint:
                 json=sample_trace_payload,
                 headers={"x-argox-durable": "false"},
             )
-            assert response.status_code == 202
-            # Note: TestClient runs background tasks, so mock would be called.
-            # In production, background tasks run asynchronously.
-
-    def test_durable_mode_calls_process_spans_synchronously(
-        self, client: TestClient, sample_trace_payload: dict
-    ) -> None:
-        """Durable mode blocks on _process_spans before responding."""
+        assert response.status_code == 200
+        # TestClient runs background tasks, so the mock should be called
+        assert mock_process.called
         with patch(
             "argox_collector.routers.ingest._process_spans"
         ) as mock_process:
@@ -252,7 +247,7 @@ class TestIngestTracesEndpoint:
                 json=sample_trace_payload,
                 headers={"x-argox-durable": "true"},
             )
-            assert response.status_code == 202
+            assert response.status_code == 200
             # _process_spans should have been called (TestClient runs synchronously)
             assert mock_process.called
 

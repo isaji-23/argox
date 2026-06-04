@@ -14,7 +14,7 @@ Optional Durable Mode (x-argox-durable: true header):
     durability guarantees.
 
 Fire-and-Forget Mode (default):
-    Returns 202 Accepted immediately. Processing (DuckDB indexing and blob storage)
+    Returns 200 OK immediately. Processing (DuckDB indexing and blob storage)
     happens in background tasks. If a background task fails, the client never knows—
     the response has already been sent. This is the recommended mode for high-throughput
     agent integrations.
@@ -26,7 +26,7 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Header, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, Header
 from pydantic import BaseModel, Field
 
 from argox_collector.dependencies import get_storage
@@ -135,7 +135,7 @@ def _index_in_duckdb(payload: dict) -> None:
     logger.debug("Placeholder: indexing spans into DuckDB (COL-04)")
 
 
-def _persist_to_blob(payload: dict, storage: StorageBackend) -> None:
+def _persist_to_blob(payload: dict, storage: StorageBackend, durable: bool = False) -> None:
     """
     Persist the raw trace payload to blob storage with time-partitioned path.
 
@@ -147,10 +147,12 @@ def _persist_to_blob(payload: dict, storage: StorageBackend) -> None:
     Args:
         payload: The parsed OTLP payload as a dictionary.
         storage: The storage backend (e.g., S3, local filesystem, GCS).
+        durable: If True, propagate exceptions (synchronous durable mode).
+                 If False, log and swallow exceptions (background mode).
 
     Raises:
-        Exception: If blob write fails. The exception is logged and swallowed
-                   in fire-and-forget mode (background task).
+        Exception: Propagated only when durable=True. In durable mode,
+                   storage failures cause the endpoint to return 5xx.
     """
     try:
         # Generate time-partitioned path with UTC timestamp
@@ -168,13 +170,18 @@ def _persist_to_blob(payload: dict, storage: StorageBackend) -> None:
 
         logger.debug("Persisted trace batch to blob storage: %s", path)
     except Exception:
-        logger.exception(
-            "Failed to persist trace batch to blob storage. "
-            "Traces are indexed in DuckDB but may be lost on restart."
-        )
+        if durable:
+            # In durable mode, propagate the exception to the caller
+            raise
+        else:
+            # In background/fire-and-forget mode, log and continue
+            logger.exception(
+                "Failed to persist trace batch to blob storage. "
+                "Traces are indexed in DuckDB but may be lost on restart."
+            )
 
 
-def _process_spans(payload_dict: dict, storage: StorageBackend) -> None:
+def _process_spans(payload_dict: dict, storage: StorageBackend, durable: bool = False) -> None:
     """
     Process a trace payload: index in DuckDB and persist to blob storage.
 
@@ -184,9 +191,14 @@ def _process_spans(payload_dict: dict, storage: StorageBackend) -> None:
     Args:
         payload_dict: The parsed OTLP payload as a dictionary.
         storage: The storage backend.
+        durable: If True, propagate exceptions (durable mode).
+                 If False, log and continue (background mode).
+
+    Raises:
+        Exception: Propagated from _persist_to_blob only when durable=True.
     """
     _index_in_duckdb(payload_dict)
-    _persist_to_blob(payload_dict, storage)
+    _persist_to_blob(payload_dict, storage, durable=durable)
 
 
 # ============================================================================
@@ -194,19 +206,18 @@ def _process_spans(payload_dict: dict, storage: StorageBackend) -> None:
 # ============================================================================
 
 
-@router.post("/v1/traces", status_code=202)
+@router.post("/v1/traces", status_code=200)
 async def ingest_traces(
-    request: Request,
     payload: ExportTraceServiceRequest,
     background_tasks: BackgroundTasks,
     x_argox_durable: str = Header(default="false"),
     storage: StorageBackend = Depends(get_storage),
-) -> dict[str, str]:
+) -> dict[str, Any]:
     """
     Ingest OTLP trace payloads from SDKs.
 
     This endpoint is designed for high-throughput, low-latency trace collection.
-    By default, it operates in fire-and-forget mode: returns 202 Accepted immediately
+    By default, it operates in fire-and-forget mode: returns 200 OK immediately
     while processing happens in the background. This minimizes latency impact on
     the caller's agent.
 
@@ -215,15 +226,18 @@ async def ingest_traces(
         to synchronous processing. Traces are indexed and persisted before the
         response is returned. This provides durability guarantees at the cost of
         added latency (typically 100-500ms depending on storage backend).
+        If storage fails, the endpoint returns 5xx instead of 200.
 
     Fire-and-Forget Mode (default, x-argox-durable: false or omitted):
-        Returns 202 Accepted immediately. Background tasks are scheduled to index
+        Returns 200 OK immediately. Background tasks are scheduled to index
         traces in DuckDB and persist them to blob storage. If a background task fails,
         the client never knows—the response has already been sent.
         This is the recommended mode for production agent integrations.
 
+    The response follows OTLP/HTTP specification:
+    https://opentelemetry.io/docs/specs/otlp/#otlphttp-response
+
     Args:
-        request: The raw HTTP request (for debugging/auditing).
         payload: The parsed OTLP ExportTraceServiceRequest.
         background_tasks: FastAPI's background task scheduler.
         x_argox_durable: Optional header (default "false"). Set to "true" for
@@ -231,30 +245,33 @@ async def ingest_traces(
         storage: The storage backend (injected via dependency).
 
     Returns:
-        A JSON response with a status field. The HTTP status code is always 202
-        (Accepted) as per OTLP standard.
+        An empty JSON object (standard OTLP/HTTP ExportTraceServiceResponse).
 
     Status Codes:
-        - 202 Accepted: Traces accepted. Synchronous (durable) or async (fire-and-forget)
-                        processing is about to begin or has begun.
-        - 4xx / 5xx: Validation or server errors (e.g., invalid JSON, storage failure in
-                     durable mode).
+        - 200 OK: Traces accepted and processed (or queued in fire-and-forget mode).
+        - 400 Bad Request: Invalid JSON or OTLP payload structure.
+        - 5xx Server Error: Storage or indexing failure in durable mode.
     """
     payload_dict = payload.model_dump()
+    num_resources = len(payload_dict.get("resourceSpans", []))
 
     if x_argox_durable.lower() == "true":
-        # Durable Mode: Process synchronously before returning
+        # Durable Mode: Process synchronously before returning.
+        # Exceptions from storage/indexing will propagate as 5xx errors.
         logger.info(
             "Ingest /v1/traces (durable mode): processing %d resource(s) synchronously",
-            len(payload_dict.get("resourceSpans", [])),
+            num_resources,
         )
-        _process_spans(payload_dict, storage)
-        return {"status": "accepted_durable"}
+        _process_spans(payload_dict, storage, durable=True)
     else:
-        # Fire-and-Forget Mode: Return immediately, process in background
+        # Fire-and-Forget Mode: Return immediately, process in background.
+        # Exceptions in background task are logged but not propagated.
         logger.info(
             "Ingest /v1/traces (fire-and-forget mode): queuing %d resource(s) for background processing",
-            len(payload_dict.get("resourceSpans", [])),
+            num_resources,
         )
-        background_tasks.add_task(_process_spans, payload_dict, storage)
-        return {"status": "accepted"}
+        background_tasks.add_task(_process_spans, payload_dict, storage, durable=False)
+
+    # Return empty object per OTLP/HTTP spec (ExportTraceServiceResponse)
+    # https://opentelemetry.io/docs/specs/otlp/#otlphttp-response
+    return {}
