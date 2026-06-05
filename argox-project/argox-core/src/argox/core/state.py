@@ -114,6 +114,9 @@ class AgentRunMetrics:
     # Export tracking
     exporter_errors: list[str] = field(default_factory=list)
 
+    # Phase timing (ms) — populated by manager perf_counter probes
+    phase_timings: dict[str, float] = field(default_factory=dict)
+
     @property
     def duration(self) -> float:
         """Elapsed seconds from start to end. Returns 0.0 if still running."""
@@ -179,4 +182,5 @@ class AgentRunMetrics:
                 "violations": self.policy_violations,
             },
             "exporter_errors": self.exporter_errors,
+            "phase_timings_ms": dict(self.phase_timings),
         }

@@ -128,13 +128,17 @@ class ArgoxManager:
         with tracer.start_as_current_span(SPAN_AGENT_RUN) as span:
             try:
                 # 1. Process input
+                _t0 = time.perf_counter()
                 processed_prompt = await self._run_processors(
                     span, ctx, prompt, "input", applied_processors,
                 )
+                metrics.phase_timings["processors_input"] = (time.perf_counter() - _t0) * 1000
 
                 # 2. Input policy
                 if self._policy is not None:
+                    _t0 = time.perf_counter()
                     result = await self._policy.check_input(processed_prompt)
+                    metrics.phase_timings["policy_input"] = (time.perf_counter() - _t0) * 1000
                     if not result.passed:
                         metrics.input_policy_passed = False
                         metrics.policy_violations.append(result.reason)
@@ -146,6 +150,7 @@ class ArgoxManager:
                 # 3. Filter tools via policy
                 raw_tools = _extract_tool_names(agent) if tools is None else tools
                 if self._policy is not None and raw_tools:
+                    _t0 = time.perf_counter()
                     for tool_name in raw_tools:
                         tool_result = await self._policy.is_tool_allowed(tool_name)
                         if tool_result.passed:
@@ -154,6 +159,7 @@ class ArgoxManager:
                         else:
                             metrics.tools_blocked.append({"name": tool_name, "reason": tool_result.reason})
                             record_policy_decision(decision="block", rule_id=tool_result.rule_id)
+                    metrics.phase_timings["tool_filter"] = (time.perf_counter() - _t0) * 1000
                     if metrics.tools_blocked:
                         span.set_attribute(
                             ARGOX_RUN_BLOCKED_TOOLS,
@@ -178,7 +184,9 @@ class ArgoxManager:
                 instrumented = plugin.instrument(
                     agent, metrics, tool_args_runner=tool_args_runner,
                 )
+                _t0 = time.perf_counter()
                 raw_result = await runner(instrumented, processed_prompt)
+                metrics.phase_timings["agent_exec"] = (time.perf_counter() - _t0) * 1000
 
                 # 5. Extract tokens and raw output
                 plugin.extract_tokens(raw_result, metrics)
@@ -191,13 +199,17 @@ class ArgoxManager:
                     record_token_usage(metrics.total_output_tokens, token_type="output")
 
                 # 6. Process output
+                _t0 = time.perf_counter()
                 output = await self._run_processors(
                     span, ctx, output, "output", applied_processors,
                 )
+                metrics.phase_timings["processors_output"] = (time.perf_counter() - _t0) * 1000
 
                 # 7. Output policy
                 if self._policy is not None:
+                    _t0 = time.perf_counter()
                     result = await self._policy.check_output(output)
+                    metrics.phase_timings["policy_output"] = (time.perf_counter() - _t0) * 1000
                     if not result.passed:
                         metrics.output_policy_passed = False
                         metrics.policy_violations.append(result.reason)
@@ -225,6 +237,7 @@ class ArgoxManager:
                     agent_name=metrics.agent_name,
                     success=metrics.success,
                 )
+                _t0 = time.perf_counter()
                 for exporter in self._exporters:
                     try:
                         exporter.export(metrics)
@@ -232,6 +245,7 @@ class ArgoxManager:
                         metrics.exporter_errors.append(
                             f"{type(exporter).__name__}: {exc}"
                         )
+                metrics.phase_timings["export"] = (time.perf_counter() - _t0) * 1000
 
     async def _run_processors(
         self,

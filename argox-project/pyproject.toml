@@ -19,3 +19,7 @@ no_implicit_optional = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+markers = [
+    "benchmark: performance benchmarks (select with -m benchmark)",
+    "live: requires real API key and ARGOX_LIVE_BENCH=1",
+]
