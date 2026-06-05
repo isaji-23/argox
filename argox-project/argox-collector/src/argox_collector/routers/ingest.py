@@ -20,13 +20,12 @@ Fire-and-Forget Mode (default):
     agent integrations.
 """
 
-import json
 import logging
 from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Header
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, Request
 from pydantic import BaseModel, Field
 
 from argox_collector.dependencies import get_storage
@@ -63,7 +62,8 @@ class Span(BaseModel):
         traceId: Unique trace identifier (string representation of bytes).
         spanId: Unique span identifier (string representation of bytes).
         name: Human-readable span name (e.g., "LLM.call", "tool.execute").
-        attributes: List of key-value pairs or a dict of attributes. Defaults to empty list.
+        attributes: List of key-value pairs or a dict of attributes. Optional to preserve
+                    fidelity between "omitted" and "empty" fields.
         startTimeUnixNano: Span start time in Unix nanoseconds (UTC).
         endTimeUnixNano: Span end time in Unix nanoseconds (UTC).
     """
@@ -71,7 +71,7 @@ class Span(BaseModel):
     traceId: str
     spanId: str
     name: str
-    attributes: list[KeyValue] | dict[str, Any] = Field(default_factory=list)
+    attributes: list[KeyValue] | dict[str, Any] | None = None
     startTimeUnixNano: int
     endTimeUnixNano: int
 
@@ -81,11 +81,11 @@ class ScopeSpans(BaseModel):
     A group of spans for a specific instrumentation scope (e.g., library or component).
 
     Attributes:
-        scope: Metadata about the instrumentation scope (e.g., name, version).
+        scope: Metadata about the instrumentation scope (e.g., name, version). Optional.
         spans: List of Span objects under this scope.
     """
 
-    scope: dict[str, Any] = Field(default_factory=dict)
+    scope: dict[str, Any] | None = None
     spans: list[Span]
 
 
@@ -94,11 +94,11 @@ class ResourceSpans(BaseModel):
     A group of spans for a specific resource (e.g., a single agent or service).
 
     Attributes:
-        resource: Metadata about the resource (e.g., service.name, host.name, attributes).
+        resource: Metadata about the resource (e.g., service.name, host.name, attributes). Optional.
         scopeSpans: List of ScopeSpans under this resource.
     """
 
-    resource: dict[str, Any] = Field(default_factory=dict)
+    resource: dict[str, Any] | None = None
     scopeSpans: list[ScopeSpans]
 
 
@@ -135,7 +135,7 @@ def _index_in_duckdb(payload: dict) -> None:
     logger.debug("Placeholder: indexing spans into DuckDB (COL-04)")
 
 
-def _persist_to_blob(payload: dict, storage: StorageBackend, durable: bool = False) -> None:
+def _persist_to_blob(raw_body: bytes, storage: StorageBackend, durable: bool = False) -> None:
     """
     Persist the raw trace payload to blob storage with time-partitioned path.
 
@@ -145,7 +145,7 @@ def _persist_to_blob(payload: dict, storage: StorageBackend, durable: bool = Fal
     This allows efficient querying by time range and easy garbage collection.
 
     Args:
-        payload: The parsed OTLP payload as a dictionary.
+        raw_body: The raw request body as bytes (preserves all OTLP fields).
         storage: The storage backend (e.g., S3, local filesystem, GCS).
         durable: If True, propagate exceptions (synchronous durable mode).
                  If False, log and swallow exceptions (background mode).
@@ -164,9 +164,8 @@ def _persist_to_blob(payload: dict, storage: StorageBackend, durable: bool = Fal
             f"{uuid4().hex}.json"
         )
 
-        # Serialize payload to JSON and persist as bytes
-        json_content = json.dumps(payload, default=str)
-        storage.put(path, json_content.encode("utf-8"))
+        # Persist raw body as-is, preserving all OTLP fields
+        storage.put(path, raw_body)
 
         logger.debug("Persisted trace batch to blob storage: %s", path)
     except Exception:
@@ -177,11 +176,11 @@ def _persist_to_blob(payload: dict, storage: StorageBackend, durable: bool = Fal
             # In background/fire-and-forget mode, log and continue
             logger.exception(
                 "Failed to persist trace batch to blob storage. "
-                "Traces are indexed in DuckDB but may be lost on restart."
+                "Traces lost (DuckDB indexing not yet implemented)."
             )
 
 
-def _process_spans(payload_dict: dict, storage: StorageBackend, durable: bool = False) -> None:
+def _process_spans(raw_body: bytes, payload_dict: dict, storage: StorageBackend, durable: bool = False) -> None:
     """
     Process a trace payload: index in DuckDB and persist to blob storage.
 
@@ -189,7 +188,8 @@ def _process_spans(payload_dict: dict, storage: StorageBackend, durable: bool = 
     either synchronously (durable mode) or as a background task (fire-and-forget).
 
     Args:
-        payload_dict: The parsed OTLP payload as a dictionary.
+        raw_body: The raw request body as bytes (preserves all OTLP fields).
+        payload_dict: The parsed OTLP payload as a dictionary (for indexing).
         storage: The storage backend.
         durable: If True, propagate exceptions (durable mode).
                  If False, log and continue (background mode).
@@ -198,7 +198,7 @@ def _process_spans(payload_dict: dict, storage: StorageBackend, durable: bool = 
         Exception: Propagated from _persist_to_blob only when durable=True.
     """
     _index_in_duckdb(payload_dict)
-    _persist_to_blob(payload_dict, storage, durable=durable)
+    _persist_to_blob(raw_body, storage, durable=durable)
 
 
 # ============================================================================
@@ -208,6 +208,7 @@ def _process_spans(payload_dict: dict, storage: StorageBackend, durable: bool = 
 
 @router.post("/v1/traces", status_code=200)
 async def ingest_traces(
+    request: Request,
     payload: ExportTraceServiceRequest,
     background_tasks: BackgroundTasks,
     x_argox_durable: str = Header(default="false"),
@@ -238,7 +239,8 @@ async def ingest_traces(
     https://opentelemetry.io/docs/specs/otlp/#otlphttp-response
 
     Args:
-        payload: The parsed OTLP ExportTraceServiceRequest.
+        request: The raw HTTP request (to preserve original OTLP payload).
+        payload: The parsed OTLP ExportTraceServiceRequest (for validation only).
         background_tasks: FastAPI's background task scheduler.
         x_argox_durable: Optional header (default "false"). Set to "true" for
                          synchronous durable processing.
@@ -252,6 +254,8 @@ async def ingest_traces(
         - 400 Bad Request: Invalid JSON or OTLP payload structure.
         - 5xx Server Error: Storage or indexing failure in durable mode.
     """
+    # Preserve the raw request body to avoid data loss from Pydantic model_dump()
+    raw_body = await request.body()
     payload_dict = payload.model_dump()
     num_resources = len(payload_dict.get("resourceSpans", []))
 
@@ -262,7 +266,7 @@ async def ingest_traces(
             "Ingest /v1/traces (durable mode): processing %d resource(s) synchronously",
             num_resources,
         )
-        _process_spans(payload_dict, storage, durable=True)
+        _process_spans(raw_body, payload_dict, storage, durable=True)
     else:
         # Fire-and-Forget Mode: Return immediately, process in background.
         # Exceptions in background task are logged but not propagated.
@@ -270,7 +274,7 @@ async def ingest_traces(
             "Ingest /v1/traces (fire-and-forget mode): queuing %d resource(s) for background processing",
             num_resources,
         )
-        background_tasks.add_task(_process_spans, payload_dict, storage, durable=False)
+        background_tasks.add_task(_process_spans, raw_body, payload_dict, storage, durable=False)
 
     # Return empty object per OTLP/HTTP spec (ExportTraceServiceResponse)
     # https://opentelemetry.io/docs/specs/otlp/#otlphttp-response

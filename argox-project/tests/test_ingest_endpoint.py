@@ -193,7 +193,7 @@ class TestIngestTracesEndpoint:
     def test_persist_to_blob_storage(
         self, settings: CollectorSettings, sample_trace_payload: dict
     ) -> None:
-        """Durable mode persists traces to blob storage with time-partitioned paths."""
+        """Durable mode persists raw trace payload with all OTLP fields to blob storage."""
         # Use durable mode to ensure synchronous processing
         client = TestClient(create_app(settings))
         response = client.post(
@@ -218,9 +218,64 @@ class TestIngestTracesEndpoint:
         assert len(blobs) > 0, "At least one span batch should be persisted"
 
         # Verify the blob content matches the original payload
+        # The raw body is preserved, so it should deserialize to the same structure
         with open(blobs[0], "r") as f:
             persisted_payload = json.load(f)
         assert persisted_payload == sample_trace_payload
+
+    def test_persist_to_blob_with_minimal_span(
+        self, settings: CollectorSettings
+    ) -> None:
+        """Span without attributes field is preserved faithfully (no auto-injection)."""
+        # This span intentionally omits attributes to test field fidelity
+        minimal_payload = {
+            "resourceSpans": [
+                {
+                    "scopeSpans": [
+                        {
+                            "spans": [
+                                {
+                                    "traceId": "abc123",
+                                    "spanId": "def456",
+                                    "name": "test.span",
+                                    # Note: attributes is intentionally omitted
+                                    "startTimeUnixNano": 100,
+                                    "endTimeUnixNano": 200,
+                                }
+                            ]
+                        }
+                    ]
+                }
+            ]
+        }
+
+        client = TestClient(create_app(settings))
+        response = client.post(
+            "/v1/traces",
+            json=minimal_payload,
+            headers={"x-argox-durable": "true"},
+        )
+
+        assert response.status_code == 200
+
+        # Verify blob was written
+        storage_root = settings.storage_local_root
+        span_dir = storage_root / "spans"
+
+        import glob
+
+        pattern = str(span_dir / "**" / "*.json")
+        blobs = glob.glob(pattern, recursive=True)
+        assert len(blobs) > 0
+
+        # Verify the blob does NOT contain injected attributes
+        with open(blobs[0], "r") as f:
+            persisted_payload = json.load(f)
+
+        # The span should not have attributes field since we didn't send it
+        span = persisted_payload["resourceSpans"][0]["scopeSpans"][0]["spans"][0]
+        assert "attributes" not in span or span["attributes"] is None, \
+            "Span should not have auto-injected empty attributes field"
 
     def test_background_tasks_not_awaited_in_fire_and_forget(
         self, client: TestClient, sample_trace_payload: dict
@@ -281,3 +336,53 @@ class TestIngestTracesEndpoint:
         # Verify model_dump works
         dumped = request.model_dump()
         assert dumped["resourceSpans"][0]["resource"]["name"] == "test-resource"
+
+    def test_payload_size_limit_enforced(self, client: TestClient) -> None:
+        """COL-03 Finding 3: Payloads exceeding 10MB are rejected with 413."""
+        # Create a large payload by repeating a span
+        large_attributes = [
+            {"key": f"attr_{i}", "value": "x" * 1000}
+            for i in range(50000)  # ~50MB of attributes
+        ]
+
+        large_payload = {
+            "resourceSpans": [
+                {
+                    "resource": {"attributes": []},
+                    "scopeSpans": [
+                        {
+                            "scope": {"name": "test"},
+                            "spans": [
+                                {
+                                    "traceId": "abc",
+                                    "spanId": "def",
+                                    "name": "large.span",
+                                    "attributes": large_attributes,
+                                    "startTimeUnixNano": 100,
+                                    "endTimeUnixNano": 200,
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ]
+        }
+
+        response = client.post("/v1/traces", json=large_payload)
+        # Should be rejected due to size limit
+        assert response.status_code == 413
+
+    def test_span_without_optional_fields_preserves_fidelity(self) -> None:
+        """COL-03 Finding 4: Span models preserve fidelity (omitted != empty)."""
+        # Span without resource, scope, or attributes
+        minimal_span = Span(
+            traceId="trace123",
+            spanId="span456",
+            name="minimal",
+            startTimeUnixNano=100,
+            endTimeUnixNano=200,
+        )
+
+        dumped = minimal_span.model_dump()
+        # Should not have attributes field in dumped data
+        assert "attributes" not in dumped or dumped["attributes"] is None

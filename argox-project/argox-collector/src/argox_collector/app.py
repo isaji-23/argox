@@ -6,6 +6,9 @@ from typing import Optional
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
+from starlette.responses import Response
 
 from argox_collector import __version__
 from argox_collector.index import TraceIndex, build_index
@@ -13,6 +16,36 @@ from argox_collector.logging import configure_logging
 from argox_collector.routers import health, ingest
 from argox_collector.settings import CollectorSettings
 from argox_collector.storage import StorageBackend, build_storage
+
+
+class PayloadSizeLimitMiddleware(BaseHTTPMiddleware):
+    """
+    Middleware to enforce maximum payload size and prevent OOM attacks.
+    
+    COL-03 Finding 3: Without size limits, buggy or malicious clients can send
+    arbitrarily large payloads causing OOM under concurrent load.
+    """
+    
+    # 10 MB limit for OTLP trace payloads (typical traces are KB-sized)
+    MAX_PAYLOAD_SIZE = 10 * 1024 * 1024
+
+    async def dispatch(self, request: Request, call_next):
+        """Check payload size before processing."""
+        # Only enforce limit on routes that accept payloads
+        if request.method in ["POST", "PUT", "PATCH"]:
+            content_length = request.headers.get("content-length")
+            if content_length:
+                try:
+                    size = int(content_length)
+                    if size > self.MAX_PAYLOAD_SIZE:
+                        return Response(
+                            content=f"Payload too large. Maximum size is {self.MAX_PAYLOAD_SIZE} bytes.",
+                            status_code=413,
+                        )
+                except ValueError:
+                    pass
+        
+        return await call_next(request)
 
 
 @asynccontextmanager
@@ -60,6 +93,10 @@ def create_app(
     app.state.settings = settings
     app.state.storage = storage if storage is not None else build_storage(settings)
     app.state.index = index if index is not None else build_index(settings)
+    
+    # Add payload size limit middleware (COL-03 Finding 3)
+    app.add_middleware(PayloadSizeLimitMiddleware)
+    
     app.include_router(health.router)
     app.include_router(ingest.router)
     return app
