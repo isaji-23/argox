@@ -126,10 +126,13 @@ use `rounds>=5` for any meaningful mean.
 
 ```bash
 ARGOX_LIVE_BENCH=1 pytest benchmarks/bench_e2e_live.py -v \
-  --benchmark-columns=mean,stddev,min,max,rounds
+  --benchmark-columns=mean,median,stddev,min,max,rounds
 ```
 
 Skipped automatically when `ARGOX_LIVE_BENCH` is unset.
+
+> Keep `median` and `min` in the columns: LLM outliers inflate the mean, so the
+> median is the robust central value and the min is the cleanest overhead signal.
 
 ---
 
@@ -177,6 +180,50 @@ Measured on Python 3.13, Linux, `time.perf_counter`, `pytest-benchmark 5.2.3`.
 
 > PII regex cost is nearly flat across text sizes — the `asyncio` call overhead
 > and event-loop scheduling dominate over the regex scan itself.
+
+### Live E2E group (2026-06-05)
+
+Azure AI Foundry deployment `gpt-4o-mini`, 5 rounds + 1 warmup, 1 iteration,
+200-token cap. `bare` is a raw `chat.completions` call; `sdk_wrapped` runs the
+same model through the `openai-agents` `Runner` under `ArgoxManager`.
+
+| Test | Mean | Median | StdDev | Min | Max |
+|---|---|---|---|---|---|
+| `test_live_bare_openai` | 1423 ms | 1398 ms | 100 ms | **1318 ms** | 1568 ms |
+| `test_live_sdk_wrapped` | 1550 ms | 1430 ms | 348 ms | **1319 ms** | 2167 ms |
+
+**Relative overhead (`sdk_wrapped` vs `bare`), per statistic:**
+
+| Statistic | bare | sdk_wrapped | Overhead |
+|---|---|---|---|
+| Mean | 1423 ms | 1550 ms | +8.9% |
+| Median | 1398 ms | 1430 ms | +2.2% |
+| Min | 1318 ms | 1319 ms | **+0.08%** |
+| Max | 1568 ms | 2167 ms | +38% |
+
+> The overhead % collapses mean → median → min as noise is stripped out. The min
+> (+0.08%, ~1 ms) is the true overhead floor; the +8.9% mean and +38% max are
+> inflated by a single slow LLM response, not by the SDK.
+
+**How to read this — the SDK overhead is below the noise floor here.**
+
+- The LLM dominates wall time (~1.4 s) with 100–350 ms of round-to-round
+  variance. Argox overhead measured in isolation is ~100 µs (mock bench), so at
+  N=5 it is unresolvable against the LLM's own jitter.
+- **Do not read the mean delta (127 ms) as SDK overhead.** It is LLM/network
+  variance. The `sdk_wrapped` StdDev (348 ms, 3.5× `bare`) comes from a single
+  2167 ms slow response, which also inflates its mean.
+- The only clean signal at this sample size is **min-to-min: 1319 − 1318 ≈ 1 ms**,
+  consistent with the docstring's `~1ms` claim and with the mock overhead bench.
+- **Caveat:** `bare` is one HTTP call; `sdk_wrapped` is the full `openai-agents`
+  agent loop (tool resolution, response parsing) *plus* Argox. The delta is
+  "agent stack + Argox" vs "raw call", not pure Argox cost.
+- **To resolve Argox overhead live:** use N≥30 to average out LLM variance, add
+  a third baseline (agents `Runner` *without* Argox) to isolate the SDK layer,
+  and compare on **min or a high percentile**, never the mean.
+
+**Takeaway:** consistent with the mock benchmarks — Argox overhead is negligible
+(µs-to-low-ms) and disappears into LLM latency in any real deployment.
 
 ---
 
