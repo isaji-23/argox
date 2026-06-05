@@ -34,6 +34,7 @@ You are a core collaborator on the Argox project. Your goal is to maintain techn
 - **Creation:** Use `gh pr create --base dev`.
 - **Linking:** The PR body must include `Closes #XX` to link and auto-close the issue.
 - **Content (In English):** Describe what changed, why, and how to test it.
+- **No AI attribution:** PR titles and bodies must NEVER contain "Generated with", "Co-authored-by: Claude", a 🤖 footer, or any other AI attribution. This applies to PRs, commits, issues, and every other output.
 - **Cleanup:** After merging, delete the local branch with `git branch -d <name>` and the remote branch with `git push origin --delete <name>`.
 
 ## 4. Technical Standards (Python 3.9+)
