@@ -62,8 +62,8 @@ class Span(BaseModel):
         traceId: Unique trace identifier (string representation of bytes).
         spanId: Unique span identifier (string representation of bytes).
         name: Human-readable span name (e.g., "LLM.call", "tool.execute").
-        attributes: List of key-value pairs or a dict of attributes. Optional to preserve
-                    fidelity between "omitted" and "empty" fields.
+        attributes: List of key-value pairs. Optional to preserve fidelity between
+                    "omitted" and "empty" fields. OTLP spec always uses list format.
         startTimeUnixNano: Span start time in Unix nanoseconds (UTC).
         endTimeUnixNano: Span end time in Unix nanoseconds (UTC).
     """
@@ -71,7 +71,7 @@ class Span(BaseModel):
     traceId: str
     spanId: str
     name: str
-    attributes: list[KeyValue] | dict[str, Any] | None = None
+    attributes: list[KeyValue] | None = None
     startTimeUnixNano: int
     endTimeUnixNano: int
 
@@ -130,8 +130,15 @@ def _index_in_duckdb(payload: dict) -> None:
 
     Args:
         payload: The parsed OTLP payload as a dictionary.
+        
+    Note (COL-03 R2 Finding 2):
+        Span attributes may be None when the field was omitted by the sender.
+        When COL-04 implements real indexing, guard against None:
+            attrs = span.get("attributes") or []
+        This preserves the fix for COL-03 Finding 4 (data fidelity).
     """
     # TODO (COL-04): Insert into DuckDB
+    # Remember: span["attributes"] may be None for spans without attributes field
     logger.debug("Placeholder: indexing spans into DuckDB (COL-04)")
 
 
@@ -256,6 +263,11 @@ async def ingest_traces(
     """
     # Preserve the raw request body to avoid data loss from Pydantic model_dump()
     raw_body = await request.body()
+    
+    # COL-03 R2 Finding 4: payload_dict is computed here but only used by _index_in_duckdb
+    # which is currently a stub (TODO COL-04). Once COL-04 is implemented, this should be
+    # moved inside _index_in_duckdb to avoid unnecessary allocations in the hot path.
+    # For now we compute it eagerly and pass it through the pipeline.
     payload_dict = payload.model_dump()
     num_resources = len(payload_dict.get("resourceSpans", []))
 

@@ -29,6 +29,9 @@ class CollectorSettings(BaseSettings):
     port: int = 8000
     log_level: str = "INFO"
 
+    # COL-03 Finding 3: Payload size limit (10 MB default for OTLP traces)
+    max_payload_size: int = 10 * 1024 * 1024
+
     storage_backend: str = "local"
     storage_local_root: Path = Path("./var/argox/blobs")
     storage_azure_connection_string: Optional[str] = None

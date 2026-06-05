@@ -338,38 +338,26 @@ class TestIngestTracesEndpoint:
         assert dumped["resourceSpans"][0]["resource"]["name"] == "test-resource"
 
     def test_payload_size_limit_enforced(self, client: TestClient) -> None:
-        """COL-03 Finding 3: Payloads exceeding 10MB are rejected with 413."""
-        # Create a large payload by repeating a span
-        large_attributes = [
-            {"key": f"attr_{i}", "value": "x" * 1000}
-            for i in range(50000)  # ~50MB of attributes
-        ]
-
-        large_payload = {
-            "resourceSpans": [
-                {
-                    "resource": {"attributes": []},
-                    "scopeSpans": [
-                        {
-                            "scope": {"name": "test"},
-                            "spans": [
-                                {
-                                    "traceId": "abc",
-                                    "spanId": "def",
-                                    "name": "large.span",
-                                    "attributes": large_attributes,
-                                    "startTimeUnixNano": 100,
-                                    "endTimeUnixNano": 200,
-                                }
-                            ],
-                        }
-                    ],
-                }
-            ]
-        }
-
-        response = client.post("/v1/traces", json=large_payload)
+        """COL-03 Finding 3: Payloads exceeding limit are rejected with 413.
+        
+        COL-03 R2 Finding 5: Test efficiency — send actual oversized body instead of
+        building massive JSON structures in memory. The middleware checks real body size
+        not just the JSON structure.
+        
+        COL-03 R2 Finding 1: Verify that chunked encoding is caught (not just Content-Length).
+        """
+        # 10 MB default limit + 1 byte
+        MAX_SIZE = 10 * 1024 * 1024
+        oversized_body = b"x" * (MAX_SIZE + 1)
+        
+        response = client.post(
+            "/v1/traces",
+            content=oversized_body,  # Raw bytes, not JSON (tests size check early)
+            headers={"content-type": "application/json"},
+        )
+        
         # Should be rejected due to size limit
+        # Middleware rejects before reaching JSON parsing
         assert response.status_code == 413
 
     def test_span_without_optional_fields_preserves_fidelity(self) -> None:

@@ -24,26 +24,43 @@ class PayloadSizeLimitMiddleware(BaseHTTPMiddleware):
     
     COL-03 Finding 3: Without size limits, buggy or malicious clients can send
     arbitrarily large payloads causing OOM under concurrent load.
+    
+    COL-03 R2 Finding 1: Content-Length header is optional (Transfer-Encoding: chunked).
+    We verify the actual body size, not just the header, to prevent chunked encoding bypass.
     """
     
-    # 10 MB limit for OTLP trace payloads (typical traces are KB-sized)
-    MAX_PAYLOAD_SIZE = 10 * 1024 * 1024
+    def __init__(self, app, max_size: int):
+        """
+        Initialize middleware with configurable payload size limit.
+        
+        Args:
+            app: FastAPI app instance
+            max_size: Maximum allowed payload size in bytes (default 10MB)
+        """
+        super().__init__(app)
+        self.max_size = max_size
 
     async def dispatch(self, request: Request, call_next):
-        """Check payload size before processing."""
+        """
+        Check payload size before processing.
+        
+        Verifies actual body size to prevent chunked encoding bypass attacks.
+        request.body() is cached in request._body after first call, so safe for re-reads.
+        """
         # Only enforce limit on routes that accept payloads
         if request.method in ["POST", "PUT", "PATCH"]:
-            content_length = request.headers.get("content-length")
-            if content_length:
-                try:
-                    size = int(content_length)
-                    if size > self.MAX_PAYLOAD_SIZE:
-                        return Response(
-                            content=f"Payload too large. Maximum size is {self.MAX_PAYLOAD_SIZE} bytes.",
-                            status_code=413,
-                        )
-                except ValueError:
-                    pass
+            try:
+                # ✅ Read actual body (not just Content-Length header)
+                # This catches chunked encoding attacks where Content-Length may be omitted
+                body = await request.body()
+                if len(body) > self.max_size:
+                    return Response(
+                        content=f"Payload too large. Maximum size is {self.max_size} bytes.",
+                        status_code=413,
+                    )
+            except Exception:
+                # If body read fails, let the app handle it
+                pass
         
         return await call_next(request)
 
@@ -94,8 +111,11 @@ def create_app(
     app.state.storage = storage if storage is not None else build_storage(settings)
     app.state.index = index if index is not None else build_index(settings)
     
-    # Add payload size limit middleware (COL-03 Finding 3)
-    app.add_middleware(PayloadSizeLimitMiddleware)
+    # Add payload size limit middleware with configurable limit from settings
+    # COL-03 R2 Finding 1: Verifies actual body size (not just header) to prevent
+    # chunked encoding bypass attacks
+    # COL-03 R2 Finding 3: Limit is configurable via CollectorSettings
+    app.add_middleware(PayloadSizeLimitMiddleware, max_size=settings.max_payload_size)
     
     app.include_router(health.router)
     app.include_router(ingest.router)
