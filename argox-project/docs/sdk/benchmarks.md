@@ -158,15 +158,17 @@ Measured on Python 3.13, Linux, `time.perf_counter`, `pytest-benchmark 5.2.3`.
 
 ### Overhead group
 
-| Test | Mean | StdDev | Median |
-|---|---|---|---|
-| `test_sdk_overhead_with_policy` | 93.4 µs | 12.5 µs | 89.4 µs |
-| `test_sdk_overhead_baseline` | 102.5 µs | 40.6 µs | 86.6 µs |
-| `test_sdk_overhead_with_processors` | 127.9 µs | 38.7 µs | 113.2 µs |
-| `test_sdk_overhead_phase_breakdown` | 101,110 µs | 261 µs | 101,037 µs |
+| Test | Mean | StdDev | Median | Overhead vs baseline (median) |
+|---|---|---|---|---|
+| `test_sdk_overhead_with_policy` | 93.4 µs | 12.5 µs | 89.4 µs | +3% |
+| `test_sdk_overhead_baseline` | 102.5 µs | 40.6 µs | 86.6 µs | — (reference) |
+| `test_sdk_overhead_with_processors` | 127.9 µs | 38.7 µs | 113.2 µs | +31% |
+| `test_sdk_overhead_phase_breakdown` | 101,110 µs | 261 µs | 101,037 µs | <1% vs LLM* |
 
-> `phase_breakdown` uses `asyncio.sleep(0.1)` to simulate 100ms LLM latency —
-> that 100ms is intentional. SDK overhead in that test is < 1%.
+> Percentages are vs the `baseline` median. They are µs-level deltas — the PII
+> processor (+31%, ~+27µs) is the only measurable cost; the policy stub is in
+> the noise. `phase_breakdown`'s figure is a different ratio: SDK overhead as a
+> share of a 100ms mock LLM (`asyncio.sleep(0.1)`), intentionally < 1%.
 
 ### Processors group
 
@@ -183,9 +185,17 @@ Measured on Python 3.13, Linux, `time.perf_counter`, `pytest-benchmark 5.2.3`.
 
 ### Live E2E group (2026-06-05)
 
-Azure AI Foundry deployment `gpt-4o-mini`, 5 rounds + 1 warmup, 1 iteration,
-200-token cap. `bare` is a raw `chat.completions` call; `sdk_wrapped` runs the
-same model through the `openai-agents` `Runner` under `ArgoxManager`.
+**Run conditions:** Azure AI Foundry `gpt-4o-mini` deployment (OpenAI-compatible
+surface), 2026-06-05, 12th Gen i7-1280P, Python 3.13.13. Each test runs via
+`benchmark.pedantic` with 5 timed rounds + 1 warmup × 1 iteration → 6 billable
+calls per test, **12 calls total**. Output capped at 200 tokens; prompt ~25
+tokens; `openai-agents` tracing disabled. `bare` is a raw `chat.completions`
+call; `sdk_wrapped` runs the same model through the `openai-agents` `Runner`
+under `ArgoxManager` (openai plugin only, no processors or policy).
+
+**Cost:** the benchmark JSON records timings only, not token usage. From the caps
+(≤240 input / ≤2400 output tokens over 12 calls), the run cost an estimated
+**≤ $0.0015** on gpt-4o-mini — sub-cent.
 
 | Test | Mean | Median | StdDev | Min | Max |
 |---|---|---|---|---|---|
