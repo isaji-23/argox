@@ -1,7 +1,7 @@
 # [BENCH-01] SDK benchmarking infrastructure
 
-- **Date:** 2026-06-03
-- **PR:** n/a (working tree, `dev`)
+- **Date:** 2026-06-03 (live E2E + benchmark tuning landed 2026-06-05)
+- **PR:** #119  ·  **Branch:** feat/BENCH-01-sdk-benchmarking-infra
 - **Status:** in-review
 
 ## What changed
@@ -30,18 +30,25 @@
   and `pytest-recording>=0.13`.
 - **`argox-project/pyproject.toml`** — `[tool.pytest.ini_options]` gains
   `benchmark` and `live` markers.
-- **`argox-project/benchmarks/`** (new directory, untracked) — five benchmark
-  modules:
+- **`argox-project/benchmarks/`** (new directory) — five benchmark modules:
   - `bench_overhead.py` — Strategy A: full `ArgoxManager.run()` with a mock
-    runner; asserts SDK overhead < 5% when `agent_exec` is 100ms.
+    runner; asserts SDK overhead < 5% when `agent_exec` is 100ms. All four
+    overhead benchmarks set `disable_gc=True` (keeps GC pauses out of the
+    measurement window — see errors.md).
   - `bench_components.py` — isolated `PiiRedactionProcessor` microbenchmarks
     across short/medium/long/clean text and `process_tool_args`.
   - `bench_e2e_replay.py` — Strategy C: VCR cassette replay (cassettes to be
     recorded separately).
-  - `bench_e2e_live.py` — Strategy B: real API gate (`ARGOX_LIVE_BENCH=1`);
-    stub implementations left as `pytest.skip` pending runner wiring.
+  - `bench_e2e_live.py` — Strategy B: real API gate (`ARGOX_LIVE_BENCH=1`),
+    implemented against an Azure AI Foundry deployment via a plain `AsyncOpenAI`
+    client (`base_url`) and `set_default_openai_client` — not `AsyncAzureOpenAI`
+    (see errors.md). `.env` loads when the gate is set; rounds/iterations are
+    pinned with `benchmark.pedantic` so the billable call count is deterministic.
   - `bench_concurrent.py` — Strategy D: `asyncio.gather` at N=10/50/100
     concurrent runs.
+- **`argox-project/docs/sdk/benchmarks.md`** (new) — run guide, phase-timing
+  reference, baseline results (overhead / processors / live E2E), per-statistic
+  overhead percentages, and success thresholds.
 
 ## Why
 
@@ -59,7 +66,13 @@ mock LLM latency, < 1ms PII processor on short text.
 
 - VCR cassettes in `benchmarks/cassettes/` are empty — record with
   `ARGOX_RECORD_CASSETTES=1 pytest benchmarks/bench_e2e_replay.py --vcr-record=new_episodes`.
-- `bench_e2e_live.py` stubs need real `openai` runner wiring before they are
-  meaningful.
+- Live E2E now runs (gpt-4o-mini Foundry deployment), but at N=5 the SDK
+  overhead (~0.08% min-to-min) sits below the LLM variance floor. Resolving it
+  cleanly needs N>=30 and a third baseline (agents `Runner` without Argox);
+  compare on median/min, never the mean (one slow response inflates it).
+- Benchmark tuning learned this round: pytest-benchmark leaves GC on by default
+  and the `@benchmark` marker rejects `rounds`/`iterations` kwargs — both
+  captured in errors.md.
 - Consider adding a `make bench-save` baseline snapshot to CI once cassettes
-  are recorded, so regressions surface automatically.
+  are recorded, so regressions surface automatically (this suite feeds the CI
+  benchmark job tracked in #28 / INFRA-03).
