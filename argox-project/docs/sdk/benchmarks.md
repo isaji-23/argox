@@ -170,6 +170,24 @@ Measured on Python 3.13, Linux, `time.perf_counter`, `pytest-benchmark 5.2.3`.
 > the noise. `phase_breakdown`'s figure is a different ratio: SDK overhead as a
 > share of a 100ms mock LLM (`asyncio.sleep(0.1)`), intentionally < 1%.
 
+**Why the processor's "+31%" is not a concern:**
+
+1. **It is +31% of microseconds.** ~+27µs over an 87µs scaffold. The percentage
+   looks large only because the baseline is tiny; the honest metric at this
+   scale is the absolute delta (~27µs), not the ratio.
+2. **It disappears in a real run.** Against a real ~1.4s LLM call, ~27µs is
+   ~0.002%. The live E2E group confirms it: the SDK path is indistinguishable
+   from LLM noise (min-to-min ≈ 1ms).
+3. **The cost is real work, not waste.** Per output, the processor runs 8
+   compiled-regex scans (EMAIL, PHONE, IPV4, IPV6, IBAN, CREDIT_CARD, ES_DNI,
+   ES_NIE), post-match validators (Luhn, DNI/NIE control letter, IBAN/IPv4
+   shape), overlap resolution, plus one extra `await`, one span event, and one
+   OTel metric record. Bounded O(len(text)).
+4. **It is fixed cost, not input-scaling.** The processors group shows the PII
+   processor at ~55µs median on clean input vs ~56µs on ~10k chars — flat. The
+   `asyncio` hop and event-loop scheduling dominate, not the regex, so the
+   delta stays in the tens of µs even on large outputs.
+
 ### Processors group
 
 | Test | Mean | StdDev | Median |
