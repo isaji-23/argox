@@ -10,7 +10,6 @@ import asyncio
 import os
 from collections.abc import Iterator
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any
 
 import pytest
@@ -126,6 +125,19 @@ def fake_llm_response() -> FakeLLMResponse:
 
 
 @pytest.fixture
+def make_llm_response():
+    """Factory for `FakeLLMResponse` with custom output text / token counts.
+
+    Lets benchmarks build realistically-sized payloads (large outputs, embedded
+    PII) instead of the fixed 29-char default.
+    """
+    def _make(text: str, input_tokens: int = 10, output_tokens: int = 20) -> FakeLLMResponse:
+        return FakeLLMResponse(text=text, input_tokens=input_tokens, output_tokens=output_tokens)
+
+    return _make
+
+
+@pytest.fixture
 def run_context() -> RunContext:
     return RunContext(run_id="bench-run", agent_name="bench-agent")
 
@@ -176,16 +188,3 @@ def manager_full(stub_plugin: StubPlugin) -> ArgoxManager:
     mgr.register_plugin(stub_plugin)
     mgr.register_processor(PiiRedactionProcessor())
     return mgr
-
-
-# ---------------------------------------------------------------------------
-# VCR config
-# ---------------------------------------------------------------------------
-
-
-@pytest.fixture(scope="module")
-def vcr_config():
-    return {
-        "cassette_library_dir": str(Path(__file__).parent / "cassettes"),
-        "record_mode": "none",
-    }

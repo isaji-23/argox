@@ -11,9 +11,6 @@ from typing import Any
 
 import pytest
 
-from argox.core.manager import ArgoxManager
-from argox.core.state import AgentRunMetrics
-
 
 @pytest.mark.benchmark(group="overhead", disable_gc=True)
 def test_sdk_overhead_baseline(benchmark, bench_loop, manager_no_extras, fake_agent, fake_llm_response):
@@ -69,12 +66,28 @@ def test_sdk_overhead_phase_breakdown(
     fake_llm_response,
     capturing_exporter,
 ):
-    """Phase timings populated; overhead % stays within target on 100ms mock LLM."""
+    """Phase timings are correct and the real SDK scaffold cost stays bounded.
+
+    The runner sleeps 100ms to stand in for LLM latency. The old version asserted
+    ``overhead_pct < 5%`` of that sleep, which is satisfied by construction (the
+    sleep dwarfs everything) and proves nothing. Instead we assert three things
+    that can actually fail if the SDK regresses:
+
+    1. ``agent_exec`` captured the 100ms sleep — i.e. the probe wraps the right
+       call, not some other phase.
+    2. The *real* SDK overhead — the sum of every non-``agent_exec`` phase, all on
+       the same ``perf_counter`` clock — stays under a small **absolute** bound.
+       This is independent of the sleep length, so it is a genuine ceiling on
+       scaffold cost.
+    3. ``agent_exec`` is the dominant phase, sanity-checking the breakdown.
+    """
+
+    sleep_s = 0.1
 
     manager_timed.register_exporter(capturing_exporter)
 
     async def slow_runner(agent: Any, prompt: str) -> Any:
-        await asyncio.sleep(0.1)
+        await asyncio.sleep(sleep_s)
         return fake_llm_response
 
     benchmark(
@@ -83,14 +96,24 @@ def test_sdk_overhead_phase_breakdown(
         )
     )
 
-    metrics: AgentRunMetrics = capturing_exporter.exports[-1]
-    assert "agent_exec" in metrics.phase_timings
-    assert "processors_input" in metrics.phase_timings
-    assert "processors_output" in metrics.phase_timings
-    assert "export" in metrics.phase_timings
+    timings = capturing_exporter.exports[-1].phase_timings
+    for key in ("agent_exec", "processors_input", "processors_output", "export"):
+        assert key in timings, f"missing phase timing: {key}"
 
-    agent_exec_ms = metrics.phase_timings["agent_exec"]
-    total_ms = metrics.duration * 1000
-    overhead_ms = total_ms - agent_exec_ms
-    overhead_pct = overhead_ms / total_ms * 100
-    assert overhead_pct < 5.0, f"SDK overhead {overhead_pct:.1f}% exceeded 5% threshold"
+    agent_exec_ms = timings["agent_exec"]
+    sleep_ms = sleep_s * 1000
+
+    # 1. The probe wrapped the LLM call: agent_exec ≈ the 100ms sleep. Generous
+    #    upper bound tolerates a loaded host without letting a wrong-phase probe
+    #    pass (e.g. if agent_exec accidentally measured a sub-ms scaffold step).
+    assert sleep_ms * 0.8 <= agent_exec_ms <= sleep_ms * 2.5, (
+        f"agent_exec {agent_exec_ms:.1f}ms did not capture the {sleep_ms:.0f}ms sleep"
+    )
+
+    # 2. Real SDK overhead = every phase except the LLM call. Absolute ceiling,
+    #    not a ratio against the artificial sleep — this can actually regress.
+    overhead_ms = sum(v for k, v in timings.items() if k != "agent_exec")
+    assert overhead_ms < 5.0, f"SDK scaffold overhead {overhead_ms:.3f}ms exceeded 5ms"
+
+    # 3. The LLM call dominates the breakdown.
+    assert agent_exec_ms == max(timings.values())

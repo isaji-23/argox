@@ -11,9 +11,9 @@ Two distinct measurements:
 |---|---|---|
 | Pure SDK overhead (no LLM) | Mock runner returning a fixed payload | Always runnable |
 | Component cost in isolation | Single processor/interface method | Always runnable |
-| Realistic E2E (deterministic) | VCR cassette replay | Cassettes must be recorded first |
+| Realistic-payload lifecycle cost | Large mock outputs through the full lifecycle | Always runnable |
 | Realistic E2E (real API) | Live API calls | `ARGOX_LIVE_BENCH=1` + API key |
-| Concurrent load / throughput | `asyncio.gather(N)` with mock runner | Always runnable |
+| Concurrent load / overlap | `asyncio.gather(N)`, mock runner with awaited latency | Always runnable |
 
 ---
 
@@ -87,17 +87,22 @@ Variants:
 - `test_pii_processor_clean_input` — no PII; measures regex-scan baseline
 - `test_pii_processor_tool_args` — nested dict with PII values
 
-### Strategy D — concurrent load
+### Strategy D — concurrent load / overlap
 
-`asyncio.gather(N)` with mock runner. Surfaces event-loop blocking in processors
-and OTel global-state contention under load.
+`asyncio.gather(N)` with a mock runner that **awaits** a fixed latency
+(`_LLM_LATENCY_S = 5ms`). The awaited latency is what makes the runs genuinely
+overlap — with an instant mock they would execute back-to-back and measure
+nothing about concurrency. Wall time staying flat as N grows is the proof the SDK
+does not serialize runs or block the event loop.
 
 ```bash
 pytest benchmarks/bench_concurrent.py -v \
   --benchmark-columns=mean,stddev,median,rounds
 ```
 
-Variants: N = 10, 50, 100 concurrent runs; N = 50 with PII processor.
+Variants: N = 10, 50, 100 concurrent runs; N = 50 with PII processor; plus
+`test_concurrent_overlap_no_blocking`, a non-benchmark assertion that N=50 runs
+finish well under the sequential bound (`N * latency`).
 
 ### Run all non-network benchmarks at once
 
@@ -105,28 +110,29 @@ Variants: N = 10, 50, 100 concurrent runs; N = 50 with PII processor.
 pytest benchmarks/bench_overhead.py \
        benchmarks/bench_components.py \
        benchmarks/bench_concurrent.py \
+       benchmarks/bench_payload.py \
   -v --benchmark-columns=mean,stddev,median
 ```
 
 ---
 
-### Strategy C — VCR replay E2E
+### Strategy C — realistic-payload lifecycle
 
-Records real API responses once; replays deterministically. Removes API variance
-while preserving realistic payload shapes.
-
-**Record cassettes (one-time, needs API key):**
-
-```bash
-pytest benchmarks/bench_e2e_replay.py --vcr-record=new_episodes -v
-```
-
-Cassettes are saved to `benchmarks/cassettes/` and committed. After that:
+Runs the full lifecycle (allow-all policy + PII output processor) over
+realistically-sized mock outputs (~480 chars and ~11k chars), no network. Shows
+how lifecycle cost scales with output volume, since the output processor scans
+the whole response. Each test also asserts the PII was actually redacted end to
+end. (This replaced a former VCR "replay" module that used a mock runner and
+empty cassettes — it replayed nothing.)
 
 ```bash
-pytest benchmarks/bench_e2e_replay.py -v \
+pytest benchmarks/bench_payload.py -v \
   --benchmark-columns=mean,stddev,median
 ```
+
+Variants: `test_full_run_typical_output`, `test_full_run_large_output`, plus
+`test_lifecycle_overhead_scales_linearly_not_quadratically` (non-benchmark
+guard against super-linear growth in the output path).
 
 ### Strategy B — live API E2E
 
@@ -199,9 +205,12 @@ medians and confirmed the SDK scaffold is in the tens of µs.
 > At this scale the runs are dominated by host scheduling noise: `with_policy`
 > dipping below `baseline` is jitter, not a real ordering — the honest reading is
 > "all variants sit in the ~38–49 µs band; the absolute SDK overhead is tens of
-> µs". `phase_breakdown` is unchanged (~100 ms = the `asyncio.sleep(0.1)` mock
-> LLM, not SDK cost), and its `<5%` assertion is satisfied by construction since
-> the 100 ms sleep dwarfs the scaffold.
+> µs". `phase_breakdown` measures ~100 ms (the `asyncio.sleep(0.1)` mock LLM, not
+> SDK cost). Its assertions were reworked: instead of the tautological `<5% of the
+> sleep`, it now checks `agent_exec` actually captured the 100 ms sleep, that the
+> **sum of non-`agent_exec` phases (real scaffold cost) stays under an absolute
+> 5 ms bound**, and that `agent_exec` is the dominant phase — all falsifiable if
+> the SDK regresses.
 
 **Why the processor's "+31%" is not a concern:**
 
@@ -221,18 +230,52 @@ medians and confirmed the SDK scaffold is in the tens of µs.
    `asyncio` hop and event-loop scheduling dominate, not the regex, so the
    delta stays in the tens of µs even on large outputs.
 
-### Processors group
+### Processors group (re-measured 2026-06-07, shared `bench_loop`)
 
-| Test | Mean | StdDev | Median |
-|---|---|---|---|
-| `test_pii_processor_clean_input` | 57.0 µs | 8.4 µs | 55.0 µs |
-| `test_pii_processor_short_input` | 58.5 µs | 14.4 µs | 55.8 µs |
-| `test_pii_processor_medium_input` | 59.9 µs | 12.2 µs | 55.0 µs |
-| `test_pii_processor_long_input` | 64.2 µs | 22.5 µs | 56.3 µs |
-| `test_pii_processor_tool_args` | 105.5 µs | 33.3 µs | 91.8 µs |
+| Test | Median |
+|---|---|
+| `test_pii_processor_clean_input` | ~6.2 µs |
+| `test_pii_processor_medium_input` | ~6.2 µs |
+| `test_pii_processor_long_input` | ~6.3 µs |
+| `test_pii_processor_short_input` | ~9.4 µs |
+| `test_pii_processor_tool_args` | ~33 µs |
 
-> PII regex cost is nearly flat across text sizes — the `asyncio` call overhead
-> and event-loop scheduling dominate over the regex scan itself.
+> With the shared loop, this group dropped from ~55 µs to ~6 µs — the old figure
+> was almost entirely `asyncio.run` loop creation, not the regex. The real regex
+> cost is **~6 µs and nearly flat** from ~500 chars to ~10k chars; `tool_args`
+> (~33 µs) costs more because it walks a nested dict redacting each value.
+
+### Payload group (2026-06-07) — full lifecycle vs output size
+
+Full lifecycle (policy + PII output processor) over realistic mock outputs.
+
+| Test | Output size | Median |
+|---|---|---|
+| `test_full_run_typical_output` | ~480 chars | ~0.19 ms |
+| `test_full_run_large_output` | ~11k chars | ~4.5 ms |
+
+> Cost scales ~linearly with output size (~24x payload → ~24x time): the PII
+> output processor scans the whole response, which is O(text length). The
+> `test_lifecycle_overhead_scales_linearly_not_quadratically` guard asserts this
+> stays linear (caps at 1.5x the size ratio) — a quadratic regression in the
+> output path would blow an 11k-char payload up to hundreds of ms and fail it.
+
+### Concurrent group (2026-06-07) — overlap holds as N grows
+
+Mock runner awaits a 5 ms latency so `gather` genuinely overlaps the runs.
+
+| Test | N | Median wall time |
+|---|---|---|
+| `test_concurrent_10` | 10 | ~6.6 ms |
+| `test_concurrent_50` | 50 | ~6.7 ms |
+| `test_concurrent_100` | 100 | ~7.3 ms |
+| `test_concurrent_with_processors` | 50 (+PII) | ~7.8 ms |
+
+> Wall time stays **flat (~6–7 ms ≈ one 5 ms latency + scaffold) as N goes
+> 10 → 100** — the runs overlap; the SDK adds only ~0.6 ms of serial coordination
+> across 10x more runs. If any phase blocked the event loop, wall time would grow
+> toward the sequential bound (N × 5 ms = 250–500 ms).
+> `test_concurrent_overlap_no_blocking` asserts it does not.
 
 ### Live E2E group (2026-06-07, N=30, three baselines)
 
@@ -295,8 +338,8 @@ deployment.
 | Benchmark | Target | Status |
 |---|---|---|
 | SDK overhead (no processors, no policy) | < 5ms mean | PASS — ~47µs (shared loop; ~87µs pre-fix) |
-| SDK overhead % (100ms mock LLM) | < 5% | PASS — < 1% |
-| PII processor short text (< 100 chars) | < 1ms | PASS — ~58µs |
-| PII processor long text (~10k chars) | < 50ms | PASS — ~64µs |
-| E2E replay (no tools) | baseline TBD | cassettes pending |
-| E2E replay (with tool calls) | baseline TBD | cassettes pending |
+| SDK scaffold overhead (phase_breakdown) | < 5ms absolute | PASS — sub-ms |
+| PII processor short text (< 100 chars) | < 1ms | PASS — ~9µs |
+| PII processor long text (~10k chars) | < 50ms | PASS — ~6µs |
+| Full lifecycle, large output (~11k chars) | < 50ms | PASS — ~4.5ms |
+| Concurrency overlap (N=50, no blocking) | < 25% of sequential bound | PASS |

@@ -41,8 +41,10 @@
     measurement window — see errors.md).
   - `bench_components.py` — isolated `PiiRedactionProcessor` microbenchmarks
     across short/medium/long/clean text and `process_tool_args`.
-  - `bench_e2e_replay.py` — Strategy C: VCR cassette replay (cassettes to be
-    recorded separately).
+  - `bench_payload.py` — Strategy C: realistic-payload lifecycle overhead
+    (full lifecycle over ~480-char and ~11k-char mock outputs). Replaced the
+    original `bench_e2e_replay.py`, whose `@pytest.mark.vcr` tests used a mock
+    runner and empty cassettes and replayed nothing (see review fixes below).
   - `bench_e2e_live.py` — Strategy B: real API gate (`ARGOX_LIVE_BENCH=1`),
     implemented against an Azure AI Foundry deployment via a plain `AsyncOpenAI`
     client (`base_url`) and `set_default_openai_client` — not `AsyncAzureOpenAI`
@@ -80,6 +82,28 @@ dropped from ~90–105 µs to ~38–49 µs (roughly half the old figure was loop
 creation); StdDev tightened. The shared loop also fixed a latent live-bench bug
 (`AsyncOpenAI` client bound to a closed loop on round 2) — see errors.md.
 
+**Worthless-test rework (review findings #5/#6/#7):** three tests asserted
+nothing falsifiable; reworked and backed by new behavioural tests:
+
+- **#5 `phase_breakdown`** asserted `overhead < 5%` of an artificial 100 ms sleep
+  — true by construction. Now asserts `agent_exec` actually captured the sleep,
+  the **sum of non-`agent_exec` phases stays under an absolute 5 ms bound** (real,
+  falsifiable scaffold ceiling), and `agent_exec` is the dominant phase.
+- **#6 VCR replay** (`@pytest.mark.vcr` + mock runner + empty cassettes →
+  replayed nothing) was removed. Replaced by `bench_payload.py` (Strategy C):
+  full lifecycle over ~480-char and ~11k-char outputs, asserting PII is redacted
+  end to end, plus a guard that lifecycle cost scales ~linearly, not
+  quadratically, with output size. Confirmed cost is O(text length) (~24x payload
+  → ~24x time). Dead `vcr_config` fixture and `cassettes/.gitkeep` removed.
+- **#7 concurrency** used an instant mock, so `gather` ran sequentially and could
+  not test concurrency. The mock now awaits a 5 ms latency so runs truly overlap;
+  added `test_concurrent_overlap_no_blocking` asserting N=50 runs finish well
+  under the sequential bound. Result: wall time stays flat (~6–7 ms) from N=10 to
+  N=100 — the SDK does not serialize runs or block the loop.
+
+New shared fixture `make_llm_response` (`conftest.py`) builds custom-sized mock
+payloads for the payload benchmarks.
+
 ## Why
 
 No benchmarking infrastructure existed. Without it, SDK overhead was
@@ -94,8 +118,9 @@ mock LLM latency, < 1ms PII processor on short text.
 
 ## Notes / follow-ups
 
-- VCR cassettes in `benchmarks/cassettes/` are empty — record with
-  `ARGOX_RECORD_CASSETTES=1 pytest benchmarks/bench_e2e_replay.py --vcr-record=new_episodes`.
+- The VCR replay strategy was removed (it replayed nothing). Strategy C is now
+  `bench_payload.py` — realistic-payload lifecycle overhead with no network. If
+  cassette-based replay is wanted later, it must drive a real client, not a mock.
 - Live E2E was re-run on 2026-06-07 at N=30 with a third baseline
   (`test_live_agents_no_argox` — agents `Runner` without Argox; `_ROUNDS=30`).
   Confirmed the SDK overhead is **unresolvable live**: pure Argox came out at
