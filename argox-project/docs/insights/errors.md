@@ -8,6 +8,18 @@ and resolves a non-trivial error.
 
 <!-- Add new entries directly below this line, newest first. -->
 
+## 2026-06-07 — `asyncio.run` per round dominated the overhead measurement  [BENCH-01]
+- **Symptom:** Overhead benchmarks reported ~90–105 µs median, but that figure was suspiciously high for the work being timed and barely separated `baseline` from the feature variants. The number was measuring scaffolding, not the SDK.
+- **Root cause:** Each benchmark callable was `asyncio.run(coro)`. `asyncio.run` builds a brand-new event loop and tears it down on **every** round — tens of microseconds of fixed cost plus heavy transient allocation. That allocation also fed the GC variance fought separately with `disable_gc`. The loop lifecycle, not Argox, dominated the timed region.
+- **Fix:** Add a session-scoped `bench_loop` fixture (`benchmarks/conftest.py`) that creates one event loop for the whole session, and drive every benchmark with `bench_loop.run_until_complete(coro)` so the timed region is the coroutine alone. Medians dropped ~90–105 µs → ~38–49 µs; StdDev tightened. The baseline-vs-feature delta — the metric that actually matters — is now clean.
+- **Guard:** All benches take the `bench_loop` fixture; the fixture docstring explains why `asyncio.run` must not be used in a timed region.
+
+## 2026-06-07 — Live bench `RuntimeError: Event loop is closed` on round 2  [BENCH-01]
+- **Symptom:** With the shared-loop fix in mind, the live benchmarks would have raised `RuntimeError: Event loop is closed` from round 2 onward: the `AsyncOpenAI` client is built once in the test body, but each round ran under a fresh `asyncio.run` loop.
+- **Root cause:** `AsyncOpenAI` lazily creates its underlying `httpx.AsyncClient` (and connection pool) bound to whichever event loop is running on first request. `asyncio.run` closes that loop at the end of round 1; round 2 opens a new loop, but the client's pool is still bound to the closed one.
+- **Fix:** Drive the live benchmarks on the same shared `bench_loop` via `benchmark.pedantic(lambda: bench_loop.run_until_complete(_call()), ...)`. One persistent loop for the client's lifetime removes the binding mismatch.
+- **Guard:** Comment in `bench_e2e_live.py` documents that the client binds its pool to the first loop, so per-round `asyncio.run` must not be reintroduced.
+
 ## 2026-06-05 — Live benchmark 404s against Azure AI Foundry deployment  [BENCH-01]
 - **Symptom:** Live E2E request failed; the client posted to `/deployments/gpt-4o-mini/chat/completions` (an `AsyncAzureOpenAI` instance), which the deployment does not serve. The model is an Azure AI Foundry deployment exposed over the OpenAI-compatible surface, not classic Azure OpenAI.
 - **Root cause:** `AsyncAzureOpenAI` rewrites every request to the Azure-OpenAI URL shape `{endpoint}/openai/deployments/{deployment}/chat/completions?api-version=...`. Foundry's OpenAI-compatible endpoint expects the plain `{base_url}/chat/completions` shape and no `api-version`, so the rewritten path is wrong.

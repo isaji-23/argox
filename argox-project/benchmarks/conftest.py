@@ -6,7 +6,9 @@ realistic response shapes without network variance.
 
 from __future__ import annotations
 
+import asyncio
 import os
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -94,6 +96,25 @@ class CapturingExporter(ExporterBase):
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture(scope="session")
+def bench_loop() -> Iterator[asyncio.AbstractEventLoop]:
+    """A single persistent event loop reused across every timed round.
+
+    Benchmarks must drive coroutines with ``bench_loop.run_until_complete(...)``
+    rather than ``asyncio.run(...)``. ``asyncio.run`` builds and tears down a
+    fresh loop on every call — tens of microseconds of work plus heavy
+    allocation — which would dominate the very SDK overhead these benchmarks try
+    to measure and inflate variance. Reusing one loop keeps the timed region to
+    the coroutine itself, so absolute numbers and the baseline-vs-feature delta
+    stay honest.
+    """
+    loop = asyncio.new_event_loop()
+    try:
+        yield loop
+    finally:
+        loop.close()
+
+
 @pytest.fixture
 def fake_agent() -> FakeAgent:
     return FakeAgent()
@@ -122,6 +143,14 @@ def capturing_exporter() -> CapturingExporter:
 @pytest.fixture
 def manager_no_extras(stub_plugin: StubPlugin) -> ArgoxManager:
     mgr = ArgoxManager()
+    mgr.register_plugin(stub_plugin)
+    return mgr
+
+
+@pytest.fixture
+def manager_timed(stub_plugin: StubPlugin) -> ArgoxManager:
+    """Bare manager with phase timings enabled, for the phase-breakdown bench."""
+    mgr = ArgoxManager(enable_phase_timings=True)
     mgr.register_plugin(stub_plugin)
     return mgr
 

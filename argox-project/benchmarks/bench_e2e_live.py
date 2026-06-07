@@ -7,12 +7,12 @@ which rewrites the path to ``/openai/deployments/...?api-version`` that
 Foundry does not serve. This mirrors the demo's client setup.
 
 Requires ``ARGOX_LIVE_BENCH=1``. LLM response variance dominates SDK cost
-(~1ms), so N>=5 rounds is the minimum for any significance. ``pedantic`` pins
-rounds/iterations so the call count (and therefore cost) is deterministic:
-6 billable calls per test (5 timed + 1 warmup, 1 iteration each).
+(~1ms), so a larger N is needed to resolve it; ``_ROUNDS`` is set to 30.
+``pedantic`` pins rounds/iterations so the call count (and therefore cost) is
+deterministic: ``_ROUNDS`` timed + 1 warmup = 31 billable calls per test.
 
-Cost per full run (both tests, gpt-4o-mini deployment, 200-token cap):
-12 calls / well under one US cent. See ``.untracked/`` notes.
+Cost per full run (three tests, gpt-4o-mini deployment, 200-token cap):
+3 * 31 = 93 calls / a couple of US cents. See ``.untracked/`` notes.
 
 Required environment (supplied via .env, like the demo):
     ARGOX_LIVE_BENCH=1
@@ -32,7 +32,6 @@ the min (cleanest overhead signal), not the mean.
 
 from __future__ import annotations
 
-import asyncio
 import os
 
 import pytest
@@ -58,6 +57,11 @@ pytestmark = pytest.mark.skipif(
 _INSTRUCTIONS = "You are a concise assistant. Answer in one short sentence."
 _PROMPT = "In one sentence, what is observability in software systems?"
 _MAX_TOKENS = 200
+
+# Timed rounds per test. N>=30 is needed to average out LLM response variance so
+# the SDK overhead (tens of µs) can be resolved against it. Each test bills
+# _ROUNDS + 1 (warmup) calls; with three tests that is 3 * (_ROUNDS + 1).
+_ROUNDS = 30
 
 
 def _require(name: str) -> str:
@@ -86,7 +90,7 @@ def _openai_client():
 
 
 @pytest.mark.benchmark(group="live")
-def test_live_bare_openai(benchmark):
+def test_live_bare_openai(benchmark, bench_loop):
     """Baseline: raw Foundry chat-completions call, no SDK wrapping."""
     client = _openai_client()
     deployment = _require("AZURE_OPENAI_DEPLOYMENT")
@@ -103,10 +107,13 @@ def test_live_bare_openai(benchmark):
 
     # pedantic() pins the call count so cost is deterministic: 5 timed rounds
     # + 1 warmup, 1 iteration each = 6 billable calls. (rounds/iterations are
-    # not accepted on the @benchmark marker, only here.)
+    # not accepted on the @benchmark marker, only here.) Drive every round on
+    # the shared bench_loop: the AsyncOpenAI client binds its httpx pool to the
+    # first loop it runs on, so a per-round asyncio.run (new loop each time)
+    # would raise "Event loop is closed" on round 2.
     result = benchmark.pedantic(
-        lambda: asyncio.run(_call()),
-        rounds=5,
+        lambda: bench_loop.run_until_complete(_call()),
+        rounds=_ROUNDS,
         warmup_rounds=1,
         iterations=1,
     )
@@ -114,7 +121,7 @@ def test_live_bare_openai(benchmark):
 
 
 @pytest.mark.benchmark(group="live")
-def test_live_sdk_wrapped(benchmark):
+def test_live_sdk_wrapped(benchmark, bench_loop):
     """SDK-wrapped call. Compare mean to test_live_bare_openai to get overhead.
 
     Runs through a bare ArgoxManager (openai plugin only, no processors or
@@ -156,8 +163,51 @@ def test_live_sdk_wrapped(benchmark):
         return await manager.run(agent, _PROMPT, "openai", _runner)
 
     output = benchmark.pedantic(
-        lambda: asyncio.run(_one()),
-        rounds=5,
+        lambda: bench_loop.run_until_complete(_one()),
+        rounds=_ROUNDS,
+        warmup_rounds=1,
+        iterations=1,
+    )
+    assert output
+
+
+@pytest.mark.benchmark(group="live")
+def test_live_agents_no_argox(benchmark, bench_loop):
+    """Third baseline: the agents ``Runner`` *without* Argox wrapping.
+
+    Isolates the SDK layer. ``bare_openai`` is one raw HTTP call; this test is the
+    full ``openai-agents`` agent loop (tool resolution, response parsing); and
+    ``sdk_wrapped`` is that same loop plus Argox. So:
+
+    - agents framework cost  = ``agents_no_argox`` − ``bare_openai``
+    - pure Argox overhead    = ``sdk_wrapped`` − ``agents_no_argox``
+
+    Compare on median/min, never the mean (one slow LLM response inflates it).
+    """
+    from agents import (
+        Agent,
+        ModelSettings,
+        Runner,
+        set_default_openai_client,
+        set_tracing_disabled,
+    )
+
+    set_tracing_disabled(True)
+    set_default_openai_client(_openai_client())
+
+    agent = Agent(
+        name="bench-agent",
+        instructions=_INSTRUCTIONS,
+        model=_require("AZURE_OPENAI_DEPLOYMENT"),
+        model_settings=ModelSettings(max_tokens=_MAX_TOKENS),
+    )
+
+    async def _one():
+        return await Runner.run(agent, _PROMPT)
+
+    output = benchmark.pedantic(
+        lambda: bench_loop.run_until_complete(_one()),
+        rounds=_ROUNDS,
         warmup_rounds=1,
         iterations=1,
     )

@@ -27,37 +27,43 @@ async def _run_n_concurrent(manager: ArgoxManager, fake_agent: Any, fake_llm_res
 
 
 @pytest.mark.benchmark(group="concurrent")
-def test_concurrent_10(benchmark, manager_no_extras, fake_agent, fake_llm_response):
+def test_concurrent_10(benchmark, bench_loop, manager_no_extras, fake_agent, fake_llm_response):
     """10 concurrent runs — baseline concurrency cost."""
     results = benchmark(
-        lambda: asyncio.run(_run_n_concurrent(manager_no_extras, fake_agent, fake_llm_response, 10))
+        lambda: bench_loop.run_until_complete(
+            _run_n_concurrent(manager_no_extras, fake_agent, fake_llm_response, 10)
+        )
     )
     assert len(results) == 10
 
 
 @pytest.mark.benchmark(group="concurrent")
-def test_concurrent_50(benchmark, manager_no_extras, fake_agent, fake_llm_response):
+def test_concurrent_50(benchmark, bench_loop, manager_no_extras, fake_agent, fake_llm_response):
     """50 concurrent runs — moderate load."""
     results = benchmark(
-        lambda: asyncio.run(_run_n_concurrent(manager_no_extras, fake_agent, fake_llm_response, 50))
+        lambda: bench_loop.run_until_complete(
+            _run_n_concurrent(manager_no_extras, fake_agent, fake_llm_response, 50)
+        )
     )
     assert len(results) == 50
 
 
 @pytest.mark.benchmark(group="concurrent")
-def test_concurrent_100(benchmark, manager_no_extras, fake_agent, fake_llm_response):
+def test_concurrent_100(benchmark, bench_loop, manager_no_extras, fake_agent, fake_llm_response):
     """100 concurrent runs — high load; surface event-loop blocking."""
     results = benchmark(
-        lambda: asyncio.run(_run_n_concurrent(manager_no_extras, fake_agent, fake_llm_response, 100))
+        lambda: bench_loop.run_until_complete(
+            _run_n_concurrent(manager_no_extras, fake_agent, fake_llm_response, 100)
+        )
     )
     assert len(results) == 100
 
 
 @pytest.mark.benchmark(group="concurrent")
-def test_concurrent_with_processors(benchmark, manager_with_pii, fake_agent, fake_llm_response):
+def test_concurrent_with_processors(benchmark, bench_loop, manager_with_pii, fake_agent, fake_llm_response):
     """50 concurrent runs with PII processor — measures pipeline contention."""
     results = benchmark(
-        lambda: asyncio.run(
+        lambda: bench_loop.run_until_complete(
             _run_n_concurrent(manager_with_pii, fake_agent, fake_llm_response, 50)
         )
     )

@@ -16,42 +16,44 @@ from argox.core.state import AgentRunMetrics
 
 
 @pytest.mark.benchmark(group="overhead", disable_gc=True)
-def test_sdk_overhead_baseline(benchmark, manager_no_extras, fake_agent, fake_llm_response):
+def test_sdk_overhead_baseline(benchmark, bench_loop, manager_no_extras, fake_agent, fake_llm_response):
     """Baseline: no processors, no policy — pure lifecycle scaffolding cost."""
 
     async def mock_runner(agent: Any, prompt: str) -> Any:
         return fake_llm_response
 
     result = benchmark(
-        lambda: asyncio.run(manager_no_extras.run(fake_agent, "hello", "stub", mock_runner))
+        lambda: bench_loop.run_until_complete(
+            manager_no_extras.run(fake_agent, "hello", "stub", mock_runner)
+        )
     )
     assert result is not None
 
 
-@pytest.mark.benchmark(group="overhead", disable_gc=True, warmup=True)
-def test_sdk_overhead_with_processors(benchmark, manager_with_pii, fake_agent, fake_llm_response):
+@pytest.mark.benchmark(group="overhead", disable_gc=True)
+def test_sdk_overhead_with_processors(benchmark, bench_loop, manager_with_pii, fake_agent, fake_llm_response):
     """Measures added cost of the PII redaction processor pipeline."""
 
     async def mock_runner(agent: Any, prompt: str) -> Any:
         return fake_llm_response
 
     result = benchmark(
-        lambda: asyncio.run(
+        lambda: bench_loop.run_until_complete(
             manager_with_pii.run(fake_agent, "Call me at 555-1234", "stub", mock_runner)
         )
     )
     assert result is not None
 
 
-@pytest.mark.benchmark(group="overhead", disable_gc=True, warmup=True)
-def test_sdk_overhead_with_policy(benchmark, manager_with_policy, fake_agent, fake_llm_response):
+@pytest.mark.benchmark(group="overhead", disable_gc=True)
+def test_sdk_overhead_with_policy(benchmark, bench_loop, manager_with_policy, fake_agent, fake_llm_response):
     """Measures added cost of policy checks (allow-all stub — no network)."""
 
     async def mock_runner(agent: Any, prompt: str) -> Any:
         return fake_llm_response
 
     result = benchmark(
-        lambda: asyncio.run(
+        lambda: bench_loop.run_until_complete(
             manager_with_policy.run(fake_agent, "hello", "stub", mock_runner)
         )
     )
@@ -61,21 +63,24 @@ def test_sdk_overhead_with_policy(benchmark, manager_with_policy, fake_agent, fa
 @pytest.mark.benchmark(group="overhead", disable_gc=True)
 def test_sdk_overhead_phase_breakdown(
     benchmark,
-    manager_no_extras,
+    bench_loop,
+    manager_timed,
     fake_agent,
     fake_llm_response,
     capturing_exporter,
 ):
     """Phase timings populated; overhead % stays within target on 100ms mock LLM."""
 
-    manager_no_extras.register_exporter(capturing_exporter)
+    manager_timed.register_exporter(capturing_exporter)
 
     async def slow_runner(agent: Any, prompt: str) -> Any:
         await asyncio.sleep(0.1)
         return fake_llm_response
 
     benchmark(
-        lambda: asyncio.run(manager_no_extras.run(fake_agent, "hello", "stub", slow_runner))
+        lambda: bench_loop.run_until_complete(
+            manager_timed.run(fake_agent, "hello", "stub", slow_runner)
+        )
     )
 
     metrics: AgentRunMetrics = capturing_exporter.exports[-1]

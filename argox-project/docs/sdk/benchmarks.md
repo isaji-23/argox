@@ -19,8 +19,10 @@ Two distinct measurements:
 
 ## Phase timings
 
-`ArgoxManager.run()` wraps every lifecycle phase with `time.perf_counter()`
-probes. Results land in `AgentRunMetrics.phase_timings` (milliseconds) and are
+Phase timing is **opt-in**: construct `ArgoxManager(enable_phase_timings=True)`
+(default `False`, so production runs pay no probing cost). When enabled,
+`ArgoxManager.run()` wraps every lifecycle phase with a `time.perf_counter()`
+probe. Results land in `AgentRunMetrics.phase_timings` (milliseconds) and are
 serialised as `phase_timings_ms` by `to_dict()`.
 
 | Key | Phase measured |
@@ -33,8 +35,9 @@ serialised as `phase_timings_ms` by `to_dict()`.
 | `policy_output` | `_policy.check_output()` |
 | `export` | full `ExporterBase.export()` loop |
 
-Keys for conditional phases (`policy_input`, `tool_filter`, `policy_output`) are
-only present when the branch runs (i.e. a `PolicyClient` is registered).
+When enabled, all keys are pre-seeded to `0.0` at run start, so every key is
+present even when its branch is skipped (no policy) or the run raises before
+reaching it. When disabled, `phase_timings` stays empty.
 
 **SDK overhead formula:**
 
@@ -45,6 +48,12 @@ overhead_pct = (total_ms - phase_timings["agent_exec"]) / total_ms * 100
 ---
 
 ## Running the benchmarks
+
+> **Event loop:** every benchmark drives its coroutine through the shared
+> session-scoped `bench_loop` fixture (`bench_loop.run_until_complete(...)`),
+> never `asyncio.run(...)`. `asyncio.run` builds and tears down a fresh loop per
+> round — tens of µs plus allocation that would dominate the SDK overhead being
+> measured. Keep the timed region to the coroutine itself.
 
 ### Strategy A — SDK overhead (mock runner)
 
@@ -158,6 +167,10 @@ Measured on Python 3.13, Linux, `time.perf_counter`, `pytest-benchmark 5.2.3`.
 
 ### Overhead group
 
+> **Superseded by the 2026-06-07 re-measure below.** The figures in this table
+> were taken with `asyncio.run` per round, so roughly half of each median was
+> event-loop creation rather than SDK cost. Kept for history.
+
 | Test | Mean | StdDev | Median | Overhead vs baseline (median) |
 |---|---|---|---|---|
 | `test_sdk_overhead_with_policy` | 93.4 µs | 12.5 µs | 89.4 µs | +3% |
@@ -169,6 +182,26 @@ Measured on Python 3.13, Linux, `time.perf_counter`, `pytest-benchmark 5.2.3`.
 > processor (+31%, ~+27µs) is the only measurable cost; the policy stub is in
 > the noise. `phase_breakdown`'s figure is a different ratio: SDK overhead as a
 > share of a 100ms mock LLM (`asyncio.sleep(0.1)`), intentionally < 1%.
+
+### Overhead group — re-measured 2026-06-07 (shared `bench_loop`)
+
+Same host/toolchain, 50+ rounds, driving each round on the shared session loop
+instead of `asyncio.run`. Removing per-round loop creation roughly halved the
+medians and confirmed the SDK scaffold is in the tens of µs.
+
+| Test | Median | StdDev |
+|---|---|---|
+| `test_sdk_overhead_with_policy` | ~38 µs | — |
+| `test_sdk_overhead_baseline` | ~47 µs | — |
+| `test_sdk_overhead_with_processors` | ~49 µs | — |
+| `test_sdk_overhead_phase_breakdown` | ~101,000 µs | — |
+
+> At this scale the runs are dominated by host scheduling noise: `with_policy`
+> dipping below `baseline` is jitter, not a real ordering — the honest reading is
+> "all variants sit in the ~38–49 µs band; the absolute SDK overhead is tens of
+> µs". `phase_breakdown` is unchanged (~100 ms = the `asyncio.sleep(0.1)` mock
+> LLM, not SDK cost), and its `<5%` assertion is satisfied by construction since
+> the 100 ms sleep dwarfs the scaffold.
 
 **Why the processor's "+31%" is not a concern:**
 
@@ -201,57 +234,59 @@ Measured on Python 3.13, Linux, `time.perf_counter`, `pytest-benchmark 5.2.3`.
 > PII regex cost is nearly flat across text sizes — the `asyncio` call overhead
 > and event-loop scheduling dominate over the regex scan itself.
 
-### Live E2E group (2026-06-05)
+### Live E2E group (2026-06-07, N=30, three baselines)
 
 **Run conditions:** Azure AI Foundry `gpt-4o-mini` deployment (OpenAI-compatible
-surface), 2026-06-05, 12th Gen i7-1280P, Python 3.13.13. Each test runs via
-`benchmark.pedantic` with 5 timed rounds + 1 warmup × 1 iteration → 6 billable
-calls per test, **12 calls total**. Output capped at 200 tokens; prompt ~25
-tokens; `openai-agents` tracing disabled. `bare` is a raw `chat.completions`
-call; `sdk_wrapped` runs the same model through the `openai-agents` `Runner`
-under `ArgoxManager` (openai plugin only, no processors or policy).
+surface), 2026-06-07, 12th Gen i7-1280P, Python 3.13.13. Each test runs via
+`benchmark.pedantic` with **30 timed rounds** + 1 warmup × 1 iteration → 31
+billable calls per test, **93 calls total**. Output capped at 200 tokens; prompt
+~25 tokens; `openai-agents` tracing disabled. Three baselines isolate each layer:
 
-**Cost:** the benchmark JSON records timings only, not token usage. From the caps
-(≤240 input / ≤2400 output tokens over 12 calls), the run cost an estimated
-**≤ $0.0015** on gpt-4o-mini — sub-cent.
+- `test_live_bare_openai` — raw `chat.completions` call (one HTTP request).
+- `test_live_agents_no_argox` — full `openai-agents` `Runner`, **no** Argox.
+- `test_live_sdk_wrapped` — that same `Runner` **under** `ArgoxManager` (openai
+  plugin only, no processors or policy).
+
+So **agents framework cost** = `agents_no_argox` − `bare`, and **pure Argox
+overhead** = `sdk_wrapped` − `agents_no_argox`.
+
+**Cost:** ~$0.01–0.02 on gpt-4o-mini for the 93 calls (a couple of US cents).
 
 | Test | Mean | Median | StdDev | Min | Max |
 |---|---|---|---|---|---|
-| `test_live_bare_openai` | 1423 ms | 1398 ms | 100 ms | **1318 ms** | 1568 ms |
-| `test_live_sdk_wrapped` | 1550 ms | 1430 ms | 348 ms | **1319 ms** | 2167 ms |
+| `test_live_bare_openai` | 697 ms | 683 ms | 117 ms | **515 ms** | 959 ms |
+| `test_live_agents_no_argox` | 972 ms | 799 ms | 672 ms | **538 ms** | 4235 ms |
+| `test_live_sdk_wrapped` | 898 ms | 838 ms | 417 ms | **597 ms** | 2907 ms |
 
-**Relative overhead (`sdk_wrapped` vs `bare`), per statistic:**
+> The LLM was faster this day (~683 ms median vs ~1398 ms on 2026-06-05). Absolute
+> numbers are not comparable across days — only deltas within the same run are.
 
-| Statistic | bare | sdk_wrapped | Overhead |
+**Per-layer deltas (same run):**
+
+| Comparison | Median | Min | Mean |
 |---|---|---|---|
-| Mean | 1423 ms | 1550 ms | +8.9% |
-| Median | 1398 ms | 1430 ms | +2.2% |
-| Min | 1318 ms | 1319 ms | **+0.08%** |
-| Max | 1568 ms | 2167 ms | +38% |
+| Agents framework (`agents` − `bare`) | +116 ms | +23 ms | +275 ms |
+| **Pure Argox** (`sdk` − `agents`) | +39 ms | +59 ms | **−74 ms** |
 
-> The overhead % collapses mean → median → min as noise is stripped out. The min
-> (+0.08%, ~1 ms) is the true overhead floor; the +8.9% mean and +38% max are
-> inflated by a single slow LLM response, not by the SDK.
+**How to read this — Argox overhead stays below the noise floor even at N=30.**
 
-**How to read this — the SDK overhead is below the noise floor here.**
+- **The mean shows Argox as "negative" (−74 ms / −7.6%).** Argox cannot make
+  anything faster, so this is direct proof the delta is **LLM noise, not SDK
+  cost**. It happened because the `agents_no_argox` run caught a 4235 ms outlier
+  that inflated its mean and StdDev (672 ms, the largest of the three).
+- The Argox deltas by median (+39 ms) and min (+59 ms) are still **inside the
+  LLM's own jitter band** (StdDev 117–672 ms) — same order as the variance, not a
+  clean cost signal. The mock bench remains the authoritative overhead figure
+  (~tens of µs).
+- What **does** resolve is the *agents framework* cost (+116 ms median over the
+  raw call): the `openai-agents` loop (tool resolution, response parsing) is
+  measurable; Argox on top of it is not.
 
-- The LLM dominates wall time (~1.4 s) with 100–350 ms of round-to-round
-  variance. Argox overhead measured in isolation is ~100 µs (mock bench), so at
-  N=5 it is unresolvable against the LLM's own jitter.
-- **Do not read the mean delta (127 ms) as SDK overhead.** It is LLM/network
-  variance. The `sdk_wrapped` StdDev (348 ms, 3.5× `bare`) comes from a single
-  2167 ms slow response, which also inflates its mean.
-- The only clean signal at this sample size is **min-to-min: 1319 − 1318 ≈ 1 ms**,
-  consistent with the docstring's `~1ms` claim and with the mock overhead bench.
-- **Caveat:** `bare` is one HTTP call; `sdk_wrapped` is the full `openai-agents`
-  agent loop (tool resolution, response parsing) *plus* Argox. The delta is
-  "agent stack + Argox" vs "raw call", not pure Argox cost.
-- **To resolve Argox overhead live:** use N≥30 to average out LLM variance, add
-  a third baseline (agents `Runner` *without* Argox) to isolate the SDK layer,
-  and compare on **min or a high percentile**, never the mean.
-
-**Takeaway:** consistent with the mock benchmarks — Argox overhead is negligible
-(µs-to-low-ms) and disappears into LLM latency in any real deployment.
+**Takeaway:** raising N to 30 and adding the third baseline confirmed Argox
+overhead is **unresolvable live** — buried under LLM variance to the point of
+going negative on the mean. The mock benchmarks (~tens of µs) are the
+authoritative measurement; the live run only confirms it is invisible in any real
+deployment.
 
 ---
 
@@ -259,7 +294,7 @@ under `ArgoxManager` (openai plugin only, no processors or policy).
 
 | Benchmark | Target | Status |
 |---|---|---|
-| SDK overhead (no processors, no policy) | < 5ms mean | PASS — ~93µs |
+| SDK overhead (no processors, no policy) | < 5ms mean | PASS — ~47µs (shared loop; ~87µs pre-fix) |
 | SDK overhead % (100ms mock LLM) | < 5% | PASS — < 1% |
 | PII processor short text (< 100 chars) | < 1ms | PASS — ~58µs |
 | PII processor long text (~10k chars) | < 50ms | PASS — ~64µs |
