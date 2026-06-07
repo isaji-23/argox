@@ -87,3 +87,5 @@ agent_registry.jsonl
 # Claude Code — per-session doc-nudge markers (see .claude/hooks)
 # -----------------------------------------------------------------------------
 .argox/
+
+.untracked/

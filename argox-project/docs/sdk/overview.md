@@ -80,6 +80,16 @@ When the `@argox.monitor`-decorated function is called, `ArgoxManager`
 8. **`finally` · seal & export** — restore `agent.tools`, stamp `end_time`, fill
    the span with OTel GenAI semconv, invoke each `ExporterBase.export(metrics)`.
 
+Phase timing is **opt-in**: construct `ArgoxManager(enable_phase_timings=True)`
+(default `False`) and each phase boundary is timed with `time.perf_counter()` and
+written to `AgentRunMetrics.phase_timings` (keys: `processors_input`,
+`policy_input`, `tool_filter`, `agent_exec`, `processors_output`,
+`policy_output`, `export`). When enabled, all keys are pre-seeded to `0.0` at run
+start, so a key is always present even when its branch is skipped or the run
+raises before reaching it. When disabled the probes are skipped entirely (no
+`perf_counter` cost on the hot path) and `phase_timings` stays empty. SDK
+overhead percentage is `(total_ms - phase_timings["agent_exec"]) / total_ms * 100`.
+
 ## 4. Key behaviours
 
 - **One span per run.** Token totals, policy decisions, blocked-tool lists and

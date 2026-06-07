@@ -8,6 +8,36 @@ and resolves a non-trivial error.
 
 <!-- Add new entries directly below this line, newest first. -->
 
+## 2026-06-07 — `asyncio.run` per round dominated the overhead measurement  [BENCH-01]
+- **Symptom:** Overhead benchmarks reported ~90–105 µs median, but that figure was suspiciously high for the work being timed and barely separated `baseline` from the feature variants. The number was measuring scaffolding, not the SDK.
+- **Root cause:** Each benchmark callable was `asyncio.run(coro)`. `asyncio.run` builds a brand-new event loop and tears it down on **every** round — tens of microseconds of fixed cost plus heavy transient allocation. That allocation also fed the GC variance fought separately with `disable_gc`. The loop lifecycle, not Argox, dominated the timed region.
+- **Fix:** Add a session-scoped `bench_loop` fixture (`benchmarks/conftest.py`) that creates one event loop for the whole session, and drive every benchmark with `bench_loop.run_until_complete(coro)` so the timed region is the coroutine alone. Medians dropped ~90–105 µs → ~38–49 µs; StdDev tightened. The baseline-vs-feature delta — the metric that actually matters — is now clean.
+- **Guard:** All benches take the `bench_loop` fixture; the fixture docstring explains why `asyncio.run` must not be used in a timed region.
+
+## 2026-06-07 — Live bench `RuntimeError: Event loop is closed` on round 2  [BENCH-01]
+- **Symptom:** With the shared-loop fix in mind, the live benchmarks would have raised `RuntimeError: Event loop is closed` from round 2 onward: the `AsyncOpenAI` client is built once in the test body, but each round ran under a fresh `asyncio.run` loop.
+- **Root cause:** `AsyncOpenAI` lazily creates its underlying `httpx.AsyncClient` (and connection pool) bound to whichever event loop is running on first request. `asyncio.run` closes that loop at the end of round 1; round 2 opens a new loop, but the client's pool is still bound to the closed one.
+- **Fix:** Drive the live benchmarks on the same shared `bench_loop` via `benchmark.pedantic(lambda: bench_loop.run_until_complete(_call()), ...)`. One persistent loop for the client's lifetime removes the binding mismatch.
+- **Guard:** Comment in `bench_e2e_live.py` documents that the client binds its pool to the first loop, so per-round `asyncio.run` must not be reintroduced.
+
+## 2026-06-05 — Live benchmark 404s against Azure AI Foundry deployment  [BENCH-01]
+- **Symptom:** Live E2E request failed; the client posted to `/deployments/gpt-4o-mini/chat/completions` (an `AsyncAzureOpenAI` instance), which the deployment does not serve. The model is an Azure AI Foundry deployment exposed over the OpenAI-compatible surface, not classic Azure OpenAI.
+- **Root cause:** `AsyncAzureOpenAI` rewrites every request to the Azure-OpenAI URL shape `{endpoint}/openai/deployments/{deployment}/chat/completions?api-version=...`. Foundry's OpenAI-compatible endpoint expects the plain `{base_url}/chat/completions` shape and no `api-version`, so the rewritten path is wrong.
+- **Fix:** Use a plain `openai.AsyncOpenAI(api_key=..., base_url=AZURE_OPENAI_ENDPOINT)` (the endpoint is passed verbatim as `base_url`). For the `openai-agents` path, register it via `set_default_openai_client(...)` and reference the deployment by name as the agent `model`. This mirrors the working demo (`examples/demo_azure_openai.py`). See `benchmarks/bench_e2e_live.py::_openai_client`.
+- **Guard:** Module docstring documents the Foundry-vs-AzureOpenAI distinction so the client choice is not "corrected" back to `AsyncAzureOpenAI`.
+
+## 2026-06-05 — `@pytest.mark.benchmark` rejects `rounds`/`iterations` kwargs  [BENCH-01]
+- **Symptom:** `ValueError: benchmark mark can't have 'rounds' keyword argument.` raised at test setup for the live benchmarks (only surfaced once `ARGOX_LIVE_BENCH=1` let them past the skip).
+- **Root cause:** The `@pytest.mark.benchmark(...)` marker only accepts a fixed kwarg set (`max_time, min_rounds, min_time, timer, group, disable_gc, warmup, warmup_iterations, calibration_precision, cprofile`). `rounds`, `warmup_rounds`, and `iterations` are not marker kwargs — they belong to `benchmark.pedantic()`.
+- **Fix:** Drop those kwargs from the marker (keep only `group`) and call `benchmark.pedantic(fn, rounds=5, warmup_rounds=1, iterations=1)` instead. `pedantic` also pins the call count deterministically, which is what bounds live-API cost. See `benchmarks/bench_e2e_live.py`.
+- **Guard:** Live benchmarks use `pedantic`; comment explains the kwargs cannot live on the marker.
+
+## 2026-06-05 — Overhead benchmark `with_processors` showed 7x StdDev variance  [BENCH-01]
+- **Symptom:** `test_sdk_overhead_with_processors` reported `StdDev 70.3us (7.33)` with `Mean 122.8us` far above `Median 99.4us`, while sibling tests sat near 1.0-1.3x. Strong right-skewed distribution.
+- **Root cause:** Not the regex. The benchmark input is constant (`process_input` is a no-op since `redact_input=False`; only `process_output` runs over a fixed 29-char string), so per-round work is deterministic. The PII pipeline allocates many transient objects per call (entity `set`, 8 `finditer` iterators, `EntityMatch` tuples, `_resolve_overlaps` dict/sorted/list, `_apply` pieces list). CPython's generational GC fires on allocation thresholds, so the probability a GC sweep lands inside a measured round scales with allocations. `baseline` allocates almost nothing, so its distribution stays tight; `with_processors` catches frequent GC pauses → fat right tail. pytest-benchmark does **not** disable GC by default (`disable_gc=False`), so the pauses entered the measurement.
+- **Fix:** Add `disable_gc=True` to the `@pytest.mark.benchmark` markers in `argox-project/benchmarks/bench_overhead.py`. StdDev collapsed 70.3us (7.33x) → 17.7us (1.31x) and Mean converged to Median (skew gone), confirming GC as the source.
+- **Guard:** `disable_gc=True` on all four overhead benchmarks. `warmup=True` was trialed and **rejected** — it inflates round count and wall-time (~3.5s → ~13s), widening the sampling window and catching more host-scheduler noise, raising StdDev instead of lowering it. For these microbenchmarks track **median** (robust); residual Mean/StdDev reflects host load and varies per session, not the SDK.
+
 ## Format
 
 ```markdown
