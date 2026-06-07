@@ -132,6 +132,22 @@ mock LLM latency, < 1ms PII processor on short text.
 - Benchmark tuning learned this round: pytest-benchmark leaves GC on by default
   and the `@benchmark` marker rejects `rounds`/`iterations` kwargs — both
   captured in errors.md.
-- Consider adding a `make bench-save` baseline snapshot to CI once cassettes
-  are recorded, so regressions surface automatically (this suite feeds the CI
-  benchmark job tracked in #28 / INFRA-03).
+- Consider adding a `make bench-save` baseline snapshot to CI so regressions
+  surface automatically (this suite feeds the CI benchmark job tracked in #28 /
+  INFRA-03).
+
+### Deferred (minor, not blocking merge)
+
+Low-priority review nits left open intentionally; pick up in a follow-up:
+
+- **Trivial benchmark asserts** (`assert result is not None`, `len == N`) on the
+  pure-throughput benchmarks — they smoke-test but validate no behaviour. Fine as
+  guards; tighten only if a benchmark starts silently no-op'ing.
+- **Live bench imports raise instead of skip.** `test_live_sdk_wrapped` /
+  `test_live_agents_no_argox` import `agents` / `argox_openai` at runtime; if
+  missing they `ImportError` rather than `pytest.skip`, even though gated by
+  `ARGOX_LIVE_BENCH`. Wrap in try/`pytest.skip` for a clean skip on machines
+  without the agents stack.
+- **Pre-existing lint in `benchmarks/conftest.py`**: unused imports `os` and
+  `ArgoxProcessor` (F401) plus import-sort (I001). Predate BENCH-01;
+  `ruff check --fix` clears them.
