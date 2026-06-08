@@ -9,7 +9,12 @@ def test_agent_registry_register_and_get():
         version="1.0.0",
         tools=["tool1", "tool2"],
         description="A test agent",
-        framework="openai"
+        framework="openai",
+        model="gpt-4o",
+        system_prompt="You are a helpful assistant.",
+        tags=["test", "v1"],
+        temperature=0.7,
+        author="QA Team"
     )
     
     assert test_registry.is_registered("test-agent")
@@ -21,6 +26,10 @@ def test_agent_registry_register_and_get():
     assert metadata.tools == ["tool1", "tool2"]
     assert metadata.description == "A test agent"
     assert metadata.framework == "openai"
+    assert metadata.model == "gpt-4o"
+    assert metadata.system_prompt == "You are a helpful assistant."
+    assert metadata.tags == ["test", "v1"]
+    assert metadata.config == {"temperature": 0.7, "author": "QA Team"}
 
 def test_agent_registry_get_unregistered():
     test_registry = AgentRegistry()
