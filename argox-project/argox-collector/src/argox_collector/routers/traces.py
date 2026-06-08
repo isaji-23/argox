@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 
 import structlog
 from fastapi import APIRouter, BackgroundTasks, Request, Response
+from fastapi.concurrency import run_in_threadpool
 from google.protobuf import json_format
 from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import (
     ExportTraceServiceResponse,
@@ -126,7 +127,10 @@ async def ingest_traces(
     )
 
     if durable:
-        _persist(**persist_kwargs)
+        # _persist performs blocking disk/network I/O (notably the Azure blob
+        # upload). Run it in the threadpool so the durable path does not stall
+        # the event loop, mirroring the synchronous readyz handler.
+        await run_in_threadpool(_persist, **persist_kwargs)
         return _success_response(media_type, status_code=200)
 
     background_tasks.add_task(_persist, **persist_kwargs)
