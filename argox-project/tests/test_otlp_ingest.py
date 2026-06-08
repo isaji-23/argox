@@ -161,3 +161,57 @@ def test_empty_batch_succeeds_with_no_rows(client: TestClient) -> None:
     )
     assert response.status_code == 202
     assert _fetch_span(client) is None
+
+
+def test_durable_persist_failure_returns_503(client: TestClient) -> None:
+    # The durable contract is to return 200 only once the batch is committed.
+    # A storage failure must surface as a 5xx so the client can retry rather
+    # than silently losing the batch.
+    client.app.state.storage.put = lambda *a, **k: (_ for _ in ()).throw(
+        RuntimeError("disk full")
+    )
+    body = _sample_request().SerializeToString()
+    response = client.post(
+        "/v1/traces",
+        content=body,
+        headers={
+            "content-type": CONTENT_TYPE_PROTOBUF,
+            "x-argox-durable": "true",
+        },
+    )
+
+    assert response.status_code == 503
+    assert _fetch_span(client) is None
+
+
+def test_payload_over_limit_returns_413(tmp_path: Path) -> None:
+    settings = CollectorSettings(
+        storage_local_root=tmp_path / "blobs",
+        index_duckdb_path=tmp_path / "index.duckdb",
+        max_payload_size=1024,
+    )
+    client = TestClient(create_app(settings))
+
+    response = client.post(
+        "/v1/traces",
+        content=b"x" * 2048,
+        headers={"content-type": CONTENT_TYPE_PROTOBUF},
+    )
+
+    assert response.status_code == 413
+
+
+def test_payload_under_limit_is_accepted(tmp_path: Path) -> None:
+    settings = CollectorSettings(
+        storage_local_root=tmp_path / "blobs",
+        index_duckdb_path=tmp_path / "index.duckdb",
+        max_payload_size=1024 * 1024,
+    )
+    client = TestClient(create_app(settings))
+
+    body = _sample_request().SerializeToString()
+    response = client.post(
+        "/v1/traces", content=body, headers={"content-type": CONTENT_TYPE_PROTOBUF}
+    )
+
+    assert response.status_code == 202

@@ -10,6 +10,7 @@ from fastapi import FastAPI
 from argox_collector import __version__
 from argox_collector.index import TraceIndex, build_index
 from argox_collector.logging import configure_logging
+from argox_collector.middleware import PayloadSizeLimitMiddleware
 from argox_collector.routers import health, traces
 from argox_collector.settings import CollectorSettings
 from argox_collector.storage import StorageBackend, build_storage
@@ -60,6 +61,9 @@ def create_app(
     app.state.settings = settings
     app.state.storage = storage if storage is not None else build_storage(settings)
     app.state.index = index if index is not None else build_index(settings)
+    app.add_middleware(
+        PayloadSizeLimitMiddleware, max_bytes=settings.max_payload_size
+    )
     app.include_router(health.router)
     app.include_router(traces.router)
     return app

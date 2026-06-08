@@ -39,3 +39,8 @@ class CollectorSettings(BaseSettings):
 
     enrichment_enabled: bool = True
     pricing_table_path: Optional[Path] = None
+
+    # Maximum accepted request body size in bytes (default 10 MiB). Requests
+    # over this limit are rejected with 413 before the body is fully buffered,
+    # bounding memory use under concurrent or malicious uploads.
+    max_payload_size: int = 10 * 1024 * 1024
