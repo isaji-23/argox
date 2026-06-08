@@ -36,3 +36,6 @@ class CollectorSettings(BaseSettings):
 
     index_backend: str = "duckdb"
     index_duckdb_path: Path = Path("./var/argox/index.duckdb")
+
+    enrichment_enabled: bool = True
+    pricing_table_path: Optional[Path] = None
