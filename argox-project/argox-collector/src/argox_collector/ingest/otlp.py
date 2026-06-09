@@ -74,6 +74,10 @@ def decode_request(body: bytes, content_type: str) -> ExportTraceServiceRequest:
             payload = json.loads(body)
         except (ValueError, UnicodeDecodeError) as exc:
             raise OtlpDecodeError(f"invalid JSON body: {exc}") from exc
+        except RecursionError as exc:
+            # Pathologically nested JSON exhausts the parser's stack; treat it
+            # as a bad request rather than letting it surface as a 500.
+            raise OtlpDecodeError("JSON body nesting too deep") from exc
         _normalise_hex_ids(payload)
         try:
             json_format.ParseDict(payload, request)
@@ -123,7 +127,7 @@ def _span_to_record(span: Any, attributes: dict[str, Any]) -> SpanRecord:
         agent_version=attributes.get(semconv.ARGOX_AGENT_VERSION),
         policy_decision=attributes.get(semconv.ARGOX_POLICY_DECISION),
         run_cost=_as_float(run_cost),
-        run_success=attributes.get(semconv.ARGOX_RUN_SUCCESS),
+        run_success=_as_bool(attributes.get(semconv.ARGOX_RUN_SUCCESS)),
         attributes=attributes,
     )
 
@@ -141,6 +145,27 @@ def _as_float(value: Any) -> Optional[float]:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _as_bool(value: Any) -> Optional[bool]:
+    """Coerce an OTLP attribute into a ``bool`` for the DuckDB BOOLEAN column.
+
+    SDKs sometimes encode ``run.success`` as a string or number rather than a
+    native bool. Returning the raw value would make the whole batch's
+    ``executemany`` fail on a type mismatch, so unrecognised values degrade to
+    ``None`` instead.
+    """
+    if value is None or isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        normalised = value.strip().lower()
+        if normalised in {"true", "1", "yes"}:
+            return True
+        if normalised in {"false", "0", "no"}:
+            return False
+    return None
 
 
 def _key_values_to_dict(key_values: Any) -> dict[str, Any]:
@@ -176,16 +201,21 @@ def _normalise_hex_ids(payload: Any) -> None:
     Strict OTLP/JSON emits ``traceId``/``spanId``/``parentSpanId`` as hex,
     while ``json_format`` expects base64 for ``bytes`` fields. Values that are
     not valid hex (e.g. already base64) are left untouched.
+
+    Implemented iteratively with an explicit stack so deeply nested payloads
+    cannot exhaust the interpreter's recursion limit.
     """
-    if isinstance(payload, dict):
-        for key, val in payload.items():
-            if key in _HEX_ID_FIELDS and isinstance(val, str):
-                payload[key] = _hex_to_b64(val)
-            else:
-                _normalise_hex_ids(val)
-    elif isinstance(payload, list):
-        for item in payload:
-            _normalise_hex_ids(item)
+    stack = [payload]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, dict):
+            for key, val in node.items():
+                if key in _HEX_ID_FIELDS and isinstance(val, str):
+                    node[key] = _hex_to_b64(val)
+                elif isinstance(val, (dict, list)):
+                    stack.append(val)
+        elif isinstance(node, list):
+            stack.extend(node)
 
 
 def _hex_to_b64(value: str) -> str:

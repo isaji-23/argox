@@ -131,6 +131,22 @@ def test_duckdb_index_upsert_partial(index: DuckDBTraceIndex):
         assert row[1] == 300.0
 
 
+def test_duckdb_index_batch_survives_one_bad_row(index: DuckDBTraceIndex):
+    # A single row with a type DuckDB rejects (string in the BOOLEAN column)
+    # must not drop the whole batch: good rows still land via the per-row
+    # fallback, the bad row is skipped.
+    good_before = SpanRecord(trace_id="t-good-1", span_id="s1", name="ok")
+    bad = SpanRecord(trace_id="t-bad", span_id="s1", run_success="not-a-bool")
+    good_after = SpanRecord(trace_id="t-good-2", span_id="s1", name="ok")
+
+    index.insert_spans([good_before, bad, good_after])
+
+    with index._lock:
+        rows = index._conn.execute("SELECT trace_id FROM spans ORDER BY trace_id").fetchall()
+    trace_ids = {r[0] for r in rows}
+    assert trace_ids == {"t-good-1", "t-good-2"}
+
+
 def test_duckdb_index_health_check(index: DuckDBTraceIndex):
     # Should not raise
     index.health_check()
