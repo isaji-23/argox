@@ -8,6 +8,18 @@ and resolves a non-trivial error.
 
 <!-- Add new entries directly below this line, newest first. -->
 
+## 2026-06-09 — Durable ingest acknowledged batches it had actually lost  [COL-03]
+- **Symptom:** A `POST /v1/traces` with `X-Argox-Durable: true` returned 200 even when the blob write or DuckDB insert failed (disk full, Azure 5xx). The client believed the batch was committed; it was gone. The docstring/ADR promised "200 only once committed".
+- **Root cause:** `_persist` wrapped its whole body in `except Exception: logger.exception(...)` and never re-raised. That is correct for the background (fire-and-forget) path — the client was already acknowledged — but the durable path reused the same swallowing function and then returned 200 unconditionally, so a failure could not reach the response.
+- **Fix:** Split the two paths. `_persist` now raises; the background task wraps it in `_persist_safe` (log-and-swallow), while the durable path catches the exception and returns **503**. ADR-0002 updated to state durable failures surface as 5xx.
+- **Guard:** `test_durable_persist_failure_returns_503` patches `storage.put` to raise and asserts the durable request gets 503 with no row indexed.
+
+## 2026-06-09 — One malformed span dropped an entire ingest batch  [COL-03]
+- **Symptom:** A batch insert (`executemany`) of span records failed wholesale when a single span carried an unexpected type — e.g. `run.success` arriving as the string `"true"` against the DuckDB BOOLEAN column — so every good span in the batch was lost and only a log line remained.
+- **Root cause:** `executemany` is one statement; a type mismatch on any row aborts the whole call. The raw attribute value was passed straight into the BOOLEAN column with no coercion.
+- **Fix:** `_as_bool` coerces `run.success` (string/number → bool, unparseable → None) in `_span_to_record`, and `insert_spans` falls back to per-row inserts when the batch fails, skipping only the offending rows. The existing upsert keeps the per-row retry idempotent.
+- **Guard:** `test_duckdb_index_batch_survives_one_bad_row` interleaves a bad row between two good ones and asserts only the good rows land; `test_run_success_string_attribute_is_coerced` covers the coercion.
+
 ## 2026-06-07 — `asyncio.run` per round dominated the overhead measurement  [BENCH-01]
 - **Symptom:** Overhead benchmarks reported ~90–105 µs median, but that figure was suspiciously high for the work being timed and barely separated `baseline` from the feature variants. The number was measuring scaffolding, not the SDK.
 - **Root cause:** Each benchmark callable was `asyncio.run(coro)`. `asyncio.run` builds a brand-new event loop and tears it down on **every** round — tens of microseconds of fixed cost plus heavy transient allocation. That allocation also fed the GC variance fought separately with `disable_gc`. The loop lifecycle, not Argox, dominated the timed region.

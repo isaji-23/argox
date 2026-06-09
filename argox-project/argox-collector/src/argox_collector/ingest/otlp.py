@@ -219,6 +219,11 @@ def _normalise_hex_ids(payload: Any) -> None:
 
 
 def _hex_to_b64(value: str) -> str:
+    # KNOWN LIMITATION: a base64 id that happens to be all hex chars and of
+    # even length (e.g. "abcdef01") is indistinguishable from hex here and gets
+    # misconverted. Low impact because protobuf is the primary, lossless
+    # transport and JSON is documented as best-effort; revisit if a strict
+    # OTLP/JSON client surfaces id corruption.
     if len(value) % 2 != 0 or not _HEX_RE.match(value):
         return value
     try:

@@ -31,6 +31,23 @@
 - Collector-local `semconv.py` mirrors the SDK attribute keys so the Collector
   keeps no runtime dependency on `argox-core`.
 
+### Hardening (2026-06-09)
+
+- Durable contract now enforced: `_persist` raises on failure and the durable
+  path returns **503** instead of a silent 200, so `X-Argox-Durable: true`
+  callers learn when a batch was lost. The background path keeps the
+  log-and-swallow behaviour (client already acknowledged). See ADR-0002.
+- New `PayloadSizeLimitMiddleware` (`middleware.py`, pure ASGI) rejects bodies
+  over `max_payload_size` (default 10 MiB) with **413**, aborting *during* the
+  read so chunked uploads without `Content-Length` cannot exhaust memory.
+- OTLP decode hardened: hex-id normalisation is now iterative (no recursion
+  limit) and a deep-nesting `RecursionError` is mapped to **400** rather than a
+  500. JSON/415/400/503 error bodies go through a single JSON-safe helper.
+- DuckDB ingest resilience: `run.success` attributes are coerced to bool, and
+  `insert_spans` falls back to per-row inserts when a batch fails, so one
+  malformed span no longer drops the whole batch (the upsert keeps retries
+  idempotent).
+
 ## Why
 
 The Collector had storage (COL-02) and a DuckDB index (COL-04) but no ingest
@@ -48,3 +65,8 @@ is locked in ADR-0002.
 - Auth is out of scope until **COL-09 (#94)**.
 - OTLP/JSON is best-effort: strict hex-encoded `trace_id`/`span_id` are
   normalised to base64 for `json_format`. Protobuf is the lossless transport.
+  Known limitation (commented in `_hex_to_b64`): a base64 id that is
+  coincidentally all-hex and even-length is misconverted; low impact while
+  protobuf stays primary.
+- `host` defaults to `0.0.0.0` (commented in `settings.py`): intended for
+  containerised deploys but exposed until auth lands in COL-09.

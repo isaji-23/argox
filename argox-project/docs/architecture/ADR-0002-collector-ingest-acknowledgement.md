@@ -30,8 +30,16 @@ Ingest endpoints **validate synchronously, persist asynchronously by default**:
    return **200 OK** only after the commit succeeds.
 
 Persistence errors inside the background task are logged, never raised — the
-caller has already been acknowledged. Enrichment runs inside the same
-persistence step and must be idempotent so a retried batch is safe.
+caller has already been acknowledged. On the **durable** path the opposite
+holds: a persistence failure is surfaced to the client as **503** so the batch
+is never silently lost (returning 200 on failure would break the durability
+guarantee the header promises). Enrichment runs inside the same persistence
+step and must be idempotent so a retried batch is safe.
+
+Requests are bounded before they reach this contract: a body-size guardrail
+rejects payloads over `max_payload_size` (default 10 MiB) with **413**,
+aborting during the read so an oversized or chunked upload cannot exhaust
+memory ahead of the synchronous validation.
 
 ## Triggers for the next refactor
 

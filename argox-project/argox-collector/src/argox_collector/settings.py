@@ -25,6 +25,9 @@ class CollectorSettings(BaseSettings):
 
     service_name: str = "argox-collector"
     environment: str = "development"
+    # NOTE: binds all interfaces, which is intended for containerised deploys
+    # but leaves the endpoint exposed since auth is not yet in place. Tighten
+    # to 127.0.0.1, or front with auth, once COL-09 lands.
     host: str = "0.0.0.0"
     port: int = 8000
     log_level: str = "INFO"
