@@ -25,6 +25,9 @@ class CollectorSettings(BaseSettings):
 
     service_name: str = "argox-collector"
     environment: str = "development"
+    # NOTE: binds all interfaces, which is intended for containerised deploys
+    # but leaves the endpoint exposed since auth is not yet in place. Tighten
+    # to 127.0.0.1, or front with auth, once COL-09 lands.
     host: str = "0.0.0.0"
     port: int = 8000
     log_level: str = "INFO"
@@ -36,3 +39,11 @@ class CollectorSettings(BaseSettings):
 
     index_backend: str = "duckdb"
     index_duckdb_path: Path = Path("./var/argox/index.duckdb")
+
+    enrichment_enabled: bool = True
+    pricing_table_path: Optional[Path] = None
+
+    # Maximum accepted request body size in bytes (default 10 MiB). Requests
+    # over this limit are rejected with 413 before the body is fully buffered,
+    # bounding memory use under concurrent or malicious uploads.
+    max_payload_size: int = 10 * 1024 * 1024

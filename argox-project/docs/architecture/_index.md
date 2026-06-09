@@ -8,3 +8,4 @@ decision future contributors should not silently re-open.
 | ID | Title | Status |
 |---|---|---|
 | ADR-0001 | [Plugin interface evolution](plugin-interface-evolution.md) | accepted |
+| ADR-0002 | [Collector ingest acknowledgement semantics](ADR-0002-collector-ingest-acknowledgement.md) | accepted |

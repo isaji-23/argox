@@ -9,8 +9,32 @@ from pathlib import Path
 from typing import Optional
 
 import duckdb
+import structlog
 
 from argox_collector.index.base import SpanRecord, TraceIndex, TraceIndexError
+
+logger = structlog.get_logger(__name__)
+
+_INSERT_SQL = """
+    INSERT INTO spans (
+        trace_id, span_id, parent_span_id, name,
+        start_time, end_time, duration_ms,
+        agent_name, agent_version, policy_decision,
+        run_cost, run_success, attributes
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT (trace_id, span_id) DO UPDATE SET
+        parent_span_id = COALESCE(excluded.parent_span_id, spans.parent_span_id),
+        name = COALESCE(NULLIF(excluded.name, ''), spans.name),
+        start_time = COALESCE(excluded.start_time, spans.start_time),
+        end_time = COALESCE(excluded.end_time, spans.end_time),
+        duration_ms = COALESCE(excluded.duration_ms, spans.duration_ms),
+        agent_name = COALESCE(excluded.agent_name, spans.agent_name),
+        agent_version = COALESCE(excluded.agent_version, spans.agent_version),
+        policy_decision = COALESCE(excluded.policy_decision, spans.policy_decision),
+        run_cost = COALESCE(excluded.run_cost, spans.run_cost),
+        run_success = COALESCE(excluded.run_success, spans.run_success),
+        attributes = COALESCE(excluded.attributes, spans.attributes)
+"""
 
 
 def _to_naive_utc(dt: Optional[datetime]) -> Optional[datetime]:
@@ -94,26 +118,26 @@ class DuckDBTraceIndex(TraceIndex):
         ]
 
         with self._lock:
-            self._conn.executemany("""
-                INSERT INTO spans (
-                    trace_id, span_id, parent_span_id, name, 
-                    start_time, end_time, duration_ms,
-                    agent_name, agent_version, policy_decision, 
-                    run_cost, run_success, attributes
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT (trace_id, span_id) DO UPDATE SET
-                    parent_span_id = COALESCE(excluded.parent_span_id, spans.parent_span_id),
-                    name = COALESCE(NULLIF(excluded.name, ''), spans.name),
-                    start_time = COALESCE(excluded.start_time, spans.start_time),
-                    end_time = COALESCE(excluded.end_time, spans.end_time),
-                    duration_ms = COALESCE(excluded.duration_ms, spans.duration_ms),
-                    agent_name = COALESCE(excluded.agent_name, spans.agent_name),
-                    agent_version = COALESCE(excluded.agent_version, spans.agent_version),
-                    policy_decision = COALESCE(excluded.policy_decision, spans.policy_decision),
-                    run_cost = COALESCE(excluded.run_cost, spans.run_cost),
-                    run_success = COALESCE(excluded.run_success, spans.run_success),
-                    attributes = COALESCE(excluded.attributes, spans.attributes)
-            """, data)
+            try:
+                self._conn.executemany(_INSERT_SQL, data)
+            except Exception:
+                # A single malformed row (e.g. an unexpected attribute type)
+                # would otherwise drop the whole batch. Fall back to per-row
+                # inserts so good spans still land; the upsert keeps the retry
+                # idempotent for any rows the batch had already written.
+                logger.warning("duckdb_batch_insert_failed", count=len(data))
+                self._insert_rows_individually(data)
+
+    def _insert_rows_individually(self, rows: list) -> None:
+        for row in rows:
+            try:
+                self._conn.execute(_INSERT_SQL, row)
+            except Exception:
+                logger.warning(
+                    "duckdb_row_insert_skipped",
+                    trace_id=row[0],
+                    span_id=row[1],
+                )
 
     def health_check(self) -> None:
         try:
