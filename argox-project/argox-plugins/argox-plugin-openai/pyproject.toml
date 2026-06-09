@@ -1,0 +1,27 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "argox-plugin-openai"
+version = "0.1.0"
+description = "Argox plugin for the OpenAI Agents SDK."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+dependencies = [
+    "argox-core>=0.1.0",
+    "openai-agents>=0.0.7",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4",
+    "pytest-asyncio>=0.23",
+]
+
+[project.entry_points."argox.plugins"]
+openai = "argox_openai:ArgoxOpenAIPlugin"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/argox_openai"]

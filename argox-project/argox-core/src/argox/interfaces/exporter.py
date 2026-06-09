@@ -2,23 +2,30 @@
 IFACE-02 — Exporter
 =======================
 Contract that every metrics exporter must implement.
+
 An exporter receives a fully populated AgentRunMetrics (the run has finished)
-and sends it to a destination: local file, blob storage, observability system…
+and sends it to a destination: local file, blob storage, observability system
+
 The community can implement custom exporters by installing them as standalone
 packages and registering them with the ArgoxManager.
 """
+
 from __future__ import annotations
 from abc import ABC, abstractmethod
 from argox.core.state import AgentRunMetrics
+
 class ExporterBase(ABC):
     """
     Abstract interface for metrics exporters.
+
     Each exporter implements a single method (``export``) that receives the
     metrics from a run and persists or sends them to their destination.
+
     Official exporters included in argox-core:
         - ``JsonlExporter``   — persists to a local ``.jsonl`` file.
         - ``ConsoleExporter`` — prints a human-readable summary to stdout.
         - ``AzureBlobExporter`` — uploads to Azure Blob Storage.
+    
     Example of a custom exporter for Prometheus::
         class PrometheusExporter(ExporterBase):
             def __init__(self, push_gateway_url: str):
@@ -30,6 +37,7 @@ class ExporterBase(ABC):
                     registry=build_registry(metrics),
                 )
     """
+    
     @abstractmethod
     def export(self, metrics: AgentRunMetrics) -> None:
         """

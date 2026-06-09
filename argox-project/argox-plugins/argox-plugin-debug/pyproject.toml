@@ -1,0 +1,24 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "argox-plugin-debug"
+version = "0.1.0"
+description = "Argox debug plugin for development and testing."
+requires-python = ">=3.9"
+license = { text = "MIT" }
+dependencies = [
+    "argox-core>=0.1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4",
+]
+
+[project.entry_points."argox.plugins"]
+debug = "argox_debug:ArgoxDebugPlugin"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/argox_debug"]
