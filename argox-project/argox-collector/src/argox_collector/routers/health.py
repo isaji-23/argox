@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import structlog
 from fastapi import APIRouter, Request, Response
 from pydantic import BaseModel
 
@@ -9,6 +10,8 @@ from argox_collector import __version__
 from argox_collector.index import TraceIndex, TraceIndexError
 from argox_collector.settings import CollectorSettings
 from argox_collector.storage import StorageBackend, StorageError
+
+logger = structlog.get_logger(__name__)
 
 router = APIRouter(tags=["health"])
 
@@ -70,13 +73,18 @@ def readyz(request: Request, response: Response) -> ReadinessResponse:
     pool: the storage health check performs blocking network I/O on the
     Azure driver and would otherwise stall the event loop.
     """
+    # Check failures are reported as a bare "unavailable": the endpoint is
+    # unauthenticated and backend error text can embed deployment internals
+    # (filesystem paths from OSError, Azure container names). Full detail
+    # goes to the structured log for operators.
     checks = {"process": "ok"}
     overall = "ok"
     try:
         _storage(request).health_check()
         checks["storage"] = "ok"
     except StorageError as exc:
-        checks["storage"] = f"unavailable: {exc}"
+        logger.error("readyz_storage_check_failed", error=str(exc))
+        checks["storage"] = "unavailable"
         overall = "degraded"
         response.status_code = 503
 
@@ -84,7 +92,8 @@ def readyz(request: Request, response: Response) -> ReadinessResponse:
         _index(request).health_check()
         checks["index"] = "ok"
     except TraceIndexError as exc:
-        checks["index"] = f"unavailable: {exc}"
+        logger.error("readyz_index_check_failed", error=str(exc))
+        checks["index"] = "unavailable"
         overall = "degraded"
         response.status_code = 503
 

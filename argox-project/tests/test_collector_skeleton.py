@@ -8,6 +8,7 @@ import pytest
 from argox_collector import __version__
 from argox_collector.app import create_app
 from argox_collector.settings import CollectorSettings
+from argox_collector.index.duckdb import DuckDBTraceIndex
 from argox_collector.storage import LocalStorageBackend, StorageError
 from fastapi.testclient import TestClient
 
@@ -91,7 +92,7 @@ def test_readyz_returns_503_when_storage_health_check_fails(
 ) -> None:
     class _BrokenBackend(LocalStorageBackend):
         def health_check(self) -> None:
-            raise StorageError("simulated outage")
+            raise StorageError("outage at /var/secret/blobs")
 
     storage = _BrokenBackend(root=settings.storage_local_root)
     client = TestClient(create_app(settings, storage=storage))
@@ -101,4 +102,22 @@ def test_readyz_returns_503_when_storage_health_check_fails(
     payload = response.json()
     assert payload["status"] == "degraded"
     assert payload["checks"]["process"] == "ok"
-    assert "simulated outage" in payload["checks"]["storage"]
+    # The endpoint is unauthenticated: backend error text (which can embed
+    # filesystem paths or container names) must never reach the response.
+    assert payload["checks"]["storage"] == "unavailable"
+    assert "/var/secret/blobs" not in response.text
+
+
+def test_readyz_returns_503_when_index_health_check_fails(
+    settings: CollectorSettings, tmp_path: Path
+) -> None:
+    index = DuckDBTraceIndex(tmp_path / "index.duckdb")
+    index.close()
+    client = TestClient(create_app(settings, index=index))
+
+    response = client.get("/readyz")
+    assert response.status_code == 503
+    payload = response.json()
+    assert payload["status"] == "degraded"
+    assert payload["checks"]["index"] == "unavailable"
+    assert str(tmp_path) not in response.text
