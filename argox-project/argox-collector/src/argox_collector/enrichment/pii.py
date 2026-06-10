@@ -32,24 +32,85 @@ from argox_collector.index.base import SpanRecord
 _MAX_SCAN_CHARS = 16_384
 _MAX_EVENTS_SCANNED = 100
 
-# High-confidence patterns. Kept conservative to limit false positives.
+# High-confidence patterns. Kept conservative to limit false positives; the
+# checksum-carrying entities (IBAN, CREDIT_CARD, ES_DNI) are additionally
+# post-validated so a regex hit alone is not enough to tag the span.
 _PATTERNS = {
     "EMAIL": re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b"),
     "IBAN": re.compile(r"\b[A-Z]{2}\d{2}[A-Z0-9]{11,30}\b"),
     "CREDIT_CARD": re.compile(r"\b(?:\d[ -]?){13,16}\b"),
-    "PHONE": re.compile(r"(?<!\d)(?:\+?\d{1,3}[ .-]?)?(?:\d[ .-]?){9,11}\d(?!\d)"),
+    # E.164 with a mandatory leading ``+``, mirroring the SDK's
+    # PiiRedactionProcessor. A bare-digit phone pattern would match any
+    # 10-13 digit run and defeat the credit-card Luhn post-validation.
+    "PHONE": re.compile(r"(?<!\d)\+[1-9]\d{6,14}(?!\d)"),
     "ES_DNI": re.compile(r"\b\d{8}[A-HJ-NP-TV-Z]\b"),
+}
+
+
+def _luhn_valid(value: str) -> bool:
+    """Return ``True`` when ``value`` (separators allowed) passes Luhn."""
+    digits = re.sub(r"[ -]", "", value)
+    if not digits.isdigit() or not (13 <= len(digits) <= 19):
+        return False
+    total = 0
+    parity = len(digits) % 2
+    for i, ch in enumerate(digits):
+        n = ord(ch) - 48
+        if i % 2 == parity:
+            n *= 2
+            if n > 9:
+                n -= 9
+        total += n
+    return total % 10 == 0
+
+
+def _iban_valid(value: str) -> bool:
+    """Validate an IBAN candidate with the ISO 13616 mod-97 check."""
+    compact = value.replace(" ", "").upper()
+    if not (15 <= len(compact) <= 34):
+        return False
+    rearranged = compact[4:] + compact[:4]
+    try:
+        numeric = "".join(str(int(ch, 36)) for ch in rearranged)
+    except ValueError:
+        return False
+    return int(numeric) % 97 == 1
+
+
+_DNI_LETTERS = "TRWAGMYFPDXBNJZSQVHLCKE"
+
+
+def _es_dni_valid(value: str) -> bool:
+    """Check the control letter of a Spanish DNI (``8 digits + letter``)."""
+    return value[8].upper() == _DNI_LETTERS[int(value[:8]) % 23]
+
+
+_VALIDATORS = {
+    "IBAN": _iban_valid,
+    "CREDIT_CARD": _luhn_valid,
+    "ES_DNI": _es_dni_valid,
 }
 
 
 def contains_pii(text: str) -> bool:
     """Return ``True`` when any high-confidence PII pattern matches ``text``.
 
-    Input is truncated to ``_MAX_SCAN_CHARS`` so oversized values cannot burn
-    unbounded CPU on the ingest path.
+    Entities with a checksum (IBAN, credit card, Spanish DNI) only count when
+    the checksum verifies, so random digit runs do not tag the span. Input is
+    truncated to ``_MAX_SCAN_CHARS`` so oversized values cannot burn unbounded
+    CPU on the ingest path.
     """
     text = text[:_MAX_SCAN_CHARS]
-    return any(pattern.search(text) for pattern in _PATTERNS.values())
+    for entity, pattern in _PATTERNS.items():
+        validator = _VALIDATORS.get(entity)
+        if validator is None:
+            if pattern.search(text):
+                return True
+            continue
+        for match in pattern.finditer(text):
+            if validator(match.group(0)):
+                return True
+    return False
 
 
 def scan(record: SpanRecord) -> SpanRecord:

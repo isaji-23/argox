@@ -68,6 +68,38 @@ def test_pii_scan_tags_iban() -> None:
     assert pii.scan(record).attributes["argox.pii.residual_detected"] is True
 
 
+def test_pii_scan_rejects_iban_with_bad_checksum() -> None:
+    # Same shape as a real IBAN but the mod-97 check fails.
+    record = _record(**{"note": "IBAN ES0021000418450200051332"})
+    assert pii.scan(record) is record
+
+
+def test_pii_scan_rejects_credit_card_failing_luhn() -> None:
+    record = _record(**{"note": "ref 4111 1111 1111 1112"})
+    assert pii.scan(record) is record
+
+
+def test_pii_scan_tags_e164_phone() -> None:
+    record = _record(**{"note": "call +34600112233"})
+    assert pii.scan(record).attributes["argox.pii.residual_detected"] is True
+
+
+def test_pii_scan_ignores_bare_digit_runs() -> None:
+    # Without a leading + this is indistinguishable from an order id.
+    record = _record(**{"note": "order 6001122334455"})
+    assert pii.scan(record) is record
+
+
+def test_pii_scan_tags_valid_spanish_dni() -> None:
+    record = _record(**{"note": "dni 12345678Z"})
+    assert pii.scan(record).attributes["argox.pii.residual_detected"] is True
+
+
+def test_pii_scan_rejects_dni_with_bad_control_letter() -> None:
+    record = _record(**{"note": "dni 12345678A"})
+    assert pii.scan(record) is record
+
+
 def test_pii_scan_leaves_clean_span_untouched() -> None:
     record = _record(**{"prompt": "summarise the quarterly report"})
     enriched = pii.scan(record)
