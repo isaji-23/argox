@@ -9,3 +9,4 @@ decision future contributors should not silently re-open.
 |---|---|---|
 | ADR-0001 | [Plugin interface evolution](plugin-interface-evolution.md) | accepted |
 | ADR-0002 | [Collector ingest acknowledgement semantics](ADR-0002-collector-ingest-acknowledgement.md) | accepted |
+| ADR-0003 | [Policy storage — content-addressed blobs committed via manifest CAS](ADR-0003-policy-storage-content-addressed-cas.md) | accepted |
