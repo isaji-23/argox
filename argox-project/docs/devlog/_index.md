@@ -8,6 +8,7 @@ for the decisions behind these changes and
 
 | Date | Ticket | Title | PR | Status |
 |---|---|---|---|---|
+| 2026-06-10 | COL-04 | Harden DuckDB indexing layer | #131 | in-review |
 | 2026-06-10 | DEPLOY-01 | Local Docker Compose stack | #130 | in-review |
 | 2026-06-10 | COL-16 | Docker azure extra + configurable CORS | #129 | merged |
 | 2026-06-10 | COL-06 | Query API for traces and metrics | #127 | in-review |

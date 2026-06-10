@@ -8,6 +8,30 @@ and resolves a non-trivial error.
 
 <!-- Add new entries directly below this line, newest first. -->
 
+## 2026-06-10 — NaN attribute values poison metrics and silently drop spans  [COL-04]
+- **Symptom:** Two failure modes found by audit, not in production: (1) an OTLP
+  double attribute carrying NaN (or a string `"nan"`) lands in `run_cost`, after
+  which `SUM(run_cost)` returns NaN and the `/api/v1/metrics/*` response fails
+  to JSON-encode (starlette serialises with `allow_nan=False`) → 500. (2) A NaN
+  inside the span `attributes` dict makes `json.dumps` emit a bare `NaN`
+  literal, which DuckDB's JSON column parser rejects at insert — the per-row
+  fallback then skips the row, so the span vanishes without any client error.
+- **Root cause:** `float("nan")` passes `float()` coercion and `json.dumps`
+  by default (`allow_nan=True` produces JSON-invalid output); nothing in the
+  ingest → index path checked finiteness. Additionally, attribute
+  serialisation ran during batch preparation, *before* the
+  `executemany`/per-row fallback, so a non-serializable attribute raised
+  `TypeError` and lost the entire batch with no row ever written.
+- **Fix:** PR #131 — `math.isfinite` guards in `_as_float` (ingest) and
+  `_finite_or_none` (index write path); `_encode_attributes` serialises with
+  `allow_nan=False` and degrades bad values to strings via `_json_safe`;
+  cost/latency aggregates filter `isfinite(...)` to neutralise rows written
+  before the fix.
+- **Guard:** `tests/test_index.py` (NaN attributes keep the row, non-finite
+  doubles stored as NULL, metrics ignore poisoned rows, unserializable
+  attributes don't drop the batch) and `tests/test_otlp_ingest.py`
+  (non-finite `argox.run.cost` dropped at ingest).
+
 ## 2026-06-10 — OTel sidecar exports dropped: Collector rejects gzip bodies  [DEPLOY-01]
 - **Symptom:** OTel collector sidecar logs `Exporting failed. Dropping data. ... request to http://collector:8000/v1/traces responded with HTTP Status Code 400` while its own debug exporter shows the spans arriving fine; nothing reaches the Argox Collector.
 - **Root cause:** The `otlphttp` exporter compresses request bodies with gzip by default. The Collector's ingest endpoint parses the raw body as protobuf/JSON and does not decompress `Content-Encoding: gzip`, so the payload is malformed from its point of view → 400.

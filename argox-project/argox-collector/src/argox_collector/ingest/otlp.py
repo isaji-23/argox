@@ -18,6 +18,7 @@ from __future__ import annotations
 import base64
 import binascii
 import json
+import math
 import re
 from datetime import datetime, timezone
 from typing import Any, Optional
@@ -139,12 +140,20 @@ def _nanos_to_dt(nanos: int) -> Optional[datetime]:
 
 
 def _as_float(value: Any) -> Optional[float]:
+    """Coerce an OTLP attribute into a finite ``float``.
+
+    OTLP doubles (and strings such as ``"nan"``) can carry NaN/Infinity,
+    which would poison every index aggregate they enter and cannot be
+    encoded in the JSON metrics responses, so non-finite values degrade to
+    ``None``.
+    """
     if value is None:
         return None
     try:
-        return float(value)
+        parsed = float(value)
     except (TypeError, ValueError):
         return None
+    return parsed if math.isfinite(parsed) else None
 
 
 def _as_bool(value: Any) -> Optional[bool]:
