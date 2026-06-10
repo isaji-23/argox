@@ -151,6 +151,11 @@ semconv, policy parser + local cache, `ConsoleSpanLogger`, `JsonlSpanExporter`,
 `argox-plugin-debug` (stub), `argox-exporter-azure` (`AzureBlobSpanExporter`
 — fully implemented), end-to-end Azure OpenAI demo.
 
+On the Collector side, policy distribution now exists (COL-05):
+`GET /api/v1/policies/bundle` serves a merged, SDK-parseable `PolicyDocument`
+YAML with ETag/304 caching — the endpoint `RemotePolicyClient` polls — backed
+by versioned policy CRUD under `/api/v1/policies`.
+
 **Not yet:** no real `SsePolicyClient` (only the contract + in-process cache),
 no durable audit storage or dashboard from the SDK (only the `metrics` object
 and OTel spans ready to export).
