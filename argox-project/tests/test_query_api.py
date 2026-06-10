@@ -32,6 +32,8 @@ def _spans() -> list[SpanRecord]:
             run_success=True,
             attributes={"model": "gpt-4o"},
         ),
+        # Child span carries its own cost: the cost contract sums ALL spans,
+        # so this must land in trace and window totals alongside the root's.
         SpanRecord(
             trace_id="t1",
             span_id="s2",
@@ -42,6 +44,7 @@ def _spans() -> list[SpanRecord]:
             duration_ms=40_000.0,
             agent_name="agent-a",
             agent_version="1.0",
+            run_cost=0.02,
         ),
         # t2: older trace, failed run.
         SpanRecord(
@@ -99,7 +102,8 @@ def test_index_list_traces_aggregates_and_sorts(index: DuckDBTraceIndex) -> None
 
     t1 = summaries[0]
     assert t1["span_count"] == 2
-    assert t1["total_cost"] == pytest.approx(0.05)
+    # Root (0.05) + child (0.02): trace cost sums all spans.
+    assert t1["total_cost"] == pytest.approx(0.07)
     assert t1["total_duration_ms"] == pytest.approx(100_000.0)
     assert t1["agent_name"] == "agent-a"
     assert t1["agent_version"] == "1.0"
@@ -133,7 +137,8 @@ def test_index_list_traces_prefers_root_span_agent(tmp_path: Path) -> None:
 
 
 def test_index_get_trace_orders_spans_and_roundtrips(index: DuckDBTraceIndex) -> None:
-    spans = index.get_trace("t1")
+    spans, truncated = index.get_trace("t1")
+    assert truncated is False
     assert [s.span_id for s in spans] == ["s1", "s2"]
     assert spans[0].attributes == {"model": "gpt-4o"}
     assert spans[0].start_time.tzinfo is not None
@@ -141,16 +146,53 @@ def test_index_get_trace_orders_spans_and_roundtrips(index: DuckDBTraceIndex) ->
 
 
 def test_index_get_trace_unknown_returns_empty(index: DuckDBTraceIndex) -> None:
-    assert index.get_trace("missing") == []
+    assert index.get_trace("missing") == ([], False)
+
+
+def test_index_get_trace_caps_span_count(index: DuckDBTraceIndex) -> None:
+    spans, truncated = index.get_trace("t1", max_spans=1)
+    assert truncated is True
+    assert [s.span_id for s in spans] == ["s1"]
+
+
+def test_index_get_trace_survives_corrupt_attributes(index: DuckDBTraceIndex) -> None:
+    # DuckDB's JSON column rejects malformed JSON at write time, so the
+    # storable corruption is valid JSON that is not an object. The span must
+    # still be returned (with empty attributes) instead of failing the trace.
+    with index._lock:
+        index._conn.execute(
+            "UPDATE spans SET attributes = '[1, 2]' WHERE span_id = 's1'"
+        )
+    spans, _ = index.get_trace("t1")
+    assert [s.span_id for s in spans] == ["s1", "s2"]
+    assert spans[0].attributes == {}
+
+
+def test_index_reads_do_not_hold_writer_lock(index: DuckDBTraceIndex) -> None:
+    # Reads run on their own cursors so a held writer lock (an in-flight
+    # insert_spans) cannot stall dashboard queries — and vice versa.
+    import threading
+
+    result: dict = {}
+
+    def read() -> None:
+        result["summaries"] = index.list_traces()
+
+    with index._lock:
+        thread = threading.Thread(target=read, daemon=True)
+        thread.start()
+        thread.join(timeout=5)
+    assert "summaries" in result, "read blocked on the writer lock"
 
 
 def test_index_metrics_cost_respects_window(index: DuckDBTraceIndex) -> None:
     metrics = index.get_metrics_cost(window_hours=24)
-    assert metrics["total_cost"] == pytest.approx(0.15)
+    # 0.05 (t1 root) + 0.02 (t1 child) + 0.10 (t2 root): all spans count.
+    assert metrics["total_cost"] == pytest.approx(0.17)
     assert metrics["trace_count"] == 2
 
     wide = index.get_metrics_cost(window_hours=720)
-    assert wide["total_cost"] == pytest.approx(10.14)
+    assert wide["total_cost"] == pytest.approx(10.16)
     assert wide["trace_count"] == 3
 
 
@@ -196,7 +238,7 @@ def test_list_traces_endpoint(client: TestClient) -> None:
     assert data["limit"] == 50
     assert [item["trace_id"] for item in data["items"]] == ["t1", "t2", "t3"]
     assert data["items"][0]["span_count"] == 2
-    assert data["items"][0]["total_cost"] == pytest.approx(0.05)
+    assert data["items"][0]["total_cost"] == pytest.approx(0.07)
 
 
 def test_list_traces_endpoint_pagination(client: TestClient) -> None:
@@ -218,6 +260,7 @@ def test_get_trace_endpoint(client: TestClient) -> None:
     assert response.status_code == 200
     data = response.json()
     assert data["trace_id"] == "t1"
+    assert data["truncated"] is False
     assert [span["span_id"] for span in data["spans"]] == ["s1", "s2"]
     assert data["spans"][0]["attributes"] == {"model": "gpt-4o"}
     assert data["spans"][1]["parent_span_id"] == "s1"
@@ -235,7 +278,7 @@ def test_metrics_cost_endpoint(client: TestClient) -> None:
     assert response.status_code == 200
     data = response.json()
     assert data["window_hours"] == 24
-    assert data["total_cost"] == pytest.approx(0.15)
+    assert data["total_cost"] == pytest.approx(0.17)
     assert data["trace_count"] == 2
 
 

@@ -67,24 +67,43 @@ class TraceIndex(ABC):
         """
 
     @abstractmethod
-    def get_trace(self, trace_id: str) -> list[SpanRecord]:
-        """Return every span of ``trace_id`` ordered by start time.
+    def get_trace(self, trace_id: str) -> tuple[list[SpanRecord], bool]:
+        """Return the spans of ``trace_id`` ordered by start time.
 
-        An unknown trace id returns an empty list; callers decide whether
-        that maps to a 404.
+        Returns:
+            A ``(spans, truncated)`` tuple. ``truncated`` is True when the
+            trace holds more spans than the backend's per-trace ceiling and
+            the list was cut, so responses stay bounded for pathological
+            traces. An unknown trace id returns ``([], False)``; callers
+            decide whether that maps to a 404.
         """
 
     @abstractmethod
     def get_metrics_cost(self, *, window_hours: int = 24) -> dict:
-        """Aggregate run cost over the trailing time window."""
+        """Aggregate run cost over the trailing time window.
+
+        Cost sums ``run_cost`` across ALL spans (it lives on whichever span
+        made the LLM call, usually a child). ``trace_count`` is the number
+        of traces with at least one span in the window — a different
+        denominator from the latency/success metrics, which count root spans.
+        """
 
     @abstractmethod
     def get_metrics_latency(self, *, window_hours: int = 24) -> dict:
-        """Aggregate root-span latency (avg and p95) over the trailing window."""
+        """Aggregate root-span latency (avg and p95) over the trailing window.
+
+        Only root spans count: a trace's latency is its root span duration,
+        and aggregating child spans would double-count nested work.
+        """
 
     @abstractmethod
     def get_metrics_success(self, *, window_hours: int = 24) -> dict:
-        """Aggregate run success rate over the trailing time window."""
+        """Aggregate run success rate over the trailing time window.
+
+        Only root spans with a reported ``run_success`` enter the rate;
+        spans that never reported an outcome are excluded rather than
+        counted as failures.
+        """
 
     @abstractmethod
     def health_check(self) -> None:

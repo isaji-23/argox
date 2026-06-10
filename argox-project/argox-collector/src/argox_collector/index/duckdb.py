@@ -15,6 +15,11 @@ from argox_collector.index.base import SpanRecord, TraceIndex, TraceIndexError
 
 logger = structlog.get_logger(__name__)
 
+# Hard ceiling on spans returned per trace detail: bounds response size and
+# memory for pathological traces. Callers learn about the cut via the
+# ``truncated`` flag returned by :meth:`DuckDBTraceIndex.get_trace`.
+_MAX_TRACE_SPANS = 5000
+
 _INSERT_SQL = """
     INSERT INTO spans (
         trace_id, span_id, parent_span_id, name,
@@ -159,6 +164,22 @@ class DuckDBTraceIndex(TraceIndex):
                     span_id=row[1],
                 )
 
+    def _read(self, query: str, params: tuple) -> list:
+        """Run a read query on a dedicated cursor, off the writer lock.
+
+        DuckDB cursors are duplicate connections to the same database and
+        the documented way to use one database from multiple threads — the
+        client API synchronizes cursor creation internally, and MVCC
+        isolates readers from in-flight writes. Keeping reads off
+        ``self._lock`` means a slow dashboard query can never stall ingest
+        (``insert_spans`` holds the lock) and vice versa.
+        """
+        cursor = self._conn.cursor()
+        try:
+            return cursor.execute(query, params).fetchall()
+        finally:
+            cursor.close()
+
     def list_traces(self, *, skip: int = 0, limit: int = 50) -> tuple[list[dict], int]:
         # The agent columns prefer the root span and fall back to any span,
         # so partially-ingested traces (root not yet arrived) still get a name.
@@ -183,11 +204,8 @@ class DuckDBTraceIndex(TraceIndex):
             ORDER BY trace_start DESC NULLS LAST, trace_id
             LIMIT ? OFFSET ?
         """
-        with self._lock:
-            rows = self._conn.execute(query, (limit, skip)).fetchall()
-            total = self._conn.execute(
-                "SELECT COUNT(DISTINCT trace_id) FROM spans"
-            ).fetchone()[0]
+        rows = self._read(query, (limit, skip))
+        total = self._read("SELECT COUNT(DISTINCT trace_id) FROM spans", ())[0][0]
 
         summaries = [
             {
@@ -204,7 +222,11 @@ class DuckDBTraceIndex(TraceIndex):
         ]
         return summaries, total
 
-    def get_trace(self, trace_id: str) -> list[SpanRecord]:
+    def get_trace(
+        self, trace_id: str, *, max_spans: int = _MAX_TRACE_SPANS
+    ) -> tuple[list[SpanRecord], bool]:
+        # LIMIT max_spans + 1 detects truncation without a second count
+        # query; the extra row is dropped before returning.
         query = """
             SELECT
                 trace_id, span_id, parent_span_id, name,
@@ -214,11 +236,11 @@ class DuckDBTraceIndex(TraceIndex):
             FROM spans
             WHERE trace_id = ?
             ORDER BY start_time ASC NULLS LAST, span_id
+            LIMIT ?
         """
-        with self._lock:
-            rows = self._conn.execute(query, (trace_id,)).fetchall()
-
-        return [
+        rows = self._read(query, (trace_id, max_spans + 1))
+        truncated = len(rows) > max_spans
+        spans = [
             SpanRecord(
                 trace_id=row[0],
                 span_id=row[1],
@@ -232,19 +254,50 @@ class DuckDBTraceIndex(TraceIndex):
                 policy_decision=row[9],
                 run_cost=row[10],
                 run_success=row[11],
-                attributes=json.loads(row[12]) if row[12] else {},
+                attributes=self._decode_attributes(row[12], row[0], row[1]),
             )
-            for row in rows
+            for row in rows[:max_spans]
         ]
+        return spans, truncated
+
+    @staticmethod
+    def _decode_attributes(raw: Optional[str], trace_id: str, span_id: str) -> dict:
+        """Decode the stored attributes JSON, degrading to ``{}`` on corruption.
+
+        A single unreadable attributes blob must not turn the whole trace
+        detail into a 500; the span still renders, just without attributes.
+        DuckDB's JSON column already rejects malformed JSON at write time,
+        so the realistic corruption is valid JSON that is not an object
+        (hand-edited or written by a buggy tool).
+        """
+        if not raw:
+            return {}
+        try:
+            decoded = json.loads(raw)
+        except (ValueError, TypeError):
+            decoded = None
+        if not isinstance(decoded, dict):
+            logger.warning(
+                "duckdb_attributes_decode_failed",
+                trace_id=trace_id,
+                span_id=span_id,
+            )
+            return {}
+        return decoded
 
     def get_metrics_cost(self, *, window_hours: int = 24) -> dict:
+        # Cost sums over ALL spans, not just roots: run_cost is attached to
+        # whichever span made the LLM call (usually a child), and enrichment
+        # never duplicates one call's cost onto both a root and its child.
+        # trace_count here means "traces with at least one span in window" —
+        # a different denominator from the latency/success metrics, which
+        # count root spans (see get_metrics_latency).
         query = """
             SELECT SUM(run_cost), COUNT(DISTINCT trace_id)
             FROM spans
             WHERE start_time >= ?
         """
-        with self._lock:
-            row = self._conn.execute(query, (_window_cutoff(window_hours),)).fetchone()
+        row = self._read(query, (_window_cutoff(window_hours),))[0]
         return {
             "window_hours": window_hours,
             "total_cost": row[0] if row[0] is not None else 0.0,
@@ -255,6 +308,8 @@ class DuckDBTraceIndex(TraceIndex):
         # Root spans only: a trace's latency is its root span duration, and
         # summing or averaging child spans would double-count nested work.
         # quantile_cont keeps the p95 deterministic (approx_quantile is not).
+        # trace_count is therefore "root spans in window", not the cost
+        # metric's "traces with any span in window".
         query = """
             SELECT
                 AVG(duration_ms),
@@ -263,8 +318,7 @@ class DuckDBTraceIndex(TraceIndex):
             FROM spans
             WHERE start_time >= ? AND parent_span_id IS NULL
         """
-        with self._lock:
-            row = self._conn.execute(query, (_window_cutoff(window_hours),)).fetchone()
+        row = self._read(query, (_window_cutoff(window_hours),))[0]
         return {
             "window_hours": window_hours,
             "avg_latency_ms": row[0] if row[0] is not None else 0.0,
@@ -283,8 +337,7 @@ class DuckDBTraceIndex(TraceIndex):
             FROM spans
             WHERE start_time >= ? AND parent_span_id IS NULL
         """
-        with self._lock:
-            row = self._conn.execute(query, (_window_cutoff(window_hours),)).fetchone()
+        row = self._read(query, (_window_cutoff(window_hours),))[0]
         total = row[0] or 0
         successful = row[1] or 0
         return {

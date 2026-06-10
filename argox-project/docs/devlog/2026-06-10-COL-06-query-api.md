@@ -56,6 +56,13 @@ latency averaged over all spans, and list responses without a `total` count.
 
 ## Notes / follow-ups
 
+- Review round 1 (PR #127) hardening: reads now run on dedicated DuckDB
+  cursors instead of sharing the writer lock, so a slow dashboard query can
+  no longer stall ingest (and vice versa); `get_trace` caps responses at
+  5000 spans and reports `truncated`; a non-object `attributes` blob
+  degrades to `{}` with a warning instead of a 500; the cost contract
+  (sums all spans, unlike root-only latency/success) is documented in the
+  interface and pinned by a child-cost test.
 - `list_traces` runs a full `GROUP BY` over the spans table per request; if
   the dashboard list becomes hot at large span counts, consider a
   materialized trace-summary table maintained at ingest time.

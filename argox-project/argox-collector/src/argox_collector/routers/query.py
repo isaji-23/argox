@@ -63,10 +63,15 @@ class SpanDetail(BaseModel):
 
 
 class TraceDetailResponse(BaseModel):
-    """Full span waterfall returned by ``GET /api/v1/traces/{trace_id}``."""
+    """Full span waterfall returned by ``GET /api/v1/traces/{trace_id}``.
+
+    ``truncated`` is True when the trace exceeded the index's per-trace span
+    ceiling and ``spans`` was cut to keep the response bounded.
+    """
 
     trace_id: str
     spans: list[SpanDetail]
+    truncated: bool = False
 
 
 class CostMetricsResponse(BaseModel):
@@ -122,11 +127,12 @@ def list_traces(
 @router.get("/traces/{trace_id}", response_model=TraceDetailResponse)
 def get_trace(request: Request, trace_id: str) -> TraceDetailResponse:
     """Return the full span waterfall of one trace."""
-    spans = _index(request).get_trace(trace_id)
+    spans, truncated = _index(request).get_trace(trace_id)
     if not spans:
         raise HTTPException(status_code=404, detail="trace not found")
     return TraceDetailResponse(
         trace_id=trace_id,
+        truncated=truncated,
         spans=[
             SpanDetail(
                 span_id=span.span_id,
