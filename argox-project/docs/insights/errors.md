@@ -8,6 +8,12 @@ and resolves a non-trivial error.
 
 <!-- Add new entries directly below this line, newest first. -->
 
+## 2026-06-10 — Metrics window skewed by session time zone in DuckDB  [COL-06]
+- **Symptom:** Trailing-window metrics (`/api/v1/metrics/*`) silently included or excluded the wrong spans depending on the host's time zone: a 24h window evaluated on a UTC+2 machine shifted its cutoff by two hours. Found in PR #117's queries (`WHERE start_time >= CURRENT_TIMESTAMP - INTERVAL ...`) while reimplementing for PR #127.
+- **Root cause:** Span timestamps are stored as **naive UTC** (`_to_naive_utc` strips tzinfo before insert), but DuckDB's `CURRENT_TIMESTAMP` is a `TIMESTAMPTZ` evaluated in the session time zone. Comparing the two casts implicitly and offsets the window by the local UTC offset.
+- **Fix:** Compute the cutoff in Python (`_window_cutoff`): `datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=window_hours)` and bind it as a plain `TIMESTAMP` parameter, so both sides of the comparison are naive UTC.
+- **Guard:** `test_index_metrics_cost_respects_window` inserts a span 3 days old and asserts it is excluded at `window_hours=24` but included at `720`. General rule: never mix SQL `now()`/`CURRENT_TIMESTAMP` with the naive-UTC columns of this index.
+
 ## 2026-06-09 — PostCSS error when using `tailwindcss` as a legacy plugin  [DASH-01]
 - **Symptom:** `Internal server error: [postcss] It looks like you're trying to use tailwindcss directly as a PostCSS plugin...` during `npm run dev`.
 - **Root cause:** Tailwind CSS v4 is installed, but the CSS was using legacy `@tailwind base;` etc. directives and the PostCSS config was referencing `@tailwindcss/postcss` while the CSS entry point hadn't been migrated to the v4 `@import "tailwindcss";` pattern.
