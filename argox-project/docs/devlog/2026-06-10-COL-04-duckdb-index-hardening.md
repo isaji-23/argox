@@ -41,6 +41,17 @@ COL-03/COL-06 hardening) and found three remaining defects: non-finite value
 poisoning of metrics aggregates, whole-batch loss on attribute encoding
 failures, and filesystem path disclosure through the readiness probe.
 
+## Review hardening
+
+PR review flagged that the path-disclosure fix only covered the index branch
+of `/readyz`: the storage branch still forwarded `StorageError` text verbatim,
+and the local backend embeds raw `OSError` messages (filesystem paths) while
+the Azure backend can embed container names. Sanitisation moved to the readyz
+handler itself (`routers/health.py`): degraded checks report a bare
+`"unavailable"` and full detail goes to the structured log, covering every
+current and future backend. The `_json_safe` key-collision edge case (`1` vs
+`"1"`) was reviewed and accepted: OTLP attribute keys are always strings.
+
 ## Notes / follow-ups
 
 - Defense is layered: ingest rejects non-finite promoted floats, the index
