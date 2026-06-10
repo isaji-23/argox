@@ -48,6 +48,14 @@ stated explicitly: ``argox.pii.residual_detected`` marks content for
 downstream handling; the raw blob keeps it unredacted (redaction is the SDK's
 job).
 
+Follow-up precision hardening (from evaluating PII-library adoption):
+checksum-carrying entities are post-validated — Luhn for credit cards,
+ISO 13616 mod-97 for IBANs, mod-23 control letter for Spanish DNIs — and the
+phone pattern was tightened to the E.164 form the SDK's
+``PiiRedactionProcessor`` already uses, since a bare-digit pattern matches any
+10-13 digit run and defeats the Luhn check. The matching SDK-side change
+(IBAN mod-97 in the processor) shipped separately in PR #133 (PROC-01).
+
 ## Notes / follow-ups
 
 - The Route B run-record join from the #92 update (writing `cost_usd` into the
