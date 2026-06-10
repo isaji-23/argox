@@ -43,6 +43,21 @@ class CollectorSettings(BaseSettings):
     enrichment_enabled: bool = True
     pricing_table_path: Optional[Path] = None
 
+    # Comma-separated list of origins allowed to call the API from a browser
+    # (e.g. "https://dashboard.example.com,http://localhost:5173"). Kept as a
+    # plain string so the value can be passed through a single environment
+    # variable; empty means CORS middleware is not installed at all.
+    cors_origins: str = ""
+
+    @property
+    def cors_origin_list(self) -> list[str]:
+        """Return ``cors_origins`` parsed into a list of non-empty origins."""
+        return [
+            origin.strip()
+            for origin in self.cors_origins.split(",")
+            if origin.strip()
+        ]
+
     # Maximum accepted request body size in bytes (default 10 MiB). Requests
     # over this limit are rejected with 413 before the body is fully buffered,
     # bounding memory use under concurrent or malicious uploads.
