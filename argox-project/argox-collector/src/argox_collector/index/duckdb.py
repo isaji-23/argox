@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import json
+import math
 import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import duckdb
 import structlog
@@ -55,6 +56,37 @@ def _to_aware_utc(dt: Optional[datetime]) -> Optional[datetime]:
     if dt is None:
         return None
     return dt.replace(tzinfo=timezone.utc)
+
+
+def _json_safe(value: Any) -> Any:
+    """Coerce ``value`` into something the JSON column will accept.
+
+    Two failure modes exist at write time: non-finite floats (NaN/Infinity),
+    which ``json.dumps`` happily emits but DuckDB's JSON parser rejects, and
+    objects that are not JSON-serialisable at all. Both are degraded to their
+    string form so the rest of the attributes survive.
+    """
+    if isinstance(value, float):
+        return value if math.isfinite(value) else str(value)
+    if isinstance(value, (str, int, bool)) or value is None:
+        return value
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    return str(value)
+
+
+def _finite_or_none(value: Optional[float]) -> Optional[float]:
+    """Keep NaN/Infinity out of the DOUBLE columns.
+
+    A non-finite ``run_cost`` or ``duration_ms`` would poison every
+    aggregate it enters (``SUM``/``AVG``/``QUANTILE_CONT`` all propagate
+    NaN), and NaN is not representable in the JSON metrics responses.
+    """
+    if value is None:
+        return None
+    return value if math.isfinite(value) else None
 
 
 def _window_cutoff(window_hours: int) -> datetime:
@@ -131,13 +163,13 @@ class DuckDBTraceIndex(TraceIndex):
                 r.name,
                 _to_naive_utc(r.start_time),
                 _to_naive_utc(r.end_time),
-                r.duration_ms,
+                _finite_or_none(r.duration_ms),
                 r.agent_name,
                 r.agent_version,
                 r.policy_decision,
-                r.run_cost,
+                _finite_or_none(r.run_cost),
                 r.run_success,
-                json.dumps(r.attributes) if r.attributes else None,
+                self._encode_attributes(r),
             )
             for r in records
         ]
@@ -152,6 +184,32 @@ class DuckDBTraceIndex(TraceIndex):
                 # idempotent for any rows the batch had already written.
                 logger.warning("duckdb_batch_insert_failed", count=len(data))
                 self._insert_rows_individually(data)
+
+    @staticmethod
+    def _encode_attributes(record: SpanRecord) -> Optional[str]:
+        """Serialise attributes for the JSON column, degrading instead of raising.
+
+        This runs during batch preparation, before any row is written: an
+        exception here would drop the whole batch without ever reaching the
+        per-row fallback. ``allow_nan=False`` matters because ``json.dumps``
+        otherwise emits ``NaN``/``Infinity`` literals that DuckDB's JSON
+        parser rejects at insert time, silently discarding the row.
+        """
+        if not record.attributes:
+            return None
+        try:
+            return json.dumps(record.attributes, allow_nan=False)
+        except (TypeError, ValueError):
+            pass
+        try:
+            return json.dumps(_json_safe(dict(record.attributes)), allow_nan=False)
+        except (TypeError, ValueError):
+            logger.warning(
+                "duckdb_attributes_encode_failed",
+                trace_id=record.trace_id,
+                span_id=record.span_id,
+            )
+            return None
 
     def _insert_rows_individually(self, rows: list) -> None:
         for row in rows:
@@ -292,8 +350,14 @@ class DuckDBTraceIndex(TraceIndex):
         # trace_count here means "traces with at least one span in window" —
         # a different denominator from the latency/success metrics, which
         # count root spans (see get_metrics_latency).
+        # The isfinite filter shields the aggregate from non-finite values
+        # written before write-side sanitisation existed: one NaN row would
+        # otherwise turn total_cost into NaN, which the JSON response layer
+        # cannot encode.
         query = """
-            SELECT SUM(run_cost), COUNT(DISTINCT trace_id)
+            SELECT
+                SUM(run_cost) FILTER (WHERE isfinite(run_cost)),
+                COUNT(DISTINCT trace_id)
             FROM spans
             WHERE start_time >= ?
         """
@@ -310,11 +374,14 @@ class DuckDBTraceIndex(TraceIndex):
         # quantile_cont keeps the p95 deterministic (approx_quantile is not).
         # trace_count is therefore "root spans in window", not the cost
         # metric's "traces with any span in window".
+        # isfinite also excludes NULLs (isfinite(NULL) is NULL), so the three
+        # aggregates stay consistent with each other and immune to non-finite
+        # rows written before write-side sanitisation existed.
         query = """
             SELECT
-                AVG(duration_ms),
-                QUANTILE_CONT(duration_ms, 0.95),
-                COUNT(*) FILTER (WHERE duration_ms IS NOT NULL)
+                AVG(duration_ms) FILTER (WHERE isfinite(duration_ms)),
+                QUANTILE_CONT(duration_ms, 0.95) FILTER (WHERE isfinite(duration_ms)),
+                COUNT(*) FILTER (WHERE isfinite(duration_ms))
             FROM spans
             WHERE start_time >= ? AND parent_span_id IS NULL
         """
@@ -352,7 +419,11 @@ class DuckDBTraceIndex(TraceIndex):
             with self._lock:
                 self._conn.execute("SELECT 1").fetchone()
         except Exception as exc:
-            raise TraceIndexError(f"DuckDB index health check failed: {exc}") from exc
+            # The raw exception text can embed the database filesystem path,
+            # and readyz forwards this message verbatim to unauthenticated
+            # callers. Log the detail, surface a generic message.
+            logger.error("duckdb_health_check_failed", error=str(exc))
+            raise TraceIndexError("DuckDB index health check failed") from exc
 
     def close(self) -> None:
         """Close the DuckDB connection."""

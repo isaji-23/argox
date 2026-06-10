@@ -230,6 +230,28 @@ def test_run_success_string_attribute_is_coerced(client: TestClient) -> None:
     assert _fetch_span(client)[7] is True
 
 
+def test_non_finite_run_cost_is_dropped(client: TestClient) -> None:
+    # A NaN cost would poison the index aggregates (SUM/AVG propagate NaN)
+    # and cannot be encoded in the JSON metrics responses.
+    span = Span(
+        trace_id=TRACE_ID,
+        span_id=SPAN_ID,
+        name="argox.agent.run",
+        attributes=[_attr("argox.run.cost", float("nan"))],
+    )
+    request = ExportTraceServiceRequest(
+        resource_spans=[ResourceSpans(scope_spans=[ScopeSpans(spans=[span])])]
+    )
+    response = client.post(
+        "/v1/traces",
+        content=request.SerializeToString(),
+        headers={"content-type": CONTENT_TYPE_PROTOBUF},
+    )
+
+    assert response.status_code == 202
+    assert _fetch_span(client)[6] is None
+
+
 def test_payload_under_limit_is_accepted(tmp_path: Path) -> None:
     settings = CollectorSettings(
         storage_local_root=tmp_path / "blobs",

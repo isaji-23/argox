@@ -147,13 +147,100 @@ def test_duckdb_index_batch_survives_one_bad_row(index: DuckDBTraceIndex):
     assert trace_ids == {"t-good-1", "t-good-2"}
 
 
+def test_duckdb_index_nan_attributes_do_not_drop_row(index: DuckDBTraceIndex):
+    # json.dumps would emit a bare NaN literal, which DuckDB's JSON parser
+    # rejects at insert time. The row must still land, with the non-finite
+    # value degraded to its string form.
+    record = SpanRecord(
+        trace_id="t-nan",
+        span_id="s1",
+        name="span",
+        attributes={"score": float("nan"), "kept": "yes"},
+    )
+
+    index.insert_spans([record])
+
+    spans, _ = index.get_trace("t-nan")
+    assert len(spans) == 1
+    assert spans[0].attributes["kept"] == "yes"
+    assert spans[0].attributes["score"] == "nan"
+
+
+def test_duckdb_index_unserializable_attributes_do_not_drop_batch(
+    index: DuckDBTraceIndex,
+):
+    # Attribute encoding happens during batch preparation, before any row is
+    # written: an exception there would lose the whole batch. Objects that
+    # json cannot encode degrade to their string form instead.
+    bad = SpanRecord(
+        trace_id="t-bad-attrs",
+        span_id="s1",
+        attributes={"blob": b"\x00\x01", "nested": {"when": datetime(2026, 1, 1)}},
+    )
+    good = SpanRecord(trace_id="t-good", span_id="s1", name="ok")
+
+    index.insert_spans([bad, good])
+
+    spans, _ = index.get_trace("t-bad-attrs")
+    assert len(spans) == 1
+    assert spans[0].attributes["blob"] == str(b"\x00\x01")
+    good_spans, _ = index.get_trace("t-good")
+    assert len(good_spans) == 1
+
+
+def test_duckdb_index_non_finite_doubles_stored_as_null(index: DuckDBTraceIndex):
+    record = SpanRecord(
+        trace_id="t-inf",
+        span_id="s1",
+        duration_ms=float("inf"),
+        run_cost=float("nan"),
+    )
+
+    index.insert_span(record)
+
+    spans, _ = index.get_trace("t-inf")
+    assert spans[0].duration_ms is None
+    assert spans[0].run_cost is None
+
+
+def test_duckdb_index_metrics_ignore_non_finite_rows(index: DuckDBTraceIndex):
+    # Rows written before write-side sanitisation existed may hold NaN.
+    # Aggregates must not propagate it into the metrics payloads.
+    now = datetime.now(timezone.utc)
+    index.insert_span(
+        SpanRecord(
+            trace_id="t1",
+            span_id="s1",
+            start_time=now,
+            duration_ms=100.0,
+            run_cost=0.5,
+        )
+    )
+    with index._lock:
+        index._conn.execute(
+            "INSERT INTO spans (trace_id, span_id, start_time, duration_ms, run_cost)"
+            " VALUES ('t2', 's1', ?, 'nan'::DOUBLE, 'nan'::DOUBLE)",
+            (now.replace(tzinfo=None),),
+        )
+
+    cost = index.get_metrics_cost(window_hours=24)
+    assert cost["total_cost"] == 0.5
+    latency = index.get_metrics_latency(window_hours=24)
+    assert latency["avg_latency_ms"] == 100.0
+    assert latency["trace_count"] == 1
+
+
 def test_duckdb_index_health_check(index: DuckDBTraceIndex):
     # Should not raise
     index.health_check()
-    
+
     index.close()
-    with pytest.raises(TraceIndexError):
+    with pytest.raises(TraceIndexError) as excinfo:
         index.health_check()
+    # readyz forwards this message verbatim to unauthenticated callers, so it
+    # must stay generic and never embed the database filesystem path.
+    assert str(excinfo.value) == "DuckDB index health check failed"
+    assert str(index._db_path) not in str(excinfo.value)
 
 
 def test_factory_build_index_duckdb(tmp_path: Path):
