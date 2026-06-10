@@ -8,6 +8,24 @@ and resolves a non-trivial error.
 
 <!-- Add new entries directly below this line, newest first. -->
 
+## 2026-06-10 — OTel sidecar exports dropped: Collector rejects gzip bodies  [DEPLOY-01]
+- **Symptom:** OTel collector sidecar logs `Exporting failed. Dropping data. ... request to http://collector:8000/v1/traces responded with HTTP Status Code 400` while its own debug exporter shows the spans arriving fine; nothing reaches the Argox Collector.
+- **Root cause:** The `otlphttp` exporter compresses request bodies with gzip by default. The Collector's ingest endpoint parses the raw body as protobuf/JSON and does not decompress `Content-Encoding: gzip`, so the payload is malformed from its point of view → 400.
+- **Fix:** `compression: none` on the `otlphttp` exporter in `deploy/docker/otel/otel-collector-config.yaml`.
+- **Guard:** Comment next to the exporter config. Real fix would be gzip support on the ingest endpoint (many OTLP SDK exporters default to gzip) — open follow-up against COL-03.
+
+## 2026-06-10 — Azurite rejects azure-storage-blob requests: API version not supported  [DEPLOY-01]
+- **Symptom:** Collector `/readyz` degraded with `The API version 2026-06-06 is not supported by Azurite. Please upgrade Azurite to latest version and retry. ... ErrorCode:InvalidHeaderValue`.
+- **Root cause:** The `azure-storage-blob` version installed in the Collector image requests a service API version newer than the latest Azurite release understands. Azurite validates the `x-ms-version` header strictly by default.
+- **Fix:** Run Azurite with `--skipApiVersionCheck` (compose `command`). Documented workaround in the Azurite error message itself.
+- **Guard:** Flag is part of `deploy/docker/compose.yaml` with an explanatory comment; will recur for any new Azurite consumer that omits it.
+
+## 2026-06-10 — OTLP/JSON trace IDs: hex (spec) vs base64 (protobuf JSON mapping)  [DEPLOY-01]
+- **Symptom:** Posting `deploy/docker/seed/trace.json` to the OTel collector sidecar fails with `readSpan.traceId: parse trace_id:invalid length for ID ... "traceId": "AQIDBAUGBwgJCgsMDQ4PEA=="` — yet the same file is accepted by the Argox Collector.
+- **Root cause:** The OTLP/JSON spec deviates from proto3 JSON: `traceId`/`spanId` must be **hex**. The Argox Collector ingests JSON via `google.protobuf.json_format`, which implements plain proto3 JSON (**base64** bytes). The two JSON dialects are mutually incompatible for byte fields.
+- **Fix:** Send protobuf (SDK default wire format) when going through the sidecar; the seed file targets the Collector directly. Noted in `deploy/docker/README.md`.
+- **Guard:** README note. Follow-up: accept hex IDs in the Collector's JSON ingest (COL-03 parser) for OTLP-spec compliance.
+
 ## 2026-06-10 — Metrics window skewed by session time zone in DuckDB  [COL-06]
 - **Symptom:** Trailing-window metrics (`/api/v1/metrics/*`) silently included or excluded the wrong spans depending on the host's time zone: a 24h window evaluated on a UTC+2 machine shifted its cutoff by two hours. Found in PR #117's queries (`WHERE start_time >= CURRENT_TIMESTAMP - INTERVAL ...`) while reimplementing for PR #127.
 - **Root cause:** Span timestamps are stored as **naive UTC** (`_to_naive_utc` strips tzinfo before insert), but DuckDB's `CURRENT_TIMESTAMP` is a `TIMESTAMPTZ` evaluated in the session time zone. Comparing the two casts implicitly and offsets the window by the local UTC offset.

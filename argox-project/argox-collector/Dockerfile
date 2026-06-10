@@ -12,6 +12,10 @@ WORKDIR /app
 
 RUN useradd --create-home --uid 1000 argox
 
+# Pre-create the data mount point owned by the runtime user so named volumes
+# inherit writable ownership on first use (the DuckDB index lives here).
+RUN mkdir -p /data && chown argox:argox /data
+
 COPY pyproject.toml ./
 COPY src ./src
 
