@@ -8,6 +8,12 @@ and resolves a non-trivial error.
 
 <!-- Add new entries directly below this line, newest first. -->
 
+## 2026-06-09 — PostCSS error when using `tailwindcss` as a legacy plugin  [DASH-01]
+- **Symptom:** `Internal server error: [postcss] It looks like you're trying to use tailwindcss directly as a PostCSS plugin...` during `npm run dev`.
+- **Root cause:** Tailwind CSS v4 is installed, but the CSS was using legacy `@tailwind base;` etc. directives and the PostCSS config was referencing `@tailwindcss/postcss` while the CSS entry point hadn't been migrated to the v4 `@import "tailwindcss";` pattern.
+- **Fix:** Replaced `@tailwind` directives with `@import "tailwindcss";` in `argox-dashboard/src/index.css`.
+- **Guard:** Verified that `npx vite build` (which triggers PostCSS) completes successfully and generates valid CSS.
+
 ## 2026-06-09 — Durable ingest acknowledged batches it had actually lost  [COL-03]
 - **Symptom:** A `POST /v1/traces` with `X-Argox-Durable: true` returned 200 even when the blob write or DuckDB insert failed (disk full, Azure 5xx). The client believed the batch was committed; it was gone. The docstring/ADR promised "200 only once committed".
 - **Root cause:** `_persist` wrapped its whole body in `except Exception: logger.exception(...)` and never re-raised. That is correct for the background (fire-and-forget) path — the client was already acknowledged — but the durable path reused the same swallowing function and then returned 200 unconditionally, so a failure could not reach the response.
