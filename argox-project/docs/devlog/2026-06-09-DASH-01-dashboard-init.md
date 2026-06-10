@@ -1,7 +1,7 @@
 # [DASH-01] dashboard initialization
 
 - **Date:** 2026-06-09
-- **PR:** #88  ·  **Branch:** feat/DASH-01-setup-routing-ui-components
+- **PR:** #125  ·  **Branch:** feat/DASH-01-setup-routing-ui-components
 - **Status:** in-review
 
 ## What changed
