@@ -54,5 +54,38 @@ class TraceIndex(ABC):
         """Batch add multiple span records to the index."""
 
     @abstractmethod
+    def list_traces(self, *, skip: int = 0, limit: int = 50) -> tuple[list[dict], int]:
+        """Return paginated trace summaries plus the total trace count.
+
+        Each summary aggregates the spans sharing a ``trace_id`` (start/end
+        time, total cost, span count, root agent). Summaries are sorted by
+        trace start time, newest first.
+
+        Returns:
+            A ``(summaries, total)`` tuple where ``total`` is the number of
+            distinct traces in the index regardless of pagination.
+        """
+
+    @abstractmethod
+    def get_trace(self, trace_id: str) -> list[SpanRecord]:
+        """Return every span of ``trace_id`` ordered by start time.
+
+        An unknown trace id returns an empty list; callers decide whether
+        that maps to a 404.
+        """
+
+    @abstractmethod
+    def get_metrics_cost(self, *, window_hours: int = 24) -> dict:
+        """Aggregate run cost over the trailing time window."""
+
+    @abstractmethod
+    def get_metrics_latency(self, *, window_hours: int = 24) -> dict:
+        """Aggregate root-span latency (avg and p95) over the trailing window."""
+
+    @abstractmethod
+    def get_metrics_success(self, *, window_hours: int = 24) -> dict:
+        """Aggregate run success rate over the trailing time window."""
+
+    @abstractmethod
     def health_check(self) -> None:
         """Verify the index is reachable and healthy."""

@@ -89,3 +89,7 @@ agent_registry.jsonl
 .argox/
 
 .untracked/
+# -----------------------------------------------------------------------------
+# Local runtime data (DuckDB index, blob storage) — never commit binaries
+# -----------------------------------------------------------------------------
+var/

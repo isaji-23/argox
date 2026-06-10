@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -43,6 +43,26 @@ def _to_naive_utc(dt: Optional[datetime]) -> Optional[datetime]:
     if dt.tzinfo:
         return dt.astimezone(timezone.utc).replace(tzinfo=None)
     return dt
+
+
+def _to_aware_utc(dt: Optional[datetime]) -> Optional[datetime]:
+    """Re-attach UTC to a naive timestamp read back from the index."""
+    if dt is None:
+        return None
+    return dt.replace(tzinfo=timezone.utc)
+
+
+def _window_cutoff(window_hours: int) -> datetime:
+    """Naive-UTC lower bound for a trailing window.
+
+    Timestamps are stored naive UTC (see :func:`_to_naive_utc`), so the
+    cutoff is computed in Python rather than with SQL ``CURRENT_TIMESTAMP``,
+    which DuckDB evaluates in the session time zone and would skew the
+    window by the local UTC offset.
+    """
+    return datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(
+        hours=window_hours
+    )
 
 
 class DuckDBTraceIndex(TraceIndex):
@@ -138,6 +158,141 @@ class DuckDBTraceIndex(TraceIndex):
                     trace_id=row[0],
                     span_id=row[1],
                 )
+
+    def list_traces(self, *, skip: int = 0, limit: int = 50) -> tuple[list[dict], int]:
+        # The agent columns prefer the root span and fall back to any span,
+        # so partially-ingested traces (root not yet arrived) still get a name.
+        query = """
+            SELECT
+                trace_id,
+                MIN(start_time) AS trace_start,
+                MAX(end_time) AS trace_end,
+                SUM(duration_ms) AS total_duration_ms,
+                SUM(run_cost) AS total_cost,
+                COALESCE(
+                    MAX(agent_name) FILTER (WHERE parent_span_id IS NULL),
+                    MAX(agent_name)
+                ) AS agent_name,
+                COALESCE(
+                    MAX(agent_version) FILTER (WHERE parent_span_id IS NULL),
+                    MAX(agent_version)
+                ) AS agent_version,
+                COUNT(*) AS span_count
+            FROM spans
+            GROUP BY trace_id
+            ORDER BY trace_start DESC NULLS LAST, trace_id
+            LIMIT ? OFFSET ?
+        """
+        with self._lock:
+            rows = self._conn.execute(query, (limit, skip)).fetchall()
+            total = self._conn.execute(
+                "SELECT COUNT(DISTINCT trace_id) FROM spans"
+            ).fetchone()[0]
+
+        summaries = [
+            {
+                "trace_id": row[0],
+                "start_time": _to_aware_utc(row[1]),
+                "end_time": _to_aware_utc(row[2]),
+                "total_duration_ms": row[3],
+                "total_cost": row[4],
+                "agent_name": row[5],
+                "agent_version": row[6],
+                "span_count": row[7],
+            }
+            for row in rows
+        ]
+        return summaries, total
+
+    def get_trace(self, trace_id: str) -> list[SpanRecord]:
+        query = """
+            SELECT
+                trace_id, span_id, parent_span_id, name,
+                start_time, end_time, duration_ms,
+                agent_name, agent_version, policy_decision,
+                run_cost, run_success, attributes
+            FROM spans
+            WHERE trace_id = ?
+            ORDER BY start_time ASC NULLS LAST, span_id
+        """
+        with self._lock:
+            rows = self._conn.execute(query, (trace_id,)).fetchall()
+
+        return [
+            SpanRecord(
+                trace_id=row[0],
+                span_id=row[1],
+                parent_span_id=row[2],
+                name=row[3],
+                start_time=_to_aware_utc(row[4]),
+                end_time=_to_aware_utc(row[5]),
+                duration_ms=row[6],
+                agent_name=row[7],
+                agent_version=row[8],
+                policy_decision=row[9],
+                run_cost=row[10],
+                run_success=row[11],
+                attributes=json.loads(row[12]) if row[12] else {},
+            )
+            for row in rows
+        ]
+
+    def get_metrics_cost(self, *, window_hours: int = 24) -> dict:
+        query = """
+            SELECT SUM(run_cost), COUNT(DISTINCT trace_id)
+            FROM spans
+            WHERE start_time >= ?
+        """
+        with self._lock:
+            row = self._conn.execute(query, (_window_cutoff(window_hours),)).fetchone()
+        return {
+            "window_hours": window_hours,
+            "total_cost": row[0] if row[0] is not None else 0.0,
+            "trace_count": row[1] or 0,
+        }
+
+    def get_metrics_latency(self, *, window_hours: int = 24) -> dict:
+        # Root spans only: a trace's latency is its root span duration, and
+        # summing or averaging child spans would double-count nested work.
+        # quantile_cont keeps the p95 deterministic (approx_quantile is not).
+        query = """
+            SELECT
+                AVG(duration_ms),
+                QUANTILE_CONT(duration_ms, 0.95),
+                COUNT(*) FILTER (WHERE duration_ms IS NOT NULL)
+            FROM spans
+            WHERE start_time >= ? AND parent_span_id IS NULL
+        """
+        with self._lock:
+            row = self._conn.execute(query, (_window_cutoff(window_hours),)).fetchone()
+        return {
+            "window_hours": window_hours,
+            "avg_latency_ms": row[0] if row[0] is not None else 0.0,
+            "p95_latency_ms": row[1] if row[1] is not None else 0.0,
+            "trace_count": row[2] or 0,
+        }
+
+    def get_metrics_success(self, *, window_hours: int = 24) -> dict:
+        # Only root spans carry a meaningful run outcome; spans that never
+        # reported run_success are excluded from the rate instead of being
+        # counted as failures.
+        query = """
+            SELECT
+                COUNT(*) FILTER (WHERE run_success IS NOT NULL),
+                COUNT(*) FILTER (WHERE run_success = TRUE)
+            FROM spans
+            WHERE start_time >= ? AND parent_span_id IS NULL
+        """
+        with self._lock:
+            row = self._conn.execute(query, (_window_cutoff(window_hours),)).fetchone()
+        total = row[0] or 0
+        successful = row[1] or 0
+        return {
+            "window_hours": window_hours,
+            "total_runs": total,
+            "successful_runs": successful,
+            "success_rate": (successful / total) if total else None,
+        }
 
     def health_check(self) -> None:
         try:
