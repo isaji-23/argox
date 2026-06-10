@@ -10,14 +10,17 @@ name: argox
 
 services:
   azurite:
-    image: mcr.microsoft.com/azure-storage/azurite:latest
+    image: mcr.microsoft.com/azure-storage/azurite:3.35.0
+    restart: unless-stopped
     # Blob service only: the Collector storage backend needs nothing else.
     # --skipApiVersionCheck: the azure-storage-blob SDK pinned by the
     # Collector may request a service API version newer than the Azurite
     # release; the emulator rejects it otherwise (InvalidHeaderValue).
     command: azurite-blob --blobHost 0.0.0.0 --blobPort 10000 --location /data --skipApiVersionCheck
     ports:
-      - "10000:10000"
+      # Loopback only: the stack has no auth (COL-09), so the blob endpoint
+      # must not be reachable beyond the host.
+      - "127.0.0.1:10000:10000"
     volumes:
       - azurite-data:/data
     healthcheck:
@@ -31,6 +34,7 @@ services:
     build:
       context: ../../argox-project/argox-collector
     image: argox-collector:local
+    restart: unless-stopped
     environment:
       ARGOX_ENVIRONMENT: local
       ARGOX_LOG_LEVEL: INFO
@@ -44,7 +48,8 @@ services:
       # API directly; same-origin calls through the nginx proxy need neither.
       ARGOX_CORS_ORIGINS: http://localhost:8080,http://localhost:5173
     ports:
-      - "${COLLECTOR_PORT:-8000}:8000"
+      # Loopback only: no auth yet (COL-09), keep the API off the LAN.
+      - "127.0.0.1:${COLLECTOR_PORT:-8000}:8000"
     volumes:
       - collector-data:/data
     depends_on:
@@ -56,9 +61,11 @@ services:
     build:
       context: ../../argox-dashboard
     image: argox-dashboard:local
+    restart: unless-stopped
     ports:
-      # Override when 8080 is taken on the host: DASHBOARD_PORT=8088 docker compose up
-      - "${DASHBOARD_PORT:-8080}:80"
+      # Loopback only; override when 8080 is taken on the host:
+      # DASHBOARD_PORT=8088 docker compose up
+      - "127.0.0.1:${DASHBOARD_PORT:-8080}:80"
     depends_on:
       collector:
         condition: service_healthy
@@ -71,12 +78,14 @@ services:
     image: otel/opentelemetry-collector-contrib:0.115.1
     profiles: ["otel"]
     command: ["--config=/etc/otelcol/config.yaml"]
+    restart: unless-stopped
     volumes:
       - ./otel/otel-collector-config.yaml:/etc/otelcol/config.yaml:ro
     ports:
-      - "4317:4317"
-      - "4318:4318"
-      - "13133:13133"
+      # Loopback only: receivers/health probe stay on the host.
+      - "127.0.0.1:4317:4317"
+      - "127.0.0.1:4318:4318"
+      - "127.0.0.1:13133:13133"
     depends_on:
       collector:
         condition: service_healthy

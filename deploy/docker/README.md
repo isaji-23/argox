@@ -19,13 +19,16 @@ persisted DuckDB index and Azurite blobs.
 
 ## Services and ports
 
+All ports are published on `127.0.0.1` only — the stack has no authentication
+(COL-09), so nothing is reachable beyond the host.
+
 | Service | Host port | What |
 |---|---|---|
-| dashboard | `8080` (override: `DASHBOARD_PORT=8088 docker compose up`) | Dashboard UI; nginx also proxies `/api/` and `/v1/` to the Collector (same-origin, no CORS needed) |
-| collector | `8000` (override: `COLLECTOR_PORT`) | Collector API: `/healthz`, `/readyz`, `/v1/traces` (OTLP ingest), `/api/v1/*` (query, policies), `/docs` (OpenAPI UI) |
-| azurite | `10000` | Azurite blob endpoint (account `devstoreaccount1`, well-known dev key) |
-| otel-collector | `4317` / `4318` | OTLP gRPC / HTTP receivers (profile `otel` only) |
-| otel-collector | `13133` | health_check extension (the image is distroless, so probe from the host: `curl localhost:13133`) |
+| dashboard | `127.0.0.1:8080` (override: `DASHBOARD_PORT=8088 docker compose up`) | Dashboard UI; nginx also proxies `/api/` and `/v1/` to the Collector (same-origin, no CORS needed) |
+| collector | `127.0.0.1:8000` (override: `COLLECTOR_PORT`) | Collector API: `/healthz`, `/readyz`, `/v1/traces` (OTLP ingest), `/api/v1/*` (query, policies), `/docs` (OpenAPI UI) |
+| azurite | `127.0.0.1:10000` | Azurite blob endpoint (account `devstoreaccount1`, well-known dev key) |
+| otel-collector | `127.0.0.1:4317` / `4318` | OTLP gRPC / HTTP receivers (profile `otel` only) |
+| otel-collector | `127.0.0.1:13133` | health_check extension (the image is distroless, so probe from the host: `curl localhost:13133`) |
 
 Startup order is enforced with `depends_on` + healthchecks:
 azurite → collector → dashboard (and the otel sidecar after the collector).
@@ -79,9 +82,11 @@ through the sidecar.
 
 ## Notes
 
-- **No authentication yet** (COL-09, #94): the stack is for local use only;
-  do not expose these ports beyond localhost.
+- **No authentication yet** (COL-09, #94): the stack is for local use only.
+  Every port is bound to `127.0.0.1`, so the services are not reachable from
+  the LAN; do not change the bindings to `0.0.0.0` until auth lands.
 - The Collector runs a single replica by design — DuckDB allows one writer
   (multi-replica index is COL-15, #123).
-- nginx resolves the `collector` hostname at startup, so the dashboard
-  container only works inside this compose network.
+- nginx resolves the `collector` hostname at request time via Docker's
+  embedded DNS, so the dashboard container only works inside this compose
+  network.
