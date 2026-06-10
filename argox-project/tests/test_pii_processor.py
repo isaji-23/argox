@@ -93,6 +93,10 @@ async def test_credit_card_valid_luhn_with_dashes(ctx: RunContext) -> None:
         "iban ES9121000418450200051332 ok",
         "iban ES91 2100 0418 4502 0005 1332 ok",
         "iban es91 2100 0418 4502 0005 1332 ok",
+        # Spaced form with a short final group (IBAN length not a multiple
+        # of four): DE = 22 chars.
+        "iban DE89 3704 0044 0532 0130 00 ok",
+        "iban de89 3704 0044 0532 0130 00 ok",
     ],
 )
 async def test_iban_accepts_grouped_and_lowercase_formats(
@@ -107,6 +111,38 @@ async def test_iban_rejects_too_short_strings(ctx: RunContext) -> None:
     processor = PiiRedactionProcessor(entities=["IBAN"])
     # 14 alphanumerics after stripping is below the 15-char minimum.
     out = await processor.process_output("code ES912100041845 hi", ctx)
+    assert "[REDACTED:IBAN]" not in out
+
+
+async def test_iban_rejects_failing_mod97_checksum(ctx: RunContext) -> None:
+    processor = PiiRedactionProcessor(entities=["IBAN"])
+    # Same shape as a real IBAN but the ISO 13616 mod-97 check fails.
+    out = await processor.process_output("ref ES0021000418450200051332 hi", ctx)
+    assert "[REDACTED:IBAN]" not in out
+
+
+async def test_iban_mod97_accepts_other_countries(ctx: RunContext) -> None:
+    processor = PiiRedactionProcessor(entities=["IBAN"])
+    out = await processor.process_output("iban DE89370400440532013000 ok", ctx)
+    assert "[REDACTED:IBAN]" in out
+
+
+async def test_iban_short_trailing_word_is_not_swallowed(ctx: RunContext) -> None:
+    # The optional short trailing group greedily captures " ok"; the detector
+    # must trim it back so only the IBAN span is redacted.
+    processor = PiiRedactionProcessor(entities=["IBAN"])
+    out = await processor.process_output(
+        "iban ES91 2100 0418 4502 0005 1332 ok", ctx
+    )
+    assert out == "iban [REDACTED:IBAN] ok"
+
+
+async def test_iban_spaced_with_bad_checksum_is_not_redacted(
+    ctx: RunContext,
+) -> None:
+    processor = PiiRedactionProcessor(entities=["IBAN"])
+    # Fails mod-97 both with and without the trailing short group.
+    out = await processor.process_output("ref DE00 3704 0044 0532 0130 00 hi", ctx)
     assert "[REDACTED:IBAN]" not in out
 
 

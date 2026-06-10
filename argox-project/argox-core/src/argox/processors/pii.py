@@ -123,21 +123,25 @@ _IPV6_RE = re.compile(
     r"(?![0-9A-Fa-f:])"
 )
 # IBAN: 2 letters (country) + 2 digits (checksum) + 11–30 alphanumerics
-# (BBAN). Accepted in two canonical forms:
+# (BBAN). Accepted in three canonical forms:
 #   - contiguous, e.g. ``ES9121000418450200051332``
 #   - 4-char groups separated by single spaces, e.g.
 #     ``ES91 2100 0418 4502 0005 1332``.
+#   - 4-char groups with a short (1–3 char) final group for countries whose
+#     IBAN length is not a multiple of four, e.g.
+#     ``DE89 3704 0044 0532 0130 00``.
 # Lowercase is allowed; the post-validator normalizes case before the
-# shape check. Non-4-char trailing groups are intentionally not matched
-# in v1 — keeping the boundary tight avoids the regex greedily swallowing
-# the next word into the IBAN span.
+# shape and mod-97 checks. The optional short group can greedily capture a
+# short word that follows a complete IBAN (``ES91 ... 1332 ok``), so the
+# detector revalidates the match without it before discarding — see
+# :func:`_iban_candidate`.
 _IBAN_RE = re.compile(
     r"(?<![A-Za-z0-9])"
     r"[A-Za-z]{2}\d{2}"
     r"(?:"
     r"[A-Za-z0-9]{11,30}"
     r"|"
-    r"(?: [A-Za-z0-9]{4}){2,7}"
+    r"(?: [A-Za-z0-9]{4}){2,7}(?: [A-Za-z0-9]{1,3})?"
     r")"
     r"(?![A-Za-z0-9])"
 )
@@ -177,17 +181,41 @@ def _luhn_valid(digits: str) -> bool:
 
 
 def _valid_iban(value: str) -> bool:
-    """Validate IBAN shape after stripping whitespace.
+    """Validate an IBAN candidate: shape check plus ISO 13616 mod-97.
 
-    Mod-97 verification is intentionally out of scope for v1 — the regex
-    plus shape check already gives high precision on real-world text.
+    The mod-97 check moves the first four characters to the end, maps
+    letters to ``10..35``, and requires the resulting integer to be
+    ``1 (mod 97)``. It rejects IBAN-shaped tokens (e.g. order or document
+    references) that the regex alone would redact.
     """
-    compact = value.replace(" ", "")
+    compact = value.replace(" ", "").upper()
     if not (15 <= len(compact) <= 34):
         return False
     if not compact[:2].isalpha() or not compact[2:4].isdigit():
         return False
-    return compact[4:].isalnum()
+    if not compact[4:].isalnum():
+        return False
+    rearranged = compact[4:] + compact[:4]
+    numeric = "".join(str(int(ch, 36)) for ch in rearranged)
+    return int(numeric) % 97 == 1
+
+
+def _iban_candidate(value: str) -> str | None:
+    """Return the valid IBAN prefix of a regex match, or ``None``.
+
+    The regex allows an optional short trailing group so spaced IBANs whose
+    length is not a multiple of four (DE, GB, NL, ...) are matched. That same
+    group can greedily capture a short word following a complete IBAN
+    (e.g. ``ES91 ... 1332 ok``). The regex never backtracks on a validator
+    rejection, so when the full match fails mod-97 the candidate is retried
+    once without the trailing short group before being discarded.
+    """
+    if _valid_iban(value):
+        return value
+    head, sep, tail = value.rpartition(" ")
+    if sep and len(tail) <= 3 and _valid_iban(head):
+        return head
+    return None
 
 
 _DNI_LETTERS = "TRWAGMYFPDXBNJZSQVHLCKE"
@@ -211,9 +239,10 @@ def _valid_es_nie(value: str) -> bool:
 class _DefaultRegexDetector:
     """Zero-dependency detector covering the v1 entity catalogue.
 
-    Each entity is matched by a dedicated, anchored regex; numeric
-    entities (CREDIT_CARD, ES_DNI, ES_NIE, IPV4) are post-validated
-    so a regex hit alone is not enough to trigger redaction.
+    Each entity is matched by a dedicated, anchored regex; checksum or
+    range-carrying entities (CREDIT_CARD, IBAN, ES_DNI, ES_NIE, IPV4)
+    are post-validated so a regex hit alone is not enough to trigger
+    redaction.
     """
 
     _PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
@@ -241,8 +270,23 @@ class _DefaultRegexDetector:
                     digits = re.sub(r"[ \-]", "", raw)
                     if not _luhn_valid(digits):
                         continue
-                if entity == "IBAN" and not _valid_iban(raw):
-                    continue
+                if entity == "IBAN":
+                    candidate = _iban_candidate(raw)
+                    if candidate is None:
+                        continue
+                    if len(candidate) != len(raw):
+                        # Trailing short group was a following word, not part
+                        # of the IBAN: shrink the match so only the IBAN span
+                        # is redacted.
+                        matches.append(
+                            EntityMatch(
+                                m.start(),
+                                m.start() + len(candidate),
+                                entity,
+                                candidate,
+                            )
+                        )
+                        continue
                 if entity == "ES_DNI" and not _valid_es_dni(raw):
                     continue
                 if entity == "ES_NIE" and not _valid_es_nie(raw):
