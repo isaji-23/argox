@@ -32,6 +32,11 @@ class SpanRecord:
     # Catch-all for other attributes
     attributes: Mapping[str, Any] = field(default_factory=dict)
 
+    # Span events decoded from OTLP (name, timestamp, attributes). Not stored
+    # in the index — the raw blob already preserves them — but carried so
+    # ingest-time enrichment (residual PII scan) can inspect event payloads.
+    events: tuple[Mapping[str, Any], ...] = ()
+
 
 class TraceIndexError(RuntimeError):
     """Base class for index backend failures."""

@@ -1,4 +1,4 @@
-"""Basic ingest-time enrichment (cost + residual-PII tagging)."""
+"""Ingest-time enrichment (GenAI normalisation, cost, residual-PII tagging)."""
 
 from argox_collector.enrichment.pipeline import enrich
 

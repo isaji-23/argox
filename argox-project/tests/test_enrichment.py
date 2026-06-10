@@ -1,11 +1,16 @@
-"""Tests for the COL-03 basic enrichment stages (cost + residual PII)."""
+"""Tests for the COL-07 enrichment stages (normalisation, cost, residual PII)."""
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from argox_collector.enrichment import pii
 from argox_collector.enrichment.cost import enrich_cost
+from argox_collector.enrichment.normalize import normalize
+from argox_collector.enrichment.pipeline import enrich
 from argox_collector.enrichment.pricing import load_pricing
 from argox_collector.index.base import SpanRecord
+from argox_collector.settings import CollectorSettings
 
 
 def _record(**attrs) -> SpanRecord:
@@ -63,6 +68,61 @@ def test_pii_scan_tags_iban() -> None:
     assert pii.scan(record).attributes["argox.pii.residual_detected"] is True
 
 
+def test_pii_scan_rejects_iban_with_bad_checksum() -> None:
+    # Same shape as a real IBAN but the mod-97 check fails.
+    record = _record(**{"note": "IBAN ES0021000418450200051332"})
+    assert pii.scan(record) is record
+
+
+def test_pii_scan_tags_spaced_iban() -> None:
+    record = _record(**{"note": "IBAN ES91 2100 0418 4502 0005 1332"})
+    assert pii.scan(record).attributes["argox.pii.residual_detected"] is True
+
+
+def test_pii_scan_tags_spaced_iban_with_short_final_group() -> None:
+    # DE IBANs are 22 chars, so the spaced form ends in a 2-char group.
+    record = _record(**{"note": "IBAN DE89 3704 0044 0532 0130 00"})
+    assert pii.scan(record).attributes["argox.pii.residual_detected"] is True
+
+
+def test_pii_scan_tags_spaced_iban_followed_by_short_word() -> None:
+    # The optional short group captures " OK"; the validator retries
+    # without it instead of discarding the match.
+    record = _record(**{"note": "IBAN ES91 2100 0418 4502 0005 1332 OK"})
+    assert pii.scan(record).attributes["argox.pii.residual_detected"] is True
+
+
+def test_pii_scan_rejects_spaced_iban_with_bad_checksum() -> None:
+    record = _record(**{"note": "ref DE00 3704 0044 0532 0130 00"})
+    assert pii.scan(record) is record
+
+
+def test_pii_scan_rejects_credit_card_failing_luhn() -> None:
+    record = _record(**{"note": "ref 4111 1111 1111 1112"})
+    assert pii.scan(record) is record
+
+
+def test_pii_scan_tags_e164_phone() -> None:
+    record = _record(**{"note": "call +34600112233"})
+    assert pii.scan(record).attributes["argox.pii.residual_detected"] is True
+
+
+def test_pii_scan_ignores_bare_digit_runs() -> None:
+    # Without a leading + this is indistinguishable from an order id.
+    record = _record(**{"note": "order 6001122334455"})
+    assert pii.scan(record) is record
+
+
+def test_pii_scan_tags_valid_spanish_dni() -> None:
+    record = _record(**{"note": "dni 12345678Z"})
+    assert pii.scan(record).attributes["argox.pii.residual_detected"] is True
+
+
+def test_pii_scan_rejects_dni_with_bad_control_letter() -> None:
+    record = _record(**{"note": "dni 12345678A"})
+    assert pii.scan(record) is record
+
+
 def test_pii_scan_leaves_clean_span_untouched() -> None:
     record = _record(**{"prompt": "summarise the quarterly report"})
     enriched = pii.scan(record)
@@ -78,3 +138,141 @@ def test_pii_scan_is_idempotent() -> None:
         }
     )
     assert pii.scan(record) is record
+
+
+def test_pii_scan_tags_event_payload() -> None:
+    record = SpanRecord(
+        trace_id="t",
+        span_id="s",
+        attributes={"prompt": "clean"},
+        events=(
+            {
+                "name": "gen_ai.content.completion",
+                "timestamp": None,
+                "attributes": {"completion": "card 4111 1111 1111 1111 charged"},
+            },
+        ),
+    )
+    enriched = pii.scan(record)
+    assert enriched.attributes["argox.pii.residual_detected"] is True
+
+
+def test_pii_scan_ignores_clean_events() -> None:
+    record = SpanRecord(
+        trace_id="t",
+        span_id="s",
+        attributes={"prompt": "clean"},
+        events=({"name": "retry", "timestamp": None, "attributes": {"n": 2}},),
+    )
+    assert pii.scan(record) is record
+
+
+def test_pii_scan_ignores_event_names() -> None:
+    # Event names are arbitrary strings and would only feed false positives;
+    # only the payload attributes are scanned.
+    record = SpanRecord(
+        trace_id="t",
+        span_id="s",
+        attributes={"prompt": "clean"},
+        events=(
+            {"name": "user@example.com", "timestamp": None, "attributes": {}},
+        ),
+    )
+    assert pii.scan(record) is record
+
+
+def test_pii_scan_truncates_oversized_values() -> None:
+    # A match past the truncation bound is not detected: the scan is
+    # best-effort and bounded, not the redaction layer.
+    padded = "x" * pii._MAX_SCAN_CHARS + " user@example.com"
+    assert pii.contains_pii(padded) is False
+    assert pii.contains_pii("user@example.com " + "x" * pii._MAX_SCAN_CHARS) is True
+
+
+def test_pii_scan_caps_event_count() -> None:
+    clean = {"name": "e", "timestamp": None, "attributes": {"v": "clean"}}
+    dirty = {"name": "e", "timestamp": None, "attributes": {"v": "user@example.com"}}
+    events = tuple([clean] * pii._MAX_EVENTS_SCANNED + [dirty])
+    record = SpanRecord(
+        trace_id="t", span_id="s", attributes={"prompt": "clean"}, events=events
+    )
+    assert pii.scan(record) is record
+
+    in_range = tuple([clean] * (pii._MAX_EVENTS_SCANNED - 1) + [dirty])
+    record = SpanRecord(
+        trace_id="t", span_id="s", attributes={"prompt": "clean"}, events=in_range
+    )
+    assert pii.scan(record).attributes["argox.pii.residual_detected"] is True
+
+
+def test_normalize_maps_legacy_token_keys() -> None:
+    record = _record(
+        **{
+            "gen_ai.usage.prompt_tokens": 1000,
+            "gen_ai.usage.completion_tokens": 500,
+        }
+    )
+    normalised = normalize(record)
+    assert normalised.attributes["gen_ai.usage.input_tokens"] == 1000
+    assert normalised.attributes["gen_ai.usage.output_tokens"] == 500
+
+
+def test_normalize_maps_openinference_keys() -> None:
+    record = _record(
+        **{
+            "llm.model_name": "gpt-4o",
+            "llm.token_count.prompt": 10,
+            "llm.token_count.completion": 5,
+        }
+    )
+    normalised = normalize(record)
+    assert normalised.attributes["gen_ai.request.model"] == "gpt-4o"
+    assert normalised.attributes["gen_ai.usage.input_tokens"] == 10
+    assert normalised.attributes["gen_ai.usage.output_tokens"] == 5
+
+
+def test_normalize_canonical_key_wins_over_variant() -> None:
+    record = _record(
+        **{
+            "gen_ai.usage.input_tokens": 100,
+            "gen_ai.usage.prompt_tokens": 999,
+        }
+    )
+    assert normalize(record).attributes["gen_ai.usage.input_tokens"] == 100
+
+
+def test_normalize_no_variants_returns_same_record() -> None:
+    record = _record(**{"gen_ai.request.model": "gpt-4o"})
+    assert normalize(record) is record
+
+
+def test_pricing_loads_custom_yaml(tmp_path: Path) -> None:
+    table = tmp_path / "pricing.yaml"
+    table.write_text(
+        "models:\n  custom-model:\n    input: 0.001\n    output: 0.002\n",
+        encoding="utf-8",
+    )
+    pricing = load_pricing(table)
+    assert pricing == {"custom-model": {"input": 0.001, "output": 0.002}}
+
+
+def test_pipeline_normalises_then_costs_and_is_idempotent(tmp_path: Path) -> None:
+    settings = CollectorSettings(
+        storage_local_root=tmp_path / "blobs",
+        index_duckdb_path=tmp_path / "index.duckdb",
+    )
+    record = _record(
+        **{
+            "llm.model_name": "gpt-4o",
+            "gen_ai.usage.prompt_tokens": 1000,
+            "gen_ai.usage.completion_tokens": 500,
+            "prompt": "reach me at user@example.com",
+        }
+    )
+    first = enrich([record], settings)[0]
+    # 1.0 * 0.0025 + 0.5 * 0.01 = 0.0075, via normalised variant keys.
+    assert first.run_cost == 0.0075
+    assert first.attributes["argox.pii.residual_detected"] is True
+
+    second = enrich([first], settings)[0]
+    assert second == first

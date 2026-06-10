@@ -1,8 +1,11 @@
-"""Basic per-span cost enrichment.
+"""Per-span cost enrichment (COL-07).
 
-Computes ``run_cost`` (USD) from GenAI token-usage attributes and a model price
-table. Deliberately small and idempotent; the full per-model attribution worker
-that joins run records lands in COL-07 (#92).
+Computes ``run_cost`` (USD) from the canonical GenAI token-usage attributes
+(populated by the normalisation stage) and a model price table. The SDK sums
+``api_calls`` token counts into the span totals read here, so the per-span
+cost is the per-call sum. Joining run records (``api_calls[]`` written by the
+``/v1/runs`` path) into a ``runs.cost_usd`` column is deferred until COL-11
+(#105) lands that table.
 """
 
 from __future__ import annotations
