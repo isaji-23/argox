@@ -15,7 +15,7 @@ RUN useradd --create-home --uid 1000 argox
 COPY pyproject.toml ./
 COPY src ./src
 
-RUN pip install --upgrade pip && pip install .
+RUN pip install --upgrade pip && pip install ".[azure]"
 
 USER argox
 

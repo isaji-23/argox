@@ -6,6 +6,7 @@ from typing import Optional
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from argox_collector import __version__
 from argox_collector.index import TraceIndex, build_index
@@ -64,6 +65,16 @@ def create_app(
     app.add_middleware(
         PayloadSizeLimitMiddleware, max_bytes=settings.max_payload_size
     )
+    cors_origins = settings.cors_origin_list
+    if cors_origins:
+        # Only installed when origins are configured: an empty default keeps
+        # same-origin deployments free of permissive CORS headers.
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=cors_origins,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
     app.include_router(health.router)
     app.include_router(traces.router)
     app.include_router(policies.router)
