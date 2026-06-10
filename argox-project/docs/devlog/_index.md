@@ -10,6 +10,7 @@ for the decisions behind these changes and
 |---|---|---|---|---|
 | 2026-06-10 | COL-06 | Query API for traces and metrics | #127 | in-review |
 | 2026-06-10 | COL-05 | Policy CRUD API and bundle endpoint | #126 | in-review |
+| 2026-06-09 | DASH-01 | Dashboard initialization | #125 | in-review |
 | 2026-06-08 | COL-03 | OTLP/HTTP trace ingest endpoint | #122 | in-review |
 | 2026-06-03 | BENCH-01 | SDK benchmarking infrastructure | n/a | in-review |
 | 2026-06-01 | CORE-06 | Processor pipeline + OTel run span | #35 | merged |

@@ -1,0 +1,271 @@
+@import "tailwindcss";
+
+/* ============================================================
+   ARGOX DESIGN SYSTEM — TOKENS
+   "Calm control room that sees everything."
+   Argos Panoptes / peacock iridescence.
+   ============================================================ */
+
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=Space+Grotesk:wght@500;600;700&display=swap');
+
+:root {
+  /* ---- Type ---- */
+  --font-ui: 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+  --font-display: 'Space Grotesk', var(--font-ui);
+
+  /* Type scale (1.20 minor third-ish, tuned for density) */
+  --fs-2xs: 10.5px;
+  --fs-xs: 11.5px;
+  --fs-sm: 12.5px;
+  --fs-base: 13.5px;
+  --fs-md: 15px;
+  --fs-lg: 17px;
+  --fs-xl: 21px;
+  --fs-2xl: 27px;
+  --fs-3xl: 34px;
+  --fs-4xl: 44px;
+
+  --lh-tight: 1.15;
+  --lh-snug: 1.35;
+  --lh-normal: 1.55;
+
+  /* ---- Spacing (4px base) ---- */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 20px;
+  --sp-6: 24px;
+  --sp-8: 32px;
+  --sp-10: 40px;
+  --sp-12: 48px;
+  --sp-16: 64px;
+
+  /* ---- Radii ---- */
+  --r-xs: 3px;
+  --r-sm: 5px;
+  --r-md: 7px;
+  --r-lg: 10px;
+  --r-xl: 14px;
+  --r-full: 999px;
+
+  /* ---- Iridescent brand constants (mode-independent hues) ---- */
+  --peacock-cyan: #16B8C4;
+  --peacock-cyan-bright: #34D6E2;
+  --peacock-teal: #1FB89A;
+  --peacock-indigo: #5B7CF0;
+  --bronze: #C9923F;
+  --bronze-bright: #E0B05A;
+
+  /* Span-type palette (waterfall) — one iridescent family */
+  --span-llm: #22C3D6;        /* LLM calls — cyan */
+  --span-tool: #2FB89A;       /* tool calls — teal-green */
+  --span-processor: #6985F2;  /* processor runs — indigo */
+
+  --transition: 140ms cubic-bezier(0.2, 0, 0, 1);
+  --transition-slow: 240ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+/* ============================================================
+   DARK MODE (default) — deep night blue
+   ============================================================ */
+:root,
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  --bg-base: #0A0F1A;        /* deepest — app canvas */
+  --bg-surface: #0E1524;     /* cards / panels */
+  --bg-surface-2: #121B2D;   /* raised / table header */
+  --bg-surface-3: #18223A;   /* inputs / hover */
+  --bg-overlay: #0C1322;     /* popovers, menus */
+
+  --border: #1D2940;
+  --border-soft: #16213400;  /* transparent-ish */
+  --border-strong: #2A3A59;
+  --border-faint: #141E32;
+
+  --text-primary: #E8EEF8;
+  --text-secondary: #97A6C2;
+  --text-muted: #5E6E8C;
+  --text-faint: #3E4D68;
+  --text-inverse: #0A0F1A;
+
+  /* Primary accent — peacock teal/cyan */
+  --accent: #19BDC9;
+  --accent-hover: #2DD4E0;
+  --accent-press: #149AA5;
+  --accent-fg: #04121A;            /* text on accent fill */
+  --accent-surface: rgba(25, 189, 201, 0.13);
+  --accent-surface-strong: rgba(25, 189, 201, 0.22);
+  --accent-border: rgba(25, 189, 201, 0.42);
+  --focus-ring: rgba(45, 212, 224, 0.55);
+
+  /* Bronze / gold — restrained secondary */
+  --gold: #CFA14E;
+  --gold-bright: #E6BD6A;
+  --gold-surface: rgba(207, 161, 78, 0.14);
+  --gold-border: rgba(207, 161, 78, 0.40);
+
+  /* Semantic — allow */
+  --allow: #3FBE92;
+  --allow-bright: #5AD3A8;
+  --allow-surface: rgba(63, 190, 146, 0.14);
+  --allow-border: rgba(63, 190, 146, 0.38);
+
+  /* Semantic — warn (bronze/amber) */
+  --warn: #D8A23E;
+  --warn-bright: #ECBC5C;
+  --warn-surface: rgba(216, 162, 62, 0.15);
+  --warn-border: rgba(216, 162, 62, 0.42);
+
+  /* Semantic — BLOCK (the differentiator): deep red + bronze edge */
+  --block: #EC5147;
+  --block-bright: #FF6B60;
+  --block-ink: #FFD9D4;
+  --block-bg: #2A0E12;            /* filled blocked surface */
+  --block-bg-2: #34111A;         /* hover */
+  --block-border: #E0483D;
+  --block-edge: #C9923F;          /* bronze left edge */
+  --block-surface: rgba(236, 81, 71, 0.13);
+  --block-glow: rgba(224, 72, 61, 0.30);
+
+  /* Span types */
+  --span-llm: #22C3D6;
+  --span-tool: #34C7A6;
+  --span-processor: #6985F2;
+  --span-track: #16203400;
+
+  --shadow-sm: 0 1px 2px rgba(0,0,0,0.40);
+  --shadow-md: 0 4px 14px rgba(0,0,0,0.45);
+  --shadow-lg: 0 18px 48px rgba(0,0,0,0.58);
+  --shadow-pop: 0 12px 34px rgba(0,0,0,0.62);
+
+  --grid-line: rgba(255,255,255,0.045);
+  --chart-grid: rgba(151,166,194,0.13);
+  --skeleton-base: #141E32;
+  --skeleton-shine: #1E2A44;
+}
+
+/* ============================================================
+   LIGHT MODE — cool off-white, same blue-slate ink
+   ============================================================ */
+[data-theme="light"] {
+  color-scheme: light;
+
+  --bg-base: #EEF2F8;
+  --bg-surface: #FFFFFF;
+  --bg-surface-2: #F4F7FC;
+  --bg-surface-3: #E9EEF7;
+  --bg-overlay: #FFFFFF;
+
+  --border: #DBE2EE;
+  --border-soft: #E6EBF400;
+  --border-strong: #C3CEDF;
+  --border-faint: #E8EDF5;
+
+  --text-primary: #131C30;
+  --text-secondary: #495872;
+  --text-muted: #748299;
+  --text-faint: #9DA9BD;
+  --text-inverse: #FFFFFF;
+
+  --accent: #0C97A3;
+  --accent-hover: #0AA7B4;
+  --accent-press: #0A8089;
+  --accent-fg: #FFFFFF;
+  --accent-surface: rgba(12, 151, 163, 0.10);
+  --accent-surface-strong: rgba(12, 151, 163, 0.18);
+  --accent-border: rgba(12, 151, 163, 0.34);
+  --focus-ring: rgba(12, 151, 163, 0.40);
+
+  --gold: #9C7424;
+  --gold-bright: #B98D34;
+  --gold-surface: rgba(156, 116, 36, 0.12);
+  --gold-border: rgba(156, 116, 36, 0.34);
+
+  --allow: #15936B;
+  --allow-bright: #1AA87B;
+  --allow-surface: rgba(21, 147, 107, 0.11);
+  --allow-border: rgba(21, 147, 107, 0.30);
+
+  --warn: #B5821F;
+  --warn-bright: #CD9627;
+  --warn-surface: rgba(181, 130, 31, 0.13);
+  --warn-border: rgba(181, 130, 31, 0.36);
+
+  --block: #C7362B;
+  --block-bright: #DC4034;
+  --block-ink: #7C1A12;
+  --block-bg: #FBE9E6;
+  --block-bg-2: #F7DCD7;
+  --block-border: #E0483D;
+  --block-edge: #B07A28;
+  --block-surface: rgba(199, 54, 43, 0.09);
+  --block-glow: rgba(199, 54, 43, 0.18);
+
+  --span-llm: #0E96B0;
+  --span-tool: #128A6F;
+  --span-processor: #4A63CC;
+  --span-track: #16203400;
+
+  --shadow-sm: 0 1px 2px rgba(16,28,48,0.07);
+  --shadow-md: 0 4px 16px rgba(16,28,48,0.10);
+  --shadow-lg: 0 18px 48px rgba(16,28,48,0.16);
+  --shadow-pop: 0 12px 30px rgba(16,28,48,0.16);
+
+  --grid-line: rgba(16,28,48,0.04);
+  --chart-grid: rgba(73,88,114,0.16);
+  --skeleton-base: #E5EBF4;
+  --skeleton-shine: #F0F4FA;
+}
+
+/* ============================================================
+   BASE RESET
+   ============================================================ */
+@layer base {
+  * { @apply box-border; }
+  html, body { @apply m-0 p-0 h-full; }
+  body {
+    font-family: var(--font-ui);
+    font-size: var(--fs-base);
+    line-height: var(--lh-normal);
+    color: var(--text-primary);
+    background: var(--bg-base);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    font-feature-settings: 'cv05' 1, 'ss03' 1;
+  }
+  #root { @apply h-full; }
+
+  ::selection { background: var(--accent-surface-strong); color: var(--text-primary); }
+
+  /* Scrollbars — thin, control-room */
+  * { scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
+  *::-webkit-scrollbar { width: 9px; height: 9px; }
+  *::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 999px; border: 2px solid transparent; background-clip: content-box; }
+  *::-webkit-scrollbar-thumb:hover { background: var(--text-faint); background-clip: content-box; }
+  *::-webkit-scrollbar-track { background: transparent; }
+
+  button { font-family: inherit; @apply cursor-pointer; }
+  input, select, textarea { font-family: inherit; }
+  a { @apply no-underline; color: inherit; }
+}
+
+@layer components {
+  .mono { font-family: var(--font-mono); font-feature-settings: 'zero' 1; }
+  .tnum { font-variant-numeric: tabular-nums; }
+  .ax-fade-in { animation: ax-fade-in var(--transition-slow) both; }
+}
+
+/* Animations — entrance keeps opacity:1 as base so a frozen/paused
+   timeline (preview capture) never traps content invisible. */
+@keyframes ax-shimmer { 0% { background-position: -180% 0; } 100% { background-position: 180% 0; } }
+@keyframes ax-fade-in { from { transform: translateY(5px); } to { transform: none; } }
+@keyframes ax-pulse-block { 0%,100% { box-shadow: 0 0 0 0 var(--block-glow); } 50% { box-shadow: 0 0 0 4px transparent; } }
+@keyframes ax-spin { to { transform: rotate(360deg); } }
+@keyframes ax-scan { 0% { transform: translateX(-100%); } 100% { transform: translateX(100%); } }
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation-duration: 0.001ms !important; transition-duration: 0.001ms !important; }
+}
