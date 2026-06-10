@@ -55,6 +55,10 @@ phone pattern was tightened to the E.164 form the SDK's
 ``PiiRedactionProcessor`` already uses, since a bare-digit pattern matches any
 10-13 digit run and defeats the Luhn check. The matching SDK-side change
 (IBAN mod-97 in the processor) shipped separately in PR #133 (PROC-01).
+For parity with #133 the scan also accepts spaced IBANs, including the
+short final group used by countries whose IBAN length is not a multiple of
+four, with a trim-and-revalidate retry when that group captured a
+following short word.
 
 ## Notes / follow-ups
 
