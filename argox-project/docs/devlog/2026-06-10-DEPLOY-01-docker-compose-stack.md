@@ -33,6 +33,21 @@
   child LLM call) generated with the protobuf JSON mapping; README explains
   seeding, ports, env vars and volumes.
 
+### Review hardening (post-review, commit 224c803)
+
+- `deploy/docker/compose.yaml`: every published port now binds to
+  `127.0.0.1` (collector, azurite, dashboard, otel `4317`/`4318`/`13133`) —
+  the stack has no auth (COL-09), so the services must not be reachable from
+  the LAN. Pinned the Azurite image to `3.35.0` (was `latest`) and added
+  `restart: unless-stopped` to all services.
+- `argox-dashboard/nginx.conf`: added `client_max_body_size 10m` so proxied
+  OTLP batches match the Collector ingest limit
+  (`ARGOX_MAX_PAYLOAD_SIZE`, 10 MB default) instead of being capped at
+  nginx's 1 MB default and rejected with 413. The `collector` upstream is now
+  resolved at request time via Docker's embedded DNS (`resolver 127.0.0.11`
+  + variable `proxy_pass`), so a Collector restart with a new IP no longer
+  leaves nginx serving a stale address.
+
 ## Why
 
 Issue #96: a one-command stack for development and the TFM demo. Running the
@@ -53,5 +68,6 @@ string and provisions a persistent volume for DuckDB.
 - Collector does not decompress gzip request bodies (400) — acceptable
   locally (sidecar sets `compression: none`), but SDK exporters often
   default to gzip; consider supporting `Content-Encoding: gzip` on ingest.
-- No auth (COL-09) — stack is local-only by design; the next step is the
-  Azure deployment (Container Apps, ingress restricted until COL-09).
+- No auth (COL-09) — stack is local-only by design and now enforced via
+  loopback-only port bindings; the next step is the Azure deployment
+  (Container Apps, ingress restricted until COL-09).
