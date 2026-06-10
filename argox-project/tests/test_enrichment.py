@@ -112,6 +112,44 @@ def test_pii_scan_ignores_clean_events() -> None:
     assert pii.scan(record) is record
 
 
+def test_pii_scan_ignores_event_names() -> None:
+    # Event names are arbitrary strings and would only feed false positives;
+    # only the payload attributes are scanned.
+    record = SpanRecord(
+        trace_id="t",
+        span_id="s",
+        attributes={"prompt": "clean"},
+        events=(
+            {"name": "user@example.com", "timestamp": None, "attributes": {}},
+        ),
+    )
+    assert pii.scan(record) is record
+
+
+def test_pii_scan_truncates_oversized_values() -> None:
+    # A match past the truncation bound is not detected: the scan is
+    # best-effort and bounded, not the redaction layer.
+    padded = "x" * pii._MAX_SCAN_CHARS + " user@example.com"
+    assert pii.contains_pii(padded) is False
+    assert pii.contains_pii("user@example.com " + "x" * pii._MAX_SCAN_CHARS) is True
+
+
+def test_pii_scan_caps_event_count() -> None:
+    clean = {"name": "e", "timestamp": None, "attributes": {"v": "clean"}}
+    dirty = {"name": "e", "timestamp": None, "attributes": {"v": "user@example.com"}}
+    events = tuple([clean] * pii._MAX_EVENTS_SCANNED + [dirty])
+    record = SpanRecord(
+        trace_id="t", span_id="s", attributes={"prompt": "clean"}, events=events
+    )
+    assert pii.scan(record) is record
+
+    in_range = tuple([clean] * (pii._MAX_EVENTS_SCANNED - 1) + [dirty])
+    record = SpanRecord(
+        trace_id="t", span_id="s", attributes={"prompt": "clean"}, events=in_range
+    )
+    assert pii.scan(record).attributes["argox.pii.residual_detected"] is True
+
+
 def test_normalize_maps_legacy_token_keys() -> None:
     record = _record(
         **{
