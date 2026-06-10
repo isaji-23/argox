@@ -158,7 +158,12 @@ by versioned policy CRUD under `/api/v1/policies`. The Collector also exposes
 a read-only Query API for the dashboard (COL-06): paginated trace summaries
 (`GET /api/v1/traces`), per-trace span waterfalls (`GET /api/v1/traces/{id}`)
 and trailing-window aggregations (`GET /api/v1/metrics/cost|latency|success`)
-served from the DuckDB index.
+served from the DuckDB index. Ingest-time enrichment (COL-07) normalises
+variant GenAI attribute shapes (legacy `gen_ai.usage.prompt_tokens`,
+OpenInference `llm.*`) onto the canonical keys, computes per-span `run_cost`
+from a YAML pricing table (unknown models log a warning and skip), and tags
+`argox.pii.residual_detected` when a high-confidence pattern matches span
+attributes or event payloads; every stage is idempotent.
 
 **Not yet:** no real `SsePolicyClient` (only the contract + in-process cache),
 no durable audit storage or dashboard from the SDK (only the `metrics` object
