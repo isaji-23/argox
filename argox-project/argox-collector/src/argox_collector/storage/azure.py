@@ -19,6 +19,7 @@ from argox_collector.storage.base import (
     BlobData,
     BlobMetadata,
     BlobNotFoundError,
+    ConditionNotMetError,
     StorageBackend,
     StorageError,
     StoredBlob,
@@ -113,6 +114,7 @@ class AzureBlobStorageBackend(StorageBackend):
         *,
         content_type: Optional[str] = None,
         metadata: Optional[Mapping[str, str]] = None,
+        expected_etag: Optional[str] = None,
     ) -> BlobMetadata:
         normalize_key(key)
         clean_metadata = validate_metadata(metadata)
@@ -120,14 +122,38 @@ class AzureBlobStorageBackend(StorageBackend):
         self._ensure_container()
         blob = self._container.get_blob_client(key)
         content_settings = _build_content_settings(content_type)
+        # Conditional kwargs are only added when a guard was requested so that
+        # unconditional writes keep the exact call shape the SDK (and the test
+        # fakes) have always seen.
+        overwrite = True
+        conditional_kwargs: dict[str, Any] = {}
+        if expected_etag == "*":
+            # Create-only guard: the service rejects the upload with
+            # BlobAlreadyExists when the key is taken.
+            overwrite = False
+        elif expected_etag is not None:
+            try:
+                from azure.core import MatchConditions
+            except ImportError as exc:
+                # Never degrade a conditional write into an unconditional
+                # overwrite: that would silently break optimistic locking.
+                raise StorageError(
+                    "azure-core is required for conditional writes; "
+                    "install argox-collector[azure] to enable them"
+                ) from exc
+            conditional_kwargs["etag"] = expected_etag
+            conditional_kwargs["match_condition"] = MatchConditions.IfNotModified
         try:
             result = blob.upload_blob(
                 payload,
-                overwrite=True,
+                overwrite=overwrite,
                 content_settings=content_settings,
                 metadata=clean_metadata,
+                **conditional_kwargs,
             )
         except Exception as exc:
+            if expected_etag is not None and _is_condition_failed(exc):
+                raise ConditionNotMetError(key) from exc
             raise StorageError(f"failed to upload {key!r}: {exc}") from exc
 
         etag = _strip_quotes(_attr(result, "etag", None))
@@ -268,3 +294,16 @@ def _is_already_exists(exc: BaseException) -> bool:
         return True
     status_code = getattr(exc, "status_code", None)
     return status_code == 409
+
+
+def _is_condition_failed(exc: BaseException) -> bool:
+    """Detect a rejected conditional upload.
+
+    The service answers 412 ``ConditionNotMet`` for an ETag mismatch and
+    409 ``BlobAlreadyExists`` for a create-only (``overwrite=False``) clash.
+    """
+    error_code = getattr(exc, "error_code", None)
+    if error_code in {"ConditionNotMet", "BlobAlreadyExists"}:
+        return True
+    status_code = getattr(exc, "status_code", None)
+    return status_code in {409, 412}

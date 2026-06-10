@@ -15,6 +15,7 @@ from argox_collector.storage import (
     AzureBlobStorageBackend,
     BlobMetadata,
     BlobNotFoundError,
+    ConditionNotMetError,
     LocalStorageBackend,
     StorageBackend,
     StorageError,
@@ -526,6 +527,16 @@ class _NotFoundError(Exception):
     status_code = 404
 
 
+class _AlreadyExistsError(Exception):
+    error_code = "BlobAlreadyExists"
+    status_code = 409
+
+
+class _ConditionFailedError(Exception):
+    error_code = "ConditionNotMet"
+    status_code = 412
+
+
 class FakeAzureBlobClient:
     def __init__(self, container: FakeAzureContainerClient, key: str) -> None:
         self._container = container
@@ -538,9 +549,16 @@ class FakeAzureBlobClient:
         overwrite: bool,
         content_settings: Any,
         metadata: Mapping[str, str],
+        etag: Optional[str] = None,
+        match_condition: Any = None,
     ) -> dict[str, Any]:
-        if not overwrite and self._key in self._container._blobs:
-            raise RuntimeError("blob exists")
+        existing = self._container._blobs.get(self._key)
+        if not overwrite and existing is not None:
+            raise _AlreadyExistsError()
+        if match_condition is not None and etag is not None:
+            current = existing.etag.strip('"') if existing is not None else None
+            if current != etag:
+                raise _ConditionFailedError()
         content_type = (
             getattr(content_settings, "content_type", None)
             if content_settings is not None
@@ -834,3 +852,73 @@ def test_build_storage_returns_metadata_compatible_backend(tmp_path: Path) -> No
     meta = backend.put("a/b", b"hi")
     assert isinstance(meta, BlobMetadata)
     assert backend.get("a/b").data == b"hi"
+
+
+# ---------------------------------------------------------------------------
+# Conditional writes (expected_etag) — COL-05
+# ---------------------------------------------------------------------------
+
+
+def test_local_create_only_put_succeeds_on_missing_key(
+    local_backend: LocalStorageBackend,
+) -> None:
+    meta = local_backend.put("policies/manifest.json", b"{}", expected_etag="*")
+    assert local_backend.get("policies/manifest.json").data == b"{}"
+    assert meta.etag
+
+
+def test_local_create_only_put_rejects_existing_key(
+    local_backend: LocalStorageBackend,
+) -> None:
+    local_backend.put("policies/manifest.json", b"{}")
+    with pytest.raises(ConditionNotMetError):
+        local_backend.put("policies/manifest.json", b"{}", expected_etag="*")
+
+
+def test_local_conditional_put_succeeds_on_matching_etag(
+    local_backend: LocalStorageBackend,
+) -> None:
+    local_backend.put("k", b"v1")
+    etag = local_backend.get("k").metadata.etag
+    local_backend.put("k", b"v2", expected_etag=etag)
+    assert local_backend.get("k").data == b"v2"
+
+
+def test_local_conditional_put_rejects_stale_etag(
+    local_backend: LocalStorageBackend,
+) -> None:
+    local_backend.put("k", b"v1")
+    stale = local_backend.get("k").metadata.etag
+    local_backend.put("k", b"v2")
+    with pytest.raises(ConditionNotMetError):
+        local_backend.put("k", b"v3", expected_etag=stale)
+    assert local_backend.get("k").data == b"v2"
+
+
+def test_local_conditional_put_rejects_missing_blob(
+    local_backend: LocalStorageBackend,
+) -> None:
+    with pytest.raises(ConditionNotMetError):
+        local_backend.put("missing", b"v", expected_etag="deadbeef")
+    assert not local_backend.exists("missing")
+
+
+def test_azure_create_only_put_rejects_existing_key(
+    azure_backend: AzureBlobStorageBackend,
+) -> None:
+    azure_backend.put("policies/manifest.json", b"{}")
+    with pytest.raises(ConditionNotMetError):
+        azure_backend.put("policies/manifest.json", b"{}", expected_etag="*")
+
+
+def test_azure_conditional_put_roundtrip(
+    azure_backend: AzureBlobStorageBackend,
+) -> None:
+    azure_backend.put("k", b"v1")
+    etag = azure_backend.get("k").metadata.etag
+    azure_backend.put("k", b"v2", expected_etag=etag)
+    assert azure_backend.get("k").data == b"v2"
+
+    stale = etag
+    with pytest.raises(ConditionNotMetError):
+        azure_backend.put("k", b"v3", expected_etag=stale)
