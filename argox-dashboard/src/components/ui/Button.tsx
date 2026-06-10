@@ -43,7 +43,7 @@ export function Button({
   return (
     <button
       className={cn(
-        "ax-btn inline-flex items-center justify-center font-semibold font-ui rounded-md border transition-all select-none whitespace-nowrap leading-none",
+        "inline-flex items-center justify-center font-semibold font-ui rounded-md border transition-all select-none whitespace-nowrap leading-none",
         variants[variant],
         sizes[size],
         full && "w-full",
@@ -71,7 +71,7 @@ export function IconButton({ name, size = 16, label, active, className, ...props
       title={label}
       aria-label={label}
       className={cn(
-        "ax-iconbtn inline-flex items-center justify-center w-8 h-8 rounded-md transition-all border",
+        "inline-flex items-center justify-center w-8 h-8 rounded-md transition-all border",
         active ? "bg-surface-3 text-text-primary border-border" : "bg-transparent text-text-secondary border-transparent",
         className
       )}

@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useMemo } from 'react';
 import { cn } from '../../lib/utils';
 import { Icon } from '../shared/Icon';
 
@@ -39,7 +39,10 @@ export function Select({
     return () => document.removeEventListener('mousedown', handleOutsideClick);
   }, []);
 
-  const normalizedOptions = options.map(o => typeof o === 'string' ? { value: o, label: o } : o);
+  const normalizedOptions = useMemo(() => 
+    options.map(o => typeof o === 'string' ? { value: o, label: o } : o),
+    [options]
+  );
   const currentOption = normalizedOptions.find(o => o.value === value) || normalizedOptions[0];
 
   return (

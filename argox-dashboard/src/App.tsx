@@ -62,8 +62,7 @@ function App() {
           <TracesScreen
             timeRange={timeRange}
             agent={agent}
-            onOpenTrace={(t) => {
-              console.log('Open trace', t);
+            onOpenTrace={(_) => {
               setRoute('trace');
             }}
           />

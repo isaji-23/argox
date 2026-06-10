@@ -21,22 +21,23 @@ interface Trace {
   startedHuman: string;
   durationMs: number;
   status: string;
-  decision: any;
+  decision: 'allow' | 'block' | 'warn';
   spanCount: number;
 }
 
 interface TracesScreenProps {
   timeRange: string;
   agent: string;
-  onOpenTrace: (trace: any) => void;
+  onOpenTrace: (trace: Trace) => void;
 }
 
 export function TracesScreen({ timeRange, agent, onOpenTrace }: TracesScreenProps) {
-  const allTraces = useMemo(() => buildTraces(), []);
+  const allTraces = useMemo(() => buildTraces() as Trace[], []);
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
-  const [sort, setSort] = useState<{ key: string; dir: 'asc' | 'desc' }>({ key: 'startedHuman', dir: 'desc' });
+  const [sort, setSort] = useState<{ key: keyof Trace; dir: 'asc' | 'desc' }>({ key: 'startedHuman', dir: 'desc' });
   const [query, setQuery] = useState('');
+  const [debouncedQuery, setDebouncedQuery] = useState('');
   const [filterStatus, setFilterStatus] = useState('all');
   const [filterDecision, setFilterDecision] = useState('all');
   const [filterAgent, setFilterAgent] = useState(agent);
@@ -47,32 +48,51 @@ export function TracesScreen({ timeRange, agent, onOpenTrace }: TracesScreenProp
     setFilterAgent(agent);
   }, [agent]);
 
+  // Debounce search query
+  useEffect(() => {
+    const handler = setTimeout(() => {
+      setDebouncedQuery(query);
+    }, 300);
+    return () => clearTimeout(handler);
+  }, [query]);
+
   useEffect(() => {
     setLoading(true);
     const timeout = setTimeout(() => setLoading(false), 480);
     return () => clearTimeout(timeout);
-  }, [page, sort, query, filterStatus, filterDecision, filterAgent, errorMode]);
+  }, [page, sort, debouncedQuery, filterStatus, filterDecision, filterAgent, errorMode]);
 
   const filteredTraces = useMemo(() => {
     let results = allTraces.filter((t) =>
       (filterStatus === 'all' || t.status === filterStatus) &&
       (filterDecision === 'all' || t.decision === filterDecision) &&
       (filterAgent === 'all' || t.agent === filterAgent) &&
-      (query === '' || t.name.toLowerCase().includes(query.toLowerCase()) || t.id.includes(query) || t.agent.includes(query)));
+      (debouncedQuery === '' || 
+       t.name.toLowerCase().includes(debouncedQuery.toLowerCase()) || 
+       t.id.includes(debouncedQuery) || 
+       t.agent.includes(debouncedQuery)));
 
     const dir = sort.dir === 'asc' ? 1 : -1;
-    results = [...results].sort((a: any, b: any) => {
+    results = [...results].sort((a, b) => {
       const av = a[sort.key];
       const bv = b[sort.key];
-      if (typeof av === 'string') return av.localeCompare(bv) * dir;
-      return (av - bv) * dir;
+      
+      if (typeof av === 'string' && typeof bv === 'string') {
+        return av.localeCompare(bv) * dir;
+      }
+      
+      if (typeof av === 'number' && typeof bv === 'number') {
+        return (av - bv) * dir;
+      }
+      
+      return 0;
     });
     return results;
-  }, [allTraces, filterStatus, filterDecision, filterAgent, query, sort]);
+  }, [allTraces, filterStatus, filterDecision, filterAgent, debouncedQuery, sort]);
 
   useEffect(() => {
     setPage(1);
-  }, [query, filterStatus, filterDecision, filterAgent]);
+  }, [debouncedQuery, filterStatus, filterDecision, filterAgent]);
 
   const pageRows = filteredTraces.slice((page - 1) * pageSize, page * pageSize);
   const blockedTotal = allTraces.filter((t) => t.decision === 'block').length;
@@ -267,7 +287,7 @@ export function TracesScreen({ timeRange, agent, onOpenTrace }: TracesScreenProp
           total={filteredTraces.length}
           onPage={setPage}
           sort={sort}
-          onSort={(key) => setSort((s) => ({ key, dir: s.key === key && s.dir === 'desc' ? 'asc' : 'desc' }))}
+          onSort={(key) => setSort((s) => ({ key: key as keyof Trace, dir: s.key === key && s.dir === 'desc' ? 'asc' : 'desc' }))}
           onRowClick={(r) => onOpenTrace(r)}
           rowKey={(r) => r.id}
           rowAccent={(r) => r.decision === 'block'}
