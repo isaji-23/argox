@@ -154,7 +154,11 @@ semconv, policy parser + local cache, `ConsoleSpanLogger`, `JsonlSpanExporter`,
 On the Collector side, policy distribution now exists (COL-05):
 `GET /api/v1/policies/bundle` serves a merged, SDK-parseable `PolicyDocument`
 YAML with ETag/304 caching — the endpoint `RemotePolicyClient` polls — backed
-by versioned policy CRUD under `/api/v1/policies`.
+by versioned policy CRUD under `/api/v1/policies`. The Collector also exposes
+a read-only Query API for the dashboard (COL-06): paginated trace summaries
+(`GET /api/v1/traces`), per-trace span waterfalls (`GET /api/v1/traces/{id}`)
+and trailing-window aggregations (`GET /api/v1/metrics/cost|latency|success`)
+served from the DuckDB index.
 
 **Not yet:** no real `SsePolicyClient` (only the contract + in-process cache),
 no durable audit storage or dashboard from the SDK (only the `metrics` object
