@@ -115,6 +115,15 @@ def _span_to_record(span: Any, attributes: dict[str, Any]) -> SpanRecord:
     if run_cost is None:
         run_cost = attributes.get(semconv.GEN_AI_USAGE_COST)
 
+    events = tuple(
+        {
+            "name": event.name,
+            "timestamp": _nanos_to_dt(event.time_unix_nano),
+            "attributes": _key_values_to_dict(event.attributes),
+        }
+        for event in span.events
+    )
+
     return SpanRecord(
         trace_id=span.trace_id.hex(),
         span_id=span.span_id.hex(),
@@ -130,6 +139,7 @@ def _span_to_record(span: Any, attributes: dict[str, Any]) -> SpanRecord:
         run_cost=_as_float(run_cost),
         run_success=_as_bool(attributes.get(semconv.ARGOX_RUN_SUCCESS)),
         attributes=attributes,
+        events=events,
     )
 
 

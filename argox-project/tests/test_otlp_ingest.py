@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -121,6 +122,38 @@ def test_json_ingest_persists_span(client: TestClient) -> None:
     row = _fetch_span(client)
     assert row[0] == TRACE_ID.hex()
     assert row[3] == "demo-agent"
+
+
+def test_event_payload_pii_is_tagged_in_index(client: TestClient) -> None:
+    span = Span(
+        trace_id=TRACE_ID,
+        span_id=SPAN_ID,
+        name="argox.agent.run",
+        start_time_unix_nano=1_000_000_000,
+        end_time_unix_nano=1_500_000_000,
+        attributes=[_attr("prompt", "clean")],
+        events=[
+            Span.Event(
+                name="gen_ai.content.completion",
+                time_unix_nano=1_200_000_000,
+                attributes=[_attr("completion", "contact user@example.com")],
+            )
+        ],
+    )
+    request = ExportTraceServiceRequest(
+        resource_spans=[ResourceSpans(scope_spans=[ScopeSpans(spans=[span])])]
+    )
+    response = client.post(
+        "/v1/traces",
+        content=request.SerializeToString(),
+        headers={"content-type": CONTENT_TYPE_PROTOBUF},
+    )
+    assert response.status_code == 202
+
+    index = client.app.state.index
+    with index._lock:
+        raw_attrs = index._conn.execute("SELECT attributes FROM spans").fetchone()[0]
+    assert json.loads(raw_attrs)["argox.pii.residual_detected"] is True
 
 
 def test_durable_header_persists_synchronously(client: TestClient) -> None:

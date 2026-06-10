@@ -1,11 +1,16 @@
-"""Tests for the COL-03 basic enrichment stages (cost + residual PII)."""
+"""Tests for the COL-07 enrichment stages (normalisation, cost, residual PII)."""
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from argox_collector.enrichment import pii
 from argox_collector.enrichment.cost import enrich_cost
+from argox_collector.enrichment.normalize import normalize
+from argox_collector.enrichment.pipeline import enrich
 from argox_collector.enrichment.pricing import load_pricing
 from argox_collector.index.base import SpanRecord
+from argox_collector.settings import CollectorSettings
 
 
 def _record(**attrs) -> SpanRecord:
@@ -78,3 +83,103 @@ def test_pii_scan_is_idempotent() -> None:
         }
     )
     assert pii.scan(record) is record
+
+
+def test_pii_scan_tags_event_payload() -> None:
+    record = SpanRecord(
+        trace_id="t",
+        span_id="s",
+        attributes={"prompt": "clean"},
+        events=(
+            {
+                "name": "gen_ai.content.completion",
+                "timestamp": None,
+                "attributes": {"completion": "card 4111 1111 1111 1111 charged"},
+            },
+        ),
+    )
+    enriched = pii.scan(record)
+    assert enriched.attributes["argox.pii.residual_detected"] is True
+
+
+def test_pii_scan_ignores_clean_events() -> None:
+    record = SpanRecord(
+        trace_id="t",
+        span_id="s",
+        attributes={"prompt": "clean"},
+        events=({"name": "retry", "timestamp": None, "attributes": {"n": 2}},),
+    )
+    assert pii.scan(record) is record
+
+
+def test_normalize_maps_legacy_token_keys() -> None:
+    record = _record(
+        **{
+            "gen_ai.usage.prompt_tokens": 1000,
+            "gen_ai.usage.completion_tokens": 500,
+        }
+    )
+    normalised = normalize(record)
+    assert normalised.attributes["gen_ai.usage.input_tokens"] == 1000
+    assert normalised.attributes["gen_ai.usage.output_tokens"] == 500
+
+
+def test_normalize_maps_openinference_keys() -> None:
+    record = _record(
+        **{
+            "llm.model_name": "gpt-4o",
+            "llm.token_count.prompt": 10,
+            "llm.token_count.completion": 5,
+        }
+    )
+    normalised = normalize(record)
+    assert normalised.attributes["gen_ai.request.model"] == "gpt-4o"
+    assert normalised.attributes["gen_ai.usage.input_tokens"] == 10
+    assert normalised.attributes["gen_ai.usage.output_tokens"] == 5
+
+
+def test_normalize_canonical_key_wins_over_variant() -> None:
+    record = _record(
+        **{
+            "gen_ai.usage.input_tokens": 100,
+            "gen_ai.usage.prompt_tokens": 999,
+        }
+    )
+    assert normalize(record).attributes["gen_ai.usage.input_tokens"] == 100
+
+
+def test_normalize_no_variants_returns_same_record() -> None:
+    record = _record(**{"gen_ai.request.model": "gpt-4o"})
+    assert normalize(record) is record
+
+
+def test_pricing_loads_custom_yaml(tmp_path: Path) -> None:
+    table = tmp_path / "pricing.yaml"
+    table.write_text(
+        "models:\n  custom-model:\n    input: 0.001\n    output: 0.002\n",
+        encoding="utf-8",
+    )
+    pricing = load_pricing(table)
+    assert pricing == {"custom-model": {"input": 0.001, "output": 0.002}}
+
+
+def test_pipeline_normalises_then_costs_and_is_idempotent(tmp_path: Path) -> None:
+    settings = CollectorSettings(
+        storage_local_root=tmp_path / "blobs",
+        index_duckdb_path=tmp_path / "index.duckdb",
+    )
+    record = _record(
+        **{
+            "llm.model_name": "gpt-4o",
+            "gen_ai.usage.prompt_tokens": 1000,
+            "gen_ai.usage.completion_tokens": 500,
+            "prompt": "reach me at user@example.com",
+        }
+    )
+    first = enrich([record], settings)[0]
+    # 1.0 * 0.0025 + 0.5 * 0.01 = 0.0075, via normalised variant keys.
+    assert first.run_cost == 0.0075
+    assert first.attributes["argox.pii.residual_detected"] is True
+
+    second = enrich([first], settings)[0]
+    assert second == first

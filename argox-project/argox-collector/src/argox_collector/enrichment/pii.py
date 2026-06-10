@@ -1,10 +1,10 @@
-"""Minimal residual-PII scan over span attributes.
+"""Residual-PII scan over span attributes and event payloads.
 
 Tags a span with ``argox.pii.residual_detected = True`` when a high-confidence
-regex matches any string attribute value. This is a *tag-only* check: the
-Collector never redacts content (redaction is the SDK's job, see
-``PiiRedactionProcessor`` and COL-11 non-goals). The richer scan over event
-payloads with normalisation lands in COL-07 (#92).
+regex matches any string value in the span attributes or in its event payloads
+(COL-07). This is a *tag-only* check: the Collector never redacts content
+(redaction is the SDK's job, see ``PiiRedactionProcessor`` and COL-11
+non-goals).
 
 The detector is intentionally self-contained so the Collector stays independent
 of ``argox-core``.
@@ -37,12 +37,15 @@ def contains_pii(text: str) -> bool:
 def scan(record: SpanRecord) -> SpanRecord:
     """Return ``record`` tagged with residual-PII detection when matches exist.
 
-    Idempotent: a record already tagged is returned unchanged.
+    Both span attributes and event payloads are scanned. Idempotent: a record
+    already tagged is returned unchanged.
     """
     if record.attributes.get(semconv.ARGOX_PII_RESIDUAL_DETECTED):
         return record
 
-    if not _any_value_has_pii(record.attributes):
+    if not _any_value_has_pii(record.attributes) and not _any_value_has_pii(
+        record.events
+    ):
         return record
 
     attributes = {
