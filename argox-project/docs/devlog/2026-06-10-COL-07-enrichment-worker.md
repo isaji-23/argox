@@ -37,6 +37,17 @@ only read canonical attribute keys and only scanned span attributes. Plugins
 emit slightly different GenAI shapes (cost silently skipped for those spans),
 and PII can hide in event payloads such as `gen_ai.content.completion` events.
 
+## Review hardening
+
+PR review flagged the event PII scan as a DoS surface: event payloads carry
+full LLM content and arrive attacker-influenced. The scan is now bounded —
+at most 100 events per span, each string truncated to 16 KiB before the
+regexes run — and covers only event payload attributes (event names and
+timestamps would only feed false positives). The tag-only threat model is now
+stated explicitly: ``argox.pii.residual_detected`` marks content for
+downstream handling; the raw blob keeps it unredacted (redaction is the SDK's
+job).
+
 ## Notes / follow-ups
 
 - The Route B run-record join from the #92 update (writing `cost_usd` into the
