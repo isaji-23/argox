@@ -128,7 +128,7 @@ _IPV6_RE = re.compile(
 #   - 4-char groups separated by single spaces, e.g.
 #     ``ES91 2100 0418 4502 0005 1332``.
 # Lowercase is allowed; the post-validator normalizes case before the
-# shape check. Non-4-char trailing groups are intentionally not matched
+# shape and mod-97 checks. Non-4-char trailing groups are intentionally not matched
 # in v1 — keeping the boundary tight avoids the regex greedily swallowing
 # the next word into the IBAN span.
 _IBAN_RE = re.compile(
@@ -177,17 +177,23 @@ def _luhn_valid(digits: str) -> bool:
 
 
 def _valid_iban(value: str) -> bool:
-    """Validate IBAN shape after stripping whitespace.
+    """Validate an IBAN candidate: shape check plus ISO 13616 mod-97.
 
-    Mod-97 verification is intentionally out of scope for v1 — the regex
-    plus shape check already gives high precision on real-world text.
+    The mod-97 check moves the first four characters to the end, maps
+    letters to ``10..35``, and requires the resulting integer to be
+    ``1 (mod 97)``. It rejects IBAN-shaped tokens (e.g. order or document
+    references) that the regex alone would redact.
     """
-    compact = value.replace(" ", "")
+    compact = value.replace(" ", "").upper()
     if not (15 <= len(compact) <= 34):
         return False
     if not compact[:2].isalpha() or not compact[2:4].isdigit():
         return False
-    return compact[4:].isalnum()
+    if not compact[4:].isalnum():
+        return False
+    rearranged = compact[4:] + compact[:4]
+    numeric = "".join(str(int(ch, 36)) for ch in rearranged)
+    return int(numeric) % 97 == 1
 
 
 _DNI_LETTERS = "TRWAGMYFPDXBNJZSQVHLCKE"
@@ -211,9 +217,10 @@ def _valid_es_nie(value: str) -> bool:
 class _DefaultRegexDetector:
     """Zero-dependency detector covering the v1 entity catalogue.
 
-    Each entity is matched by a dedicated, anchored regex; numeric
-    entities (CREDIT_CARD, ES_DNI, ES_NIE, IPV4) are post-validated
-    so a regex hit alone is not enough to trigger redaction.
+    Each entity is matched by a dedicated, anchored regex; checksum or
+    range-carrying entities (CREDIT_CARD, IBAN, ES_DNI, ES_NIE, IPV4)
+    are post-validated so a regex hit alone is not enough to trigger
+    redaction.
     """
 
     _PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (

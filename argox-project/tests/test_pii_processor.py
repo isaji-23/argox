@@ -110,6 +110,19 @@ async def test_iban_rejects_too_short_strings(ctx: RunContext) -> None:
     assert "[REDACTED:IBAN]" not in out
 
 
+async def test_iban_rejects_failing_mod97_checksum(ctx: RunContext) -> None:
+    processor = PiiRedactionProcessor(entities=["IBAN"])
+    # Same shape as a real IBAN but the ISO 13616 mod-97 check fails.
+    out = await processor.process_output("ref ES0021000418450200051332 hi", ctx)
+    assert "[REDACTED:IBAN]" not in out
+
+
+async def test_iban_mod97_accepts_other_countries(ctx: RunContext) -> None:
+    processor = PiiRedactionProcessor(entities=["IBAN"])
+    out = await processor.process_output("iban DE89370400440532013000 ok", ctx)
+    assert "[REDACTED:IBAN]" in out
+
+
 # ---------------------------------------------------------------------------
 # IPv4 octet validation
 # ---------------------------------------------------------------------------
