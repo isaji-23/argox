@@ -74,6 +74,29 @@ def test_pii_scan_rejects_iban_with_bad_checksum() -> None:
     assert pii.scan(record) is record
 
 
+def test_pii_scan_tags_spaced_iban() -> None:
+    record = _record(**{"note": "IBAN ES91 2100 0418 4502 0005 1332"})
+    assert pii.scan(record).attributes["argox.pii.residual_detected"] is True
+
+
+def test_pii_scan_tags_spaced_iban_with_short_final_group() -> None:
+    # DE IBANs are 22 chars, so the spaced form ends in a 2-char group.
+    record = _record(**{"note": "IBAN DE89 3704 0044 0532 0130 00"})
+    assert pii.scan(record).attributes["argox.pii.residual_detected"] is True
+
+
+def test_pii_scan_tags_spaced_iban_followed_by_short_word() -> None:
+    # The optional short group captures " OK"; the validator retries
+    # without it instead of discarding the match.
+    record = _record(**{"note": "IBAN ES91 2100 0418 4502 0005 1332 OK"})
+    assert pii.scan(record).attributes["argox.pii.residual_detected"] is True
+
+
+def test_pii_scan_rejects_spaced_iban_with_bad_checksum() -> None:
+    record = _record(**{"note": "ref DE00 3704 0044 0532 0130 00"})
+    assert pii.scan(record) is record
+
+
 def test_pii_scan_rejects_credit_card_failing_luhn() -> None:
     record = _record(**{"note": "ref 4111 1111 1111 1112"})
     assert pii.scan(record) is record

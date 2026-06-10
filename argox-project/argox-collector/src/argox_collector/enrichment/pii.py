@@ -37,7 +37,14 @@ _MAX_EVENTS_SCANNED = 100
 # post-validated so a regex hit alone is not enough to tag the span.
 _PATTERNS = {
     "EMAIL": re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b"),
-    "IBAN": re.compile(r"\b[A-Z]{2}\d{2}[A-Z0-9]{11,30}\b"),
+    # Contiguous or 4-char-grouped form; the optional short (1-3 char) final
+    # group covers countries whose IBAN length is not a multiple of four
+    # (DE, GB, NL, ...). It can greedily capture a short word after a
+    # complete IBAN, which the validator handles by re-checking without it.
+    "IBAN": re.compile(
+        r"\b[A-Z]{2}\d{2}"
+        r"(?:[A-Z0-9]{11,30}|(?: [A-Z0-9]{4}){2,7}(?: [A-Z0-9]{1,3})?)\b"
+    ),
     "CREDIT_CARD": re.compile(r"\b(?:\d[ -]?){13,16}\b"),
     # E.164 with a mandatory leading ``+``, mirroring the SDK's
     # PiiRedactionProcessor. A bare-digit phone pattern would match any
@@ -77,6 +84,20 @@ def _iban_valid(value: str) -> bool:
     return int(numeric) % 97 == 1
 
 
+def _iban_candidate_valid(value: str) -> bool:
+    """Validate an IBAN regex match, retrying without a trailing short group.
+
+    The optional short final group in the pattern can greedily capture a
+    short word that follows a complete IBAN (``ES91 ... 1332 OK``), and the
+    regex never backtracks on a validator rejection — so a failing match is
+    re-checked once without that group before being discarded.
+    """
+    if _iban_valid(value):
+        return True
+    head, sep, tail = value.rpartition(" ")
+    return bool(sep) and len(tail) <= 3 and _iban_valid(head)
+
+
 _DNI_LETTERS = "TRWAGMYFPDXBNJZSQVHLCKE"
 
 
@@ -86,7 +107,7 @@ def _es_dni_valid(value: str) -> bool:
 
 
 _VALIDATORS = {
-    "IBAN": _iban_valid,
+    "IBAN": _iban_candidate_valid,
     "CREDIT_CARD": _luhn_valid,
     "ES_DNI": _es_dni_valid,
 }
