@@ -36,7 +36,7 @@ import structlog
 import yaml
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 from fastapi import Path as PathParam
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from argox_collector.storage import (
     BlobNotFoundError,
@@ -57,6 +57,20 @@ _ID_PATTERN = r"^[a-zA-Z0-9_-]+$"
 _CAS_ATTEMPTS = 5
 _BUNDLE_ID = "bundle_active"
 _MAX_PAGE_SIZE = 100
+# Upper bound on rules per policy version. Caps request payload size and the
+# fan-in of the merged /bundle, which concatenates the rules of every active
+# policy on each request (see ADR-0003 follow-ups).
+_MAX_RULES_PER_POLICY = 1000
+# Policy ids that collide with a static route under this router and would
+# therefore be unreachable through ``GET /{policy_id}``. ``bundle`` is shadowed
+# by ``GET /api/v1/policies/bundle``, so it must not be a valid policy id.
+_RESERVED_IDS = frozenset({"bundle"})
+
+
+def _reject_reserved_id(value: str) -> str:
+    if value in _RESERVED_IDS:
+        raise ValueError(f"policy id {value!r} is reserved")
+    return value
 
 
 class RuleCondition(BaseModel):
@@ -86,15 +100,17 @@ class PolicyCreate(BaseModel):
 
     id: str = Field(pattern=_ID_PATTERN)
     status: Literal["active", "draft", "archived"] = "draft"
-    rules: list[PolicyRule]
+    rules: list[PolicyRule] = Field(max_length=_MAX_RULES_PER_POLICY)
     created_by: str | None = None
+
+    _reject_reserved = field_validator("id")(_reject_reserved_id)
 
 
 class PolicyUpdate(BaseModel):
     """Request body for ``PUT /api/v1/policies/{id}`` (creates version n+1)."""
 
     status: Literal["active", "draft", "archived"]
-    rules: list[PolicyRule]
+    rules: list[PolicyRule] = Field(max_length=_MAX_RULES_PER_POLICY)
     created_by: str | None = None
 
 
@@ -303,15 +319,21 @@ def get_bundle(request: Request) -> Response:
             document = _load_document(
                 storage, policy_id, _version_hash(entry, active_version)
             )
-        except BlobNotFoundError:
-            # Dangling manifest pointer. Skip just this policy instead of
-            # failing the whole bundle: one bad write must not take policy
-            # enforcement down for the entire fleet. Loud log so operators
-            # can repair it.
+        except (BlobNotFoundError, ValueError, KeyError) as exc:
+            # The merged bundle is a fleet-wide enforcement path, so one
+            # unreadable policy must never deny the ruleset to everyone else.
+            # Skip and loudly log just this policy. Covered cases:
+            #   BlobNotFoundError — dangling manifest pointer (committed
+            #     version whose blob was later lost).
+            #   KeyError — manifest inconsistency (active_version absent from
+            #     the version table).
+            #   ValueError — blob present but not a policy mapping (corruption
+            #     or hand-editing).
             logger.error(
-                "policy_bundle_dangling_pointer",
+                "policy_bundle_unreadable",
                 policy_id=policy_id,
                 version=active_version,
+                error=str(exc),
             )
             continue
         merged_rules.extend(document.get("rules") or [])

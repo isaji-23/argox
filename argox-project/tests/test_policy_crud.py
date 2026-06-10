@@ -77,6 +77,19 @@ def test_create_rejects_invalid_policy_id(client: TestClient) -> None:
     assert response.status_code == 422
 
 
+def test_create_rejects_reserved_id(client: TestClient) -> None:
+    # ``bundle`` is shadowed by the static ``/bundle`` route, so it must not
+    # be a valid policy id (it would be uncreatable-then-unreadable).
+    response = client.post(BASE, json=_policy("bundle"))
+    assert response.status_code == 422
+
+
+def test_create_rejects_too_many_rules(client: TestClient) -> None:
+    rules = [_rule(f"rule_{i}") for i in range(1001)]
+    response = client.post(BASE, json=_policy("pol_big", rules=rules))
+    assert response.status_code == 422
+
+
 def test_get_active_policy_roundtrip(client: TestClient) -> None:
     client.post(BASE, json=_policy("pol_a"))
     response = client.get(f"{BASE}/pol_a")
@@ -303,6 +316,23 @@ def test_bundle_skips_policy_with_dangling_pointer(
     assert response.status_code == 200
     document = yaml.safe_load(response.text)
     # The broken policy is skipped; enforcement keeps working for the rest.
+    assert [rule["id"] for rule in document["rules"]] == ["rule_b"]
+
+
+def test_bundle_skips_policy_with_corrupt_blob(
+    client: TestClient, storage: LocalStorageBackend
+) -> None:
+    client.post(BASE, json=_policy("pol_a", rules=[_rule("rule_a")]))
+    client.post(BASE, json=_policy("pol_b", rules=[_rule("rule_b")]))
+
+    # A committed blob whose content is no longer a policy mapping (corruption
+    # or hand-editing) must not 500 the whole bundle.
+    hash_a = client.get(f"{BASE}/pol_a").json()["content_hash"]
+    storage.put(f"policies/pol_a/{hash_a}.yaml", b"- not a mapping\n")
+
+    response = client.get(f"{BASE}/bundle")
+    assert response.status_code == 200
+    document = yaml.safe_load(response.text)
     assert [rule["id"] for rule in document["rules"]] == ["rule_b"]
 
 
