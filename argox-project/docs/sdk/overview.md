@@ -163,8 +163,14 @@ variant GenAI attribute shapes (legacy `gen_ai.usage.prompt_tokens`,
 OpenInference `llm.*`) onto the canonical keys, computes per-span `run_cost`
 from a YAML pricing table (unknown models log a warning and skip), and tags
 `argox.pii.residual_detected` when a high-confidence pattern matches span
-attributes or event payloads; every stage is idempotent.
+attributes or event payloads; every stage is idempotent. A tamper-evident
+audit log (COL-08) records governance events as append-only JSONL segments
+(`audit-log/{YYYY}/{MM}/{seq_start}-{seq_end}.jsonl`) linked into a SHA-256
+hash chain: `POST /api/v1/audit` appends, `GET /api/v1/audit/verify` walks the
+chain and reports the first broken link, and the log exposes no delete
+operation (AI Act Art. 12 retention).
 
 **Not yet:** no real `SsePolicyClient` (only the contract + in-process cache),
-no durable audit storage or dashboard from the SDK (only the `metrics` object
-and OTel spans ready to export).
+and the SDK itself does not write to the audit log yet (it is a Collector-side
+API) nor render a dashboard (only the `metrics` object and OTel spans ready to
+export).

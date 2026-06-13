@@ -9,10 +9,11 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from argox_collector import __version__
+from argox_collector.audit import AuditLog
 from argox_collector.index import TraceIndex, build_index
 from argox_collector.logging import configure_logging
 from argox_collector.middleware import PayloadSizeLimitMiddleware
-from argox_collector.routers import health, policies, query, traces
+from argox_collector.routers import audit, health, policies, query, traces
 from argox_collector.settings import CollectorSettings
 from argox_collector.storage import StorageBackend, build_storage
 
@@ -31,6 +32,7 @@ def create_app(
     *,
     storage: Optional[StorageBackend] = None,
     index: Optional[TraceIndex] = None,
+    audit_log: Optional[AuditLog] = None,
 ) -> FastAPI:
     """Build and return a configured FastAPI application.
 
@@ -42,6 +44,8 @@ def create_app(
             backends through this argument.
         index: Optional pre-built trace index. When omitted, one is
             constructed from ``settings``.
+        audit_log: Optional pre-built audit log. When omitted, one is
+            constructed over ``app.state.storage`` from ``settings``.
 
     Returns:
         A FastAPI app with health endpoints registered, structlog wired and
@@ -62,6 +66,15 @@ def create_app(
     app.state.settings = settings
     app.state.storage = storage if storage is not None else build_storage(settings)
     app.state.index = index if index is not None else build_index(settings)
+    app.state.audit = (
+        audit_log
+        if audit_log is not None
+        else AuditLog(
+            app.state.storage,
+            prefix=settings.audit_log_prefix,
+            max_segment_records=settings.audit_segment_max_records,
+        )
+    )
     app.add_middleware(
         PayloadSizeLimitMiddleware, max_bytes=settings.max_payload_size
     )
@@ -79,4 +92,5 @@ def create_app(
     app.include_router(traces.router)
     app.include_router(policies.router)
     app.include_router(query.router)
+    app.include_router(audit.router)
     return app
