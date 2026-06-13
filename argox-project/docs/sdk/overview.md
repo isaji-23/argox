@@ -168,9 +168,17 @@ audit log (COL-08) records governance events as append-only JSONL segments
 (`audit-log/{YYYY}/{MM}/{seq_start}-{seq_end}.jsonl`) linked into a SHA-256
 hash chain: `POST /api/v1/audit` appends, `GET /api/v1/audit/verify` walks the
 chain and reports the first broken link, and the log exposes no delete
-operation (AI Act Art. 12 retention).
+operation (AI Act Art. 12 retention). Every Collector endpoint except the
+health probes is now authenticated (COL-09): SDK clients send a scoped,
+revocable API key as `Authorization: Bearer argox_…` (ingest needs the
+`ingest` scope, `RemotePolicyClient` polling needs `policy-read`), while
+dashboard users present an OIDC JWT whose role claim drives policy-write/admin
+RBAC. Keys are stored hashed in the index DB and managed via admin-only CRUD
+or the `argox-collector keys` CLI; see `docs/collector/auth.md`.
 
-**Not yet:** no real `SsePolicyClient` (only the contract + in-process cache),
+**Not yet:** the SDK exporters/policy client do not yet attach the API key
+header automatically (configuration follow-up); no real `SsePolicyClient` (only
+the contract + in-process cache),
 and the SDK itself does not write to the audit log yet (it is a Collector-side
 API) nor render a dashboard (only the `metrics` object and OTel spans ready to
 export).
