@@ -139,6 +139,11 @@ def _isolate_argox_settings(monkeypatch: pytest.MonkeyPatch) -> None:
         if key.startswith("ARGOX_"):
             monkeypatch.delenv(key, raising=False)
     monkeypatch.setitem(CollectorSettings.model_config, "env_file", None)
+    # Auth (COL-09) is on by default in production. The legacy collector tests
+    # predate it and call protected endpoints without credentials, so default
+    # it OFF for the suite; the dedicated auth tests opt back in by building
+    # settings with ``auth_enabled=True``.
+    monkeypatch.setenv("ARGOX_AUTH_ENABLED", "false")
 
 
 @pytest.fixture

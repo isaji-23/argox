@@ -4,25 +4,25 @@ Handlers are plain ``def`` so FastAPI runs the blocking blob I/O in its
 threadpool, mirroring the query and policy routers. There is intentionally no
 delete or update endpoint — the audit log is append-only by design.
 
-SECURITY (blocks COL-09, #94): these endpoints are currently unauthenticated.
-- ``POST`` trusts ``actor`` from the request body, so without auth any caller
-  can forge entries under any identity. The hash chain proves no entry was
-  altered *after* the fact, but not its authenticity at write time — which
-  undermines the non-repudiation AI Act Art. 12 expects. When COL-09 lands,
-  ``actor`` MUST be bound to the authenticated principal, not read from the
-  body, and the read endpoints MUST require authorisation (they disclose the
-  whole audit trail and ``/verify`` re-reads every segment on each call, a
-  cheap DoS vector). Do not ship this service publicly before then.
+SECURITY (COL-09, #94): these endpoints are authenticated.
+- ``POST`` binds ``actor`` to the authenticated principal (``admin`` scope), not
+  to a client-supplied value, so entries cannot be forged under another
+  identity — the authenticity at write time that the hash chain alone cannot
+  guarantee, as AI Act Art. 12 non-repudiation requires.
+- The read endpoints require the ``read`` scope: they disclose the whole audit
+  trail and ``/verify`` re-reads every segment on each call (a cheap DoS vector
+  if left open).
 """
 
 from __future__ import annotations
 
 from typing import Any, Optional
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field, model_validator
 
 from argox_collector.audit import AuditEntry, AuditLog, AuditLogError
+from argox_collector.auth import Principal, Scope, require_scope
 
 router = APIRouter(prefix="/api/v1/audit", tags=["audit"])
 
@@ -34,12 +34,15 @@ _DIGEST_PATTERN = r"^[0-9a-f]{64}$"
 class AuditAppendRequest(BaseModel):
     """Body of ``POST /api/v1/audit``.
 
+    ``actor`` is intentionally absent: it is bound to the authenticated
+    principal, never read from the request, so an entry cannot be forged under
+    another identity.
+
     Provide either ``payload`` (hashed server-side into a digest so the raw
     value is never persisted) or a pre-computed ``payload_digest`` — not both.
     Omitting both records the digest of an empty payload.
     """
 
-    actor: str = Field(..., min_length=1)
     action: str = Field(..., min_length=1)
     target: str = Field(..., min_length=1)
     payload: Optional[Any] = None
@@ -98,11 +101,18 @@ def _audit(request: Request) -> AuditLog:
 
 
 @router.post("", response_model=AuditEntryResponse, status_code=201)
-def append_entry(request: Request, body: AuditAppendRequest) -> AuditEntryResponse:
-    """Append an event to the audit log and return the sealed entry."""
+def append_entry(
+    request: Request,
+    body: AuditAppendRequest,
+    principal: Principal = Depends(require_scope(Scope.ADMIN)),
+) -> AuditEntryResponse:
+    """Append an event to the audit log and return the sealed entry.
+
+    ``actor`` is the authenticated principal, not a client-supplied value.
+    """
     try:
         entry = _audit(request).append(
-            actor=body.actor,
+            actor=principal.subject,
             action=body.action,
             target=body.target,
             payload=body.payload,
@@ -114,7 +124,11 @@ def append_entry(request: Request, body: AuditAppendRequest) -> AuditEntryRespon
     return AuditEntryResponse.from_entry(entry)
 
 
-@router.get("/verify", response_model=AuditVerifyResponse)
+@router.get(
+    "/verify",
+    response_model=AuditVerifyResponse,
+    dependencies=[Depends(require_scope(Scope.READ))],
+)
 def verify_chain(request: Request) -> AuditVerifyResponse:
     """Walk the hash chain and report the first broken link, if any."""
     result = _audit(request).verify()
@@ -126,7 +140,11 @@ def verify_chain(request: Request) -> AuditVerifyResponse:
     )
 
 
-@router.get("", response_model=AuditListResponse)
+@router.get(
+    "",
+    response_model=AuditListResponse,
+    dependencies=[Depends(require_scope(Scope.READ))],
+)
 def list_entries(
     request: Request,
     offset: int = Query(0, ge=0),

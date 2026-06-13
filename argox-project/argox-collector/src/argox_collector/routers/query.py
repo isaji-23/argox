@@ -11,12 +11,17 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Optional
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 
+from argox_collector.auth import Scope, require_scope
 from argox_collector.index import TraceIndex
 
-router = APIRouter(prefix="/api/v1", tags=["query"])
+router = APIRouter(
+    prefix="/api/v1",
+    tags=["query"],
+    dependencies=[Depends(require_scope(Scope.READ))],
+)
 
 _MAX_PAGE_SIZE = 1000
 # Trailing-window upper bound: 30 days.
