@@ -29,6 +29,9 @@ class OidcError(Exception):
     """Raised when a JWT cannot be validated."""
 
 
+# Tolerance (seconds) applied to exp/nbf/iat to absorb IdP/Collector clock drift.
+_CLOCK_SKEW_LEEWAY_S = 60
+
 # Scopes every authenticated human gets, before any role escalation. The
 # dashboard is a read surface plus the policy editor, so a baseline user can
 # read traces/metrics and view policies; mutating policies needs a role.
@@ -83,6 +86,10 @@ class OidcValidator:
                 algorithms=self._algorithms,
                 audience=self._audience,
                 issuer=self._issuer,
+                # Small leeway absorbs clock drift between the IdP and the
+                # Collector so valid tokens are not rejected at the exp/nbf
+                # boundary (intermittent 401s otherwise).
+                leeway=_CLOCK_SKEW_LEEWAY_S,
                 options={"require": ["exp", "iss", "aud"]},
             )
         except OidcError:

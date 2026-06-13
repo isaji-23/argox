@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 import pytest
 from argox_collector.auth import (
     ApiKeyStore,
@@ -106,3 +108,45 @@ def test_state_persists_across_instances(tmp_path) -> None:
 def test_parse_scopes_rejects_unknown() -> None:
     with pytest.raises(ValueError):
         parse_scopes(["ingest", "not-a-scope"])
+
+
+def test_expiring_key_roundtrips_and_deactivates(store: ApiKeyStore) -> None:
+    # 1h key is active now; the same record is inactive once past expiry.
+    new_key = mint_key(
+        name="ci", scopes=parse_scopes(["ingest"]), expires_in=3600
+    )
+    store.create(new_key.record)
+    found = store.get_by_hash(new_key.record.key_hash)
+    assert found.expires_at is not None
+    assert found.is_active()
+
+    later = found.expires_at + timedelta(seconds=1)
+    assert found.is_expired(now=later)
+    assert not found.is_active(now=later)
+
+
+def test_non_expiring_key_never_expires(store: ApiKeyStore) -> None:
+    new_key = mint_key(name="k", scopes=parse_scopes(["read"]))
+    store.create(new_key.record)
+    found = store.get_by_hash(new_key.record.key_hash)
+    assert found.expires_at is None
+    far_future = datetime(2999, 1, 1, tzinfo=timezone.utc)
+    assert found.is_active(now=far_future)
+
+
+def test_mint_rejects_non_positive_expiry() -> None:
+    with pytest.raises(ValueError):
+        mint_key(name="k", scopes=parse_scopes(["read"]), expires_in=0)
+
+
+def test_corrupt_non_list_scopes_loads_as_empty(store: ApiKeyStore) -> None:
+    new_key = mint_key(name="k", scopes=parse_scopes(["admin"]))
+    store.create(new_key.record)
+    # Simulate a hand-corrupted DB: scopes column is an int, not a JSON list.
+    store._conn.execute(  # noqa: SLF001 - deliberately poke internals
+        "UPDATE api_keys SET scopes = '42' WHERE id = ?", (new_key.record.id,)
+    )
+    found = store.get_by_hash(new_key.record.key_hash)
+    # Must not raise; degrades to no scopes rather than crashing the load.
+    assert found is not None
+    assert found.scopes == frozenset()

@@ -59,6 +59,13 @@ def _build_parser() -> argparse.ArgumentParser:
     create.add_argument(
         "--created-by", default="cli", help="who minted the key (audit metadata)"
     )
+    create.add_argument(
+        "--expires-in",
+        type=int,
+        default=None,
+        metavar="SECONDS",
+        help="optional key lifetime in seconds (default: never expires)",
+    )
     create.set_defaults(handler=_cmd_keys_create)
 
     listing = keys_sub.add_parser("list", help="list stored keys")
@@ -98,7 +105,16 @@ def _cmd_keys_create(args: argparse.Namespace) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 2
 
-    new_key = mint_key(name=args.name, scopes=scopes, created_by=args.created_by)
+    try:
+        new_key = mint_key(
+            name=args.name,
+            scopes=scopes,
+            created_by=args.created_by,
+            expires_in=args.expires_in,
+        )
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
     store = _with_store()
     try:
         record = store.create(new_key.record)
@@ -111,6 +127,8 @@ def _cmd_keys_create(args: argparse.Namespace) -> int:
     granted = ", ".join(sorted(scope.value for scope in record.scopes))
     print(f"Created API key {record.id} ({record.name})")
     print(f"  scopes: {granted}")
+    if record.expires_at is not None:
+        print(f"  expires: {record.expires_at.isoformat()}")
     print("  key (shown once, store it now):")
     print(f"  {new_key.raw_key}")
     return 0
@@ -127,7 +145,12 @@ def _cmd_keys_list(_: argparse.Namespace) -> int:
         return 0
     for record in records:
         granted = ", ".join(sorted(scope.value for scope in record.scopes))
-        state = "revoked" if record.revoked else "active"
+        if record.revoked:
+            state = "revoked"
+        elif record.is_expired():
+            state = "expired"
+        else:
+            state = "active"
         print(
             f"{record.id}  {record.key_prefix}…  [{state}]  "
             f"{record.name}  ({granted})"

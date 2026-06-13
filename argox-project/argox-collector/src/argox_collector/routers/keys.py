@@ -36,6 +36,8 @@ class ApiKeyCreate(BaseModel):
 
     name: str = Field(..., min_length=1, max_length=200)
     scopes: list[str] = Field(..., min_length=1)
+    # Optional lifetime in seconds; omit for a non-expiring key.
+    expires_in: Optional[int] = Field(default=None, gt=0)
 
 
 class ApiKeyView(BaseModel):
@@ -49,6 +51,7 @@ class ApiKeyView(BaseModel):
     created_by: Optional[str] = None
     revoked_at: Optional[str] = None
     revoked: bool
+    expires_at: Optional[str] = None
 
     @classmethod
     def from_record(cls, record: ApiKeyRecord) -> "ApiKeyView":
@@ -61,6 +64,7 @@ class ApiKeyView(BaseModel):
             created_by=record.created_by,
             revoked_at=record.revoked_at.isoformat() if record.revoked_at else None,
             revoked=record.revoked,
+            expires_at=record.expires_at.isoformat() if record.expires_at else None,
         )
 
 
@@ -97,7 +101,10 @@ def create_key(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     new_key = mint_key(
-        name=payload.name, scopes=scopes, created_by=principal.subject
+        name=payload.name,
+        scopes=scopes,
+        created_by=principal.subject,
+        expires_in=payload.expires_in,
     )
     try:
         record = _store(request).create(new_key.record)

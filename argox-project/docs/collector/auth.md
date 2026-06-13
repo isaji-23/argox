@@ -61,6 +61,9 @@ argox-collector keys create --name "prod-sdk" --scope ingest
 # Multiple scopes: repeat --scope
 argox-collector keys create --name "dashboard-svc" --scope read --scope policy-read
 
+# Optional expiry (seconds); omit for a non-expiring key
+argox-collector keys create --name "ci-token" --scope ingest --expires-in 86400
+
 # List (metadata only — never the secret)
 argox-collector keys list
 
@@ -93,6 +96,15 @@ curl -X POST https://collector/api/v1/keys \
 
 Revocation is immediate: the next request with a revoked key gets `401`.
 
+### Expiry
+
+Keys are **non-expiring by default** — a long-lived `argox_…` secret stays
+valid until explicitly revoked. Pass `expires_in` (seconds) on create
+(`--expires-in` on the CLI, `"expires_in"` in the HTTP body) to bound a key's
+lifetime; once past `expires_at` it is treated as inactive (`401`) without a
+manual revoke. Prefer short-lived keys for CI and ephemeral workloads, and
+rotate long-lived service keys on a schedule.
+
 ### Using a key (SDK side)
 
 Send the raw key as a bearer token:
@@ -106,7 +118,9 @@ Authorization: Bearer argox_xK2…
 The dashboard runs the standard OAuth2 **authorization-code flow** against the
 IdP and forwards the resulting JWT to the Collector as a bearer token. The
 Collector verifies the token — signature against the IdP's JWKS, plus `iss`,
-`aud` and `exp` — then maps the role claim to scopes (RBAC).
+`aud` and `exp` — then maps the role claim to scopes (RBAC). A 60-second leeway
+is applied to the time claims to absorb clock drift between the IdP and the
+Collector.
 
 ### Role → scope mapping
 

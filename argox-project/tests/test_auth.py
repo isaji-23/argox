@@ -212,6 +212,45 @@ def test_revoked_key_is_rejected(client: TestClient, store, keys) -> None:
 # -- bootstrap key ---------------------------------------------------------
 
 
+def test_expired_api_key_is_rejected(client: TestClient, store) -> None:
+    from datetime import datetime, timedelta, timezone
+
+    from argox_collector.auth import ApiKeyRecord, generate_key, hash_key
+
+    raw = generate_key()
+    past = datetime.now(timezone.utc) - timedelta(hours=1)
+    record = ApiKeyRecord(
+        id="expired-key",
+        name="expired",
+        key_hash=hash_key(raw),
+        key_prefix=raw[:12],
+        scopes=parse_scopes(["read"]),
+        created_at=past - timedelta(hours=1),
+        expires_at=past,
+    )
+    store.create(record)
+    assert client.get("/api/v1/traces", headers=_bearer(raw)).status_code == 401
+
+
+def test_create_key_with_expiry_returns_expires_at(client: TestClient, keys) -> None:
+    resp = client.post(
+        "/api/v1/keys",
+        headers=_bearer(keys["admin"]),
+        json={"name": "short", "scopes": ["ingest"], "expires_in": 3600},
+    )
+    assert resp.status_code == 201
+    assert resp.json()["expires_at"] is not None
+
+
+def test_create_key_rejects_non_positive_expiry(client: TestClient, keys) -> None:
+    resp = client.post(
+        "/api/v1/keys",
+        headers=_bearer(keys["admin"]),
+        json={"name": "bad", "scopes": ["ingest"], "expires_in": 0},
+    )
+    assert resp.status_code == 422
+
+
 def test_bootstrap_key_acts_as_admin(client: TestClient) -> None:
     resp = client.get("/api/v1/keys", headers=_bearer(BOOTSTRAP_KEY))
     assert resp.status_code == 200
@@ -304,8 +343,15 @@ def test_oidc_rejects_bad_signature(client: TestClient) -> None:
 
 
 def test_oidc_rejects_expired_token(client: TestClient, rsa_key) -> None:
-    token = _make_jwt(rsa_key, roles=[], expires_in=-10)
+    # Well past the 60s leeway window.
+    token = _make_jwt(rsa_key, roles=[], expires_in=-300)
     assert client.get("/api/v1/traces", headers=_bearer(token)).status_code == 401
+
+
+def test_oidc_tolerates_small_clock_skew(client: TestClient, rsa_key) -> None:
+    # Expired 30s ago: inside the 60s leeway, so still accepted.
+    token = _make_jwt(rsa_key, roles=[], expires_in=-30)
+    assert client.get("/api/v1/traces", headers=_bearer(token)).status_code == 200
 
 
 def test_oidc_rejects_wrong_audience(client: TestClient, rsa_key) -> None:

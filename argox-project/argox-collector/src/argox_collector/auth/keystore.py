@@ -65,9 +65,15 @@ class ApiKeyStore:
                     scopes VARCHAR,
                     created_at TIMESTAMP,
                     created_by VARCHAR,
-                    revoked_at TIMESTAMP
+                    revoked_at TIMESTAMP,
+                    expires_at TIMESTAMP
                 )
                 """
+            )
+            # Migrate a pre-expiry table opened by a newer build. ADD COLUMN IF
+            # NOT EXISTS keeps this idempotent across restarts.
+            self._conn.execute(
+                "ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS expires_at TIMESTAMP"
             )
             self._conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys (key_hash)"
@@ -86,8 +92,8 @@ class ApiKeyStore:
                     """
                     INSERT INTO api_keys (
                         id, name, key_hash, key_prefix,
-                        scopes, created_at, created_by, revoked_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        scopes, created_at, created_by, revoked_at, expires_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         record.id,
@@ -99,6 +105,9 @@ class ApiKeyStore:
                         record.created_by,
                         _to_naive_utc(record.revoked_at)
                         if record.revoked_at
+                        else None,
+                        _to_naive_utc(record.expires_at)
+                        if record.expires_at
                         else None,
                     ),
                 )
@@ -166,6 +175,7 @@ class ApiKeyStore:
             created_at=_to_aware_utc(row[5]),
             created_by=row[6],
             revoked_at=_to_aware_utc(row[7]),
+            expires_at=_to_aware_utc(row[8]),
         )
 
 
@@ -181,6 +191,12 @@ def _decode_scopes(raw: Optional[str]) -> frozenset[Scope]:
     try:
         values = json.loads(raw)
     except (ValueError, TypeError):
+        return frozenset()
+    if not isinstance(values, list):
+        # Hand-corrupted or migrated DB: a non-list (e.g. an int) would make the
+        # iteration below raise TypeError — the exact load crash this function
+        # exists to prevent. Treat it as "no scopes".
+        logger.warning("api_key_scopes_not_a_list")
         return frozenset()
     try:
         return parse_scopes(values)

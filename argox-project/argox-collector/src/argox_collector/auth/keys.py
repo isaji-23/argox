@@ -15,7 +15,7 @@ import hashlib
 import secrets
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import FrozenSet, Optional
 
 from argox_collector.auth.principal import Scope
@@ -61,14 +61,27 @@ class ApiKeyRecord:
     created_at: datetime
     created_by: Optional[str] = None
     revoked_at: Optional[datetime] = None
+    # Optional absolute expiry. ``None`` means the key never expires and only a
+    # manual revoke can disable it.
+    expires_at: Optional[datetime] = None
 
     @property
     def revoked(self) -> bool:
         return self.revoked_at is not None
 
-    def is_active(self) -> bool:
-        """Return whether the key may still authenticate requests."""
-        return self.revoked_at is None
+    def is_expired(self, *, now: Optional[datetime] = None) -> bool:
+        """Return whether the key has passed its expiry, if any."""
+        if self.expires_at is None:
+            return False
+        reference = now or _now()
+        return reference >= self.expires_at
+
+    def is_active(self, *, now: Optional[datetime] = None) -> bool:
+        """Return whether the key may still authenticate requests.
+
+        A key is active only while it is neither revoked nor expired.
+        """
+        return self.revoked_at is None and not self.is_expired(now=now)
 
 
 @dataclass(frozen=True)
@@ -88,21 +101,38 @@ def mint_key(
     name: str,
     scopes: FrozenSet[Scope],
     created_by: Optional[str] = None,
+    expires_in: Optional[int] = None,
 ) -> NewApiKey:
     """Create a new key record and its raw secret without persisting anything.
+
+    Args:
+        expires_in: Optional lifetime in seconds. When set, the key expires that
+            many seconds after creation; ``None`` mints a non-expiring key.
 
     The caller is responsible for handing :class:`NewApiKey.record` to an
     :class:`~argox_collector.auth.keystore.ApiKeyStore` and surfacing
     :attr:`NewApiKey.raw_key` to the operator exactly once.
+
+    Raises:
+        ValueError: If ``expires_in`` is not strictly positive.
     """
+    if expires_in is not None and expires_in <= 0:
+        raise ValueError("expires_in must be a positive number of seconds")
     raw_key = generate_key()
+    created_at = _now()
+    expires_at = (
+        created_at + timedelta(seconds=expires_in)
+        if expires_in is not None
+        else None
+    )
     record = ApiKeyRecord(
         id=uuid.uuid4().hex,
         name=name,
         key_hash=hash_key(raw_key),
         key_prefix=display_prefix(raw_key),
         scopes=frozenset(scopes),
-        created_at=_now(),
+        created_at=created_at,
         created_by=created_by,
+        expires_at=expires_at,
     )
     return NewApiKey(record=record, raw_key=raw_key)
