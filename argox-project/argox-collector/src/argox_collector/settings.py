@@ -43,6 +43,11 @@ class CollectorSettings(BaseSettings):
     enrichment_enabled: bool = True
     pricing_table_path: Optional[Path] = None
 
+    # Audit log (COL-08): blob key prefix for WORM segments and the per-segment
+    # record cap that triggers rollover to a new segment.
+    audit_log_prefix: str = "audit-log"
+    audit_segment_max_records: int = 1000
+
     # Comma-separated list of origins allowed to call the API from a browser
     # (e.g. "https://dashboard.example.com,http://localhost:5173"). Kept as a
     # plain string so the value can be passed through a single environment
