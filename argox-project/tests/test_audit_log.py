@@ -219,6 +219,74 @@ def test_audit_log_has_no_delete_api(audit: AuditLog) -> None:
     assert not hasattr(audit, "remove")
 
 
+# -- input validation & robustness -----------------------------------------
+
+
+def test_append_rejects_malformed_digest(audit: AuditLog) -> None:
+    with pytest.raises(ValueError):
+        audit.append(actor="a", action="x", target="t", payload_digest="ZZZ")
+    # Uppercase hex is rejected too: digests are canonicalised lowercase.
+    with pytest.raises(ValueError):
+        audit.append(actor="a", action="x", target="t", payload_digest="A" * 64)
+
+
+def test_append_accepts_valid_digest(audit: AuditLog) -> None:
+    entry = audit.append(actor="a", action="x", target="t", payload_digest="a" * 64)
+    assert entry.record.payload_digest == "a" * 64
+
+
+def test_concurrent_writer_detected(storage: LocalStorageBackend) -> None:
+    """Two AuditLog instances over the same storage simulate two processes.
+
+    Both load the same tail and try to extend the same open segment; the
+    ETag-guarded write rejects the loser instead of silently corrupting."""
+    from argox_collector.audit import AuditLogError
+
+    writer_a = AuditLog(storage, max_segment_records=100)
+    writer_b = AuditLog(storage, max_segment_records=100)
+    writer_a.append(actor="a", action="x", target="t0", payload=0)
+    # writer_b loaded no state yet; force it to load the current tail.
+    writer_b.append(actor="b", action="x", target="t1", payload=1)
+    # writer_a still holds a stale ETag for the segment writer_b just rewrote.
+    with pytest.raises(AuditLogError):
+        writer_a.append(actor="a", action="x", target="t2", payload=2)
+    # The log on storage is still a valid chain (no torn write).
+    assert AuditLog(storage).verify().ok is True
+
+
+def test_verify_tolerates_malformed_line(
+    audit: AuditLog, storage: LocalStorageBackend
+) -> None:
+    for i in range(3):
+        audit.append(actor="a", action="act", target=f"t{i}", payload=i)
+    segment = audit.list_segments()[0]
+    lines = storage.get(segment.key).data.decode().splitlines()
+    lines[1] = "{not valid json"
+    storage.put(segment.key, ("\n".join(lines) + "\n").encode())
+
+    result = audit.verify()
+    assert result.ok is False
+    assert result.broken_seq == 2
+    assert "malformed" in result.reason
+
+
+def test_corrupt_tail_blocks_append(
+    storage: LocalStorageBackend,
+) -> None:
+    from argox_collector.audit import AuditLogError
+
+    first = AuditLog(storage, max_segment_records=100)
+    first.append(actor="a", action="x", target="t", payload=1)
+    segment = first.list_segments()[0]
+    storage.put(segment.key, b"{corrupt tail\n")
+
+    fresh = AuditLog(storage, max_segment_records=100)
+    with pytest.raises(AuditLogError):
+        fresh.append(actor="a", action="x", target="t2", payload=2)
+    # verify still runs (it never loads writer state) to diagnose the damage.
+    assert fresh.verify().ok is False
+
+
 # -- HTTP API --------------------------------------------------------------
 
 
@@ -262,8 +330,47 @@ def test_api_list_entries(client: TestClient) -> None:
             json={"actor": "a", "action": "act", "target": f"t{i}"},
         )
     listed = client.get("/api/v1/audit", params={"limit": 2}).json()
-    assert listed["count"] == 2
+    assert listed["returned"] == 2
+    assert listed["offset"] == 0
     assert [item["seq"] for item in listed["items"]] == [1, 2]
+
+
+def test_api_list_entries_offset(client: TestClient) -> None:
+    for i in range(5):
+        client.post(
+            "/api/v1/audit",
+            json={"actor": "a", "action": "act", "target": f"t{i}"},
+        )
+    listed = client.get("/api/v1/audit", params={"offset": 2, "limit": 2}).json()
+    assert listed["offset"] == 2
+    assert [item["seq"] for item in listed["items"]] == [3, 4]
+
+
+def test_api_rejects_malformed_digest(client: TestClient) -> None:
+    resp = client.post(
+        "/api/v1/audit",
+        json={
+            "actor": "a",
+            "action": "act",
+            "target": "t",
+            "payload_digest": "not-a-hex-digest",
+        },
+    )
+    assert resp.status_code == 422
+
+
+def test_api_rejects_payload_and_digest_together(client: TestClient) -> None:
+    resp = client.post(
+        "/api/v1/audit",
+        json={
+            "actor": "a",
+            "action": "act",
+            "target": "t",
+            "payload": {"x": 1},
+            "payload_digest": "a" * 64,
+        },
+    )
+    assert resp.status_code == 422
 
 
 def test_api_verify_reports_break_after_tampering(

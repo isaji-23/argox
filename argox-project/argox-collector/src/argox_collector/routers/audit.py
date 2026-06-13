@@ -3,34 +3,53 @@
 Handlers are plain ``def`` so FastAPI runs the blocking blob I/O in its
 threadpool, mirroring the query and policy routers. There is intentionally no
 delete or update endpoint — the audit log is append-only by design.
+
+SECURITY (blocks COL-09, #94): these endpoints are currently unauthenticated.
+- ``POST`` trusts ``actor`` from the request body, so without auth any caller
+  can forge entries under any identity. The hash chain proves no entry was
+  altered *after* the fact, but not its authenticity at write time — which
+  undermines the non-repudiation AI Act Art. 12 expects. When COL-09 lands,
+  ``actor`` MUST be bound to the authenticated principal, not read from the
+  body, and the read endpoints MUST require authorisation (they disclose the
+  whole audit trail and ``/verify`` re-reads every segment on each call, a
+  cheap DoS vector). Do not ship this service publicly before then.
 """
 
 from __future__ import annotations
 
 from typing import Any, Optional
 
-from fastapi import APIRouter, Query, Request
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, HTTPException, Query, Request
+from pydantic import BaseModel, Field, model_validator
 
-from argox_collector.audit import AuditEntry, AuditLog
+from argox_collector.audit import AuditEntry, AuditLog, AuditLogError
 
 router = APIRouter(prefix="/api/v1/audit", tags=["audit"])
 
 _MAX_PAGE_SIZE = 1000
+# 64-char lowercase SHA-256 hex digest.
+_DIGEST_PATTERN = r"^[0-9a-f]{64}$"
 
 
 class AuditAppendRequest(BaseModel):
     """Body of ``POST /api/v1/audit``.
 
     Provide either ``payload`` (hashed server-side into a digest so the raw
-    value is never persisted) or a pre-computed ``payload_digest``.
+    value is never persisted) or a pre-computed ``payload_digest`` — not both.
+    Omitting both records the digest of an empty payload.
     """
 
     actor: str = Field(..., min_length=1)
     action: str = Field(..., min_length=1)
     target: str = Field(..., min_length=1)
     payload: Optional[Any] = None
-    payload_digest: Optional[str] = None
+    payload_digest: Optional[str] = Field(default=None, pattern=_DIGEST_PATTERN)
+
+    @model_validator(mode="after")
+    def _reject_both(self) -> "AuditAppendRequest":
+        if self.payload is not None and self.payload_digest is not None:
+            raise ValueError("pass either payload or payload_digest, not both")
+        return self
 
 
 class AuditEntryResponse(BaseModel):
@@ -63,7 +82,9 @@ class AuditListResponse(BaseModel):
     """A bounded slice of the chain, oldest first."""
 
     items: list[AuditEntryResponse]
-    count: int
+    offset: int
+    limit: int
+    returned: int
 
 
 def _audit(request: Request) -> AuditLog:
@@ -73,13 +94,17 @@ def _audit(request: Request) -> AuditLog:
 @router.post("", response_model=AuditEntryResponse, status_code=201)
 def append_entry(request: Request, body: AuditAppendRequest) -> AuditEntryResponse:
     """Append an event to the audit log and return the sealed entry."""
-    entry = _audit(request).append(
-        actor=body.actor,
-        action=body.action,
-        target=body.target,
-        payload=body.payload,
-        payload_digest=body.payload_digest,
-    )
+    try:
+        entry = _audit(request).append(
+            actor=body.actor,
+            action=body.action,
+            target=body.target,
+            payload=body.payload,
+            payload_digest=body.payload_digest,
+        )
+    except AuditLogError as exc:
+        # Concurrent writer / unrecoverable state: not the client's fault.
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return AuditEntryResponse.from_entry(entry)
 
 
@@ -98,13 +123,22 @@ def verify_chain(request: Request) -> AuditVerifyResponse:
 @router.get("", response_model=AuditListResponse)
 def list_entries(
     request: Request,
+    offset: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=_MAX_PAGE_SIZE),
 ) -> AuditListResponse:
-    """Return the first ``limit`` entries in sequence order."""
+    """Return up to ``limit`` entries in sequence order, starting at ``offset``.
+
+    ``offset`` is a zero-based entry index so the whole log can be paged
+    through, not only its first ``limit`` entries.
+    """
     audit = _audit(request)
     items: list[AuditEntryResponse] = []
-    for entry in audit.iter_entries():
+    for index, entry in enumerate(audit.iter_entries()):
+        if index < offset:
+            continue
         items.append(AuditEntryResponse.from_entry(entry))
         if len(items) >= limit:
             break
-    return AuditListResponse(items=items, count=len(items))
+    return AuditListResponse(
+        items=items, offset=offset, limit=limit, returned=len(items)
+    )

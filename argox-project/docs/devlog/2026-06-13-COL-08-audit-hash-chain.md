@@ -60,11 +60,32 @@ whole-blob-rewrite `StorageBackend` (seal-on-rollover, chain continuity, no
 delete) is locked in
 [ADR-0004](../architecture/ADR-0004-audit-log-worm-hash-chain.md).
 
+## Review hardening (PR #134)
+
+- **Concurrent-writer guard.** Segment writes are now conditional on the
+  blob's ETag (`expected_etag="*"` create-only for a new segment, then the last
+  observed ETag); a second process racing the same open segment is rejected
+  with `AuditLogError` (HTTP **409**) instead of silently overwriting. The
+  per-instance lock is now an `RLock`.
+- **Reads decoupled from write state.** `iter_entries`/`verify` no longer call
+  `_ensure_loaded`, so reads neither race `append` nor crash on a corrupt tail.
+  `verify` reports a malformed/truncated record as a break (with `broken_seq`)
+  rather than raising, so one bad line cannot hide the rest of the log. A
+  corrupt tail blocks *appends* (`AuditLogError`) because the chain head is
+  unknown, but `verify` still runs to diagnose it.
+- **Digest validation.** `payload_digest` (API and `AuditLog.append`) must
+  match `^[0-9a-f]{64}$`; bad digests are rejected (**422** at the API).
+- **Pagination.** `GET /api/v1/audit` takes `offset` + `limit` and returns
+  `offset`/`limit`/`returned`, so the whole log is pageable, not just the head.
+- **Security note.** `routers/audit.py` documents that the endpoints are
+  unauthenticated and `actor` is client-supplied until COL-09 (#94), which must
+  bind `actor` to the authenticated principal and gate the read endpoints.
+
 ## Notes / follow-ups
 
-- A single writer (the Collector process) is assumed; appends are serialised
-  with an in-process lock. The chain itself detects any out-of-band write at
-  verification time, but concurrent writers would race on the segment blob.
+- Single writer (the Collector process) is still the design; the ETag guard
+  turns a multi-writer race into a loud failure rather than making it safe.
+  True multi-writer support (lease/coordinator) is an ADR-0004 trigger.
 - Rewriting the open segment on every append is O(segment size); the per-
   segment cap bounds it. A future backend with native append could drop the
   rewrite.

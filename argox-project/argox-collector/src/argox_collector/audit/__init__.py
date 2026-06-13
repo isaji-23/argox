@@ -16,9 +16,11 @@ from argox_collector.audit.log import (
     LIFECYCLE_COOL_DAYS,
     LIFECYCLE_HOT_DAYS,
     AuditLog,
+    AuditLogError,
     AuditVerificationResult,
     SegmentInfo,
     lifecycle_tier,
+    validate_digest,
 )
 
 __all__ = [
@@ -26,6 +28,7 @@ __all__ = [
     "AuditEntry",
     "AuditRecord",
     "AuditLog",
+    "AuditLogError",
     "AuditVerificationResult",
     "SegmentInfo",
     "LIFECYCLE_HOT_DAYS",
@@ -33,4 +36,5 @@ __all__ = [
     "canonical_json",
     "digest_payload",
     "lifecycle_tier",
+    "validate_digest",
 ]

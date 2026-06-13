@@ -40,9 +40,14 @@ chain, persisted as JSONL segments through the existing `StorageBackend`.
 - **No delete.** `AuditLog` exposes no delete/remove operation. Retention is a
   lifecycle classification only (`lifecycle_tier`: hot 90d → cool 365d →
   archive), matching the Azure lifecycle policy with no delete tier.
-- **Single writer.** Appends are serialised with an in-process lock; the
-  Collector process is the sole writer. Tamper evidence does not depend on the
-  lock — any out-of-band write is caught at verification time.
+- **Single writer, guarded.** Appends are serialised with an in-process
+  `RLock`; the Collector process is the sole intended writer. Each segment
+  rewrite is an ETag-conditional `put` (create-only for a new segment), so a
+  second process racing the same segment is rejected with `AuditLogError`
+  rather than silently overwriting and corrupting the chain. Tamper evidence
+  does not depend on the lock — any out-of-band write is also caught at
+  verification time, and `verify` reports a malformed record as a break
+  instead of raising.
 
 ## Triggers for the next refactor
 

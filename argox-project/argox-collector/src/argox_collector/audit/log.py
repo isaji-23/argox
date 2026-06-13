@@ -20,6 +20,7 @@ write detectable at verification time.
 from __future__ import annotations
 
 import json
+import re
 import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -34,6 +35,7 @@ from argox_collector.audit.chain import (
 )
 from argox_collector.storage import (
     BlobNotFoundError,
+    ConditionNotMetError,
     StorageBackend,
 )
 
@@ -41,11 +43,30 @@ _SEGMENT_SUFFIX = ".jsonl"
 _OPEN_MARKER = "open"
 _CONTENT_TYPE = "application/x-ndjson"
 
+# A payload digest is a lowercase SHA-256 hex string. Client-supplied digests
+# are validated against this so the log never stores malformed values.
+_DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
+
 # Lifecycle tiers (architecture §5.4). Audit data is never deleted.
 LIFECYCLE_HOT_DAYS = 90
 LIFECYCLE_COOL_DAYS = 365
 
 Clock = Callable[[], datetime]
+
+
+class AuditLogError(RuntimeError):
+    """Raised when the audit log cannot append or recover its state safely."""
+
+
+def validate_digest(digest: str) -> str:
+    """Return ``digest`` if it is a 64-char lowercase SHA-256 hex string.
+
+    Raises:
+        ValueError: If ``digest`` is not a well-formed SHA-256 hex digest.
+    """
+    if not isinstance(digest, str) or not _DIGEST_RE.fullmatch(digest):
+        raise ValueError(f"payload_digest must be 64 lowercase hex chars: {digest!r}")
+    return digest
 
 
 @dataclass(frozen=True)
@@ -109,17 +130,22 @@ class AuditLog:
         self._prefix = prefix.strip("/")
         self._max = max_segment_records
         self._clock = clock or (lambda: datetime.now(timezone.utc))
-        self._lock = threading.Lock()
+        # Reentrant: ``append`` holds the lock and calls ``_ensure_loaded``,
+        # which also runs under it. Serialises all writes and the lazy load.
+        self._lock = threading.RLock()
 
         # Recovered lazily on first use so construction never touches storage.
         self._loaded = False
         self._last_seq = 0
         self._last_hash = GENESIS_HASH
         # Active (unsealed) segment, or ``None`` when the next append must
-        # open a fresh segment.
+        # open a fresh segment. ``_active_etag`` tracks the blob's ETag so each
+        # rewrite is conditional and a second writer racing the same segment is
+        # rejected instead of silently corrupting the chain.
         self._active_key: Optional[str] = None
         self._active_start: Optional[int] = None
         self._active_lines: list[str] = []
+        self._active_etag: Optional[str] = None
 
     # -- public API --------------------------------------------------------
 
@@ -141,12 +167,17 @@ class AuditLog:
         given the digest of an empty payload is recorded.
 
         Raises:
-            ValueError: If both ``payload`` and ``payload_digest`` are given.
+            ValueError: If both ``payload`` and ``payload_digest`` are given,
+                or if ``payload_digest`` is not a valid SHA-256 hex digest.
+            AuditLogError: If a concurrent writer is detected on the active
+                segment.
         """
         if payload is not None and payload_digest is not None:
             raise ValueError("pass either payload or payload_digest, not both")
         if payload_digest is None:
             payload_digest = digest_payload(payload)
+        else:
+            payload_digest = validate_digest(payload_digest)
 
         with self._lock:
             self._ensure_loaded()
@@ -171,19 +202,39 @@ class AuditLog:
 
         Reads straight from storage (not the in-memory append cache) so that
         verification reflects exactly what is persisted, including any
-        out-of-band tampering.
+        out-of-band tampering. Deliberately does *not* touch the writer's load
+        state, so reads neither race ``append`` nor fail on a corrupt tail that
+        ``verify`` is meant to diagnose.
         """
-        self._ensure_loaded()
         for segment in self.list_segments():
             for line in self._read_lines(segment.key):
                 yield AuditEntry.from_dict(_parse_line(line))
 
     def verify(self) -> AuditVerificationResult:
-        """Walk the chain and report the first broken link, if any."""
+        """Walk the chain and report the first broken link, if any.
+
+        A malformed or truncated record is itself reported as a break (rather
+        than raising), so a single corrupt line cannot hide the rest of the
+        audit from a verification run.
+        """
         prev_hash = GENESIS_HASH
         expected_seq = 1
         count = 0
-        for entry in self.iter_entries():
+        entries = self.iter_entries()
+        while True:
+            try:
+                entry = next(entries)
+            except StopIteration:
+                break
+            except (ValueError, KeyError) as exc:
+                # json.JSONDecodeError (a ValueError) or a missing field
+                # (KeyError): cannot parse the next line into an entry.
+                return AuditVerificationResult(
+                    ok=False,
+                    total_entries=count,
+                    broken_seq=expected_seq,
+                    reason=f"malformed record near seq {expected_seq}: {exc}",
+                )
             count += 1
             rec = entry.record
             if rec.seq != expected_seq:
@@ -232,8 +283,9 @@ class AuditLog:
 
     def count(self) -> int:
         """Return the total number of entries currently appended."""
-        self._ensure_loaded()
-        return self._last_seq
+        with self._lock:
+            self._ensure_loaded()
+            return self._last_seq
 
     # -- internals ---------------------------------------------------------
 
@@ -244,13 +296,36 @@ class AuditLog:
         return moment.astimezone(timezone.utc).isoformat()
 
     def _append_entry(self, entry: AuditEntry) -> None:
-        """Persist ``entry`` into the active segment, rolling over when full."""
+        """Persist ``entry`` into the active segment, rolling over when full.
+
+        The write is conditional on the ETag we last observed (``"*"`` —
+        create-only — for a brand-new segment), so a second process writing the
+        same segment is rejected with :class:`AuditLogError` rather than
+        silently overwriting and corrupting the chain.
+        """
         if self._active_key is None:
             self._open_segment(entry.record.seq)
         self._active_lines.append(canonical_json(entry.to_dict()))
         body = self._encode(self._active_lines)
         assert self._active_key is not None  # set by _open_segment
-        self._storage.put(self._active_key, body, content_type=_CONTENT_TYPE)
+        expected_etag = self._active_etag if self._active_etag is not None else "*"
+        try:
+            meta = self._storage.put(
+                self._active_key,
+                body,
+                content_type=_CONTENT_TYPE,
+                expected_etag=expected_etag,
+            )
+        except ConditionNotMetError as exc:
+            # Drop the optimistic in-memory line; the segment on storage is not
+            # what we assumed. Force a reload before any further append.
+            self._active_lines.pop()
+            self._loaded = False
+            raise AuditLogError(
+                f"concurrent write detected on audit segment {self._active_key!r}; "
+                "the audit log assumes a single writer"
+            ) from exc
+        self._active_etag = meta.etag
         if len(self._active_lines) >= self._max:
             self._seal_segment(entry.record.seq, body)
 
@@ -262,6 +337,8 @@ class AuditLog:
             f"{seq_start:012d}-{_OPEN_MARKER}{_SEGMENT_SUFFIX}"
         )
         self._active_lines = []
+        # No ETag yet: the first write is create-only ("*").
+        self._active_etag = None
 
     def _seal_segment(self, seq_end: int, body: bytes) -> None:
         """Finalise the active segment under its ``{start}-{end}`` name.
@@ -280,38 +357,63 @@ class AuditLog:
         self._active_key = None
         self._active_start = None
         self._active_lines = []
+        self._active_etag = None
 
     def _ensure_loaded(self) -> None:
-        """Reconstruct chain state from storage on first use."""
+        """Reconstruct chain state from storage on first use.
+
+        Caller must hold ``self._lock``. Only the write path needs this; reads
+        go straight to storage.
+        """
         if self._loaded:
             return
         segments = self.list_segments()
         if segments:
             last = segments[-1]
-            lines = self._read_lines(last.key)
+            blob = self._get_blob(last.key)
+            lines = _split_lines(blob.data) if blob is not None else []
             if lines:
-                tail = AuditEntry.from_dict(_parse_line(lines[-1]))
+                try:
+                    tail = AuditEntry.from_dict(_parse_line(lines[-1]))
+                except (ValueError, KeyError) as exc:
+                    # A corrupt tail means the head of the chain is unknown, so
+                    # appending onto it would silently fork the chain. Refuse
+                    # loudly; ``verify`` still works (it never loads) to
+                    # diagnose the damage.
+                    raise AuditLogError(
+                        f"cannot recover audit state: corrupt tail record in "
+                        f"{last.key!r}: {exc}"
+                    ) from exc
                 self._last_seq = tail.record.seq
                 self._last_hash = tail.hash
                 # Resume an unsealed tail so its existing lines are preserved
-                # on the next append rather than overwritten.
+                # on the next append rather than overwritten, and adopt its
+                # ETag so the next conditional write guards against a racer.
                 if not last.sealed:
                     self._active_key = last.key
                     self._active_start = last.seq_start
                     self._active_lines = lines
+                    self._active_etag = blob.metadata.etag if blob else None
         self._loaded = True
 
-    def _read_lines(self, key: str) -> list[str]:
+    def _get_blob(self, key: str):
         try:
-            blob = self._storage.get(key)
+            return self._storage.get(key)
         except BlobNotFoundError:
-            return []
-        text = blob.data.decode("utf-8")
-        return [line for line in text.splitlines() if line]
+            return None
+
+    def _read_lines(self, key: str) -> list[str]:
+        blob = self._get_blob(key)
+        return _split_lines(blob.data) if blob is not None else []
 
     @staticmethod
     def _encode(lines: list[str]) -> bytes:
         return ("\n".join(lines) + "\n").encode("utf-8")
+
+
+def _split_lines(data: bytes) -> list[str]:
+    text = data.decode("utf-8")
+    return [line for line in text.splitlines() if line]
 
 
 def _parse_line(line: str) -> dict[str, Any]:
