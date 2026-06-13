@@ -197,18 +197,34 @@ class AuditLog:
             self._last_hash = entry.hash
             return entry
 
-    def iter_entries(self) -> Iterator[AuditEntry]:
-        """Yield every entry across all segments in sequence order.
+    def iter_entries(self, *, start: int = 0) -> Iterator[AuditEntry]:
+        """Yield entries across all segments in sequence order.
 
         Reads straight from storage (not the in-memory append cache) so that
         verification reflects exactly what is persisted, including any
         out-of-band tampering. Deliberately does *not* touch the writer's load
         state, so reads neither race ``append`` nor fail on a corrupt tail that
         ``verify`` is meant to diagnose.
+
+        ``start`` is a zero-based entry index: sealed segments lying entirely
+        before it are skipped without being read, so paging deep into a large
+        log does not re-read every preceding segment. The skip assumes a
+        gap-free chain (true for an untampered log); ``verify`` remains the
+        source of truth for gaps. A malformed line still raises ``ValueError``
+        /``KeyError`` — callers that must tolerate corruption (``verify``, the
+        list endpoint) catch it.
         """
+        seen = 0
         for segment in self.list_segments():
+            if segment.sealed and segment.seq_end is not None:
+                seg_count = segment.seq_end - segment.seq_start + 1
+                if seen + seg_count <= start:
+                    seen += seg_count
+                    continue
             for line in self._read_lines(segment.key):
-                yield AuditEntry.from_dict(_parse_line(line))
+                if seen >= start:
+                    yield AuditEntry.from_dict(_parse_line(line))
+                seen += 1
 
     def verify(self) -> AuditVerificationResult:
         """Walk the chain and report the first broken link, if any.

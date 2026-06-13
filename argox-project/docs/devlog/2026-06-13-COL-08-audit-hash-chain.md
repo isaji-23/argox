@@ -77,6 +77,10 @@ delete) is locked in
   match `^[0-9a-f]{64}$`; bad digests are rejected (**422** at the API).
 - **Pagination.** `GET /api/v1/audit` takes `offset` + `limit` and returns
   `offset`/`limit`/`returned`, so the whole log is pageable, not just the head.
+  `iter_entries(start=...)` skips sealed segments lying entirely before the
+  offset without reading them, so deep paging does not re-read every preceding
+  segment. The list endpoint tolerates a corrupt record (stops with
+  `malformed=True` instead of 500), matching `/verify`.
 - **Security note.** `routers/audit.py` documents that the endpoints are
   unauthenticated and `actor` is client-supplied until COL-09 (#94), which must
   bind `actor` to the authenticated principal and gate the read endpoints.

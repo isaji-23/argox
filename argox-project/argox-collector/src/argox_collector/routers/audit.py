@@ -79,12 +79,18 @@ class AuditVerifyResponse(BaseModel):
 
 
 class AuditListResponse(BaseModel):
-    """A bounded slice of the chain, oldest first."""
+    """A bounded slice of the chain, oldest first.
+
+    ``malformed`` is True when listing stopped early because a corrupt or
+    truncated record was hit (mirroring ``/verify``); use ``/verify`` to locate
+    the break. One bad line never fails the whole listing.
+    """
 
     items: list[AuditEntryResponse]
     offset: int
     limit: int
     returned: int
+    malformed: bool = False
 
 
 def _audit(request: Request) -> AuditLog:
@@ -129,16 +135,29 @@ def list_entries(
     """Return up to ``limit`` entries in sequence order, starting at ``offset``.
 
     ``offset`` is a zero-based entry index so the whole log can be paged
-    through, not only its first ``limit`` entries.
+    through, not only its first ``limit`` entries. A corrupt record stops the
+    listing with ``malformed=True`` instead of raising a 500 (mirroring
+    ``/verify``).
     """
     audit = _audit(request)
     items: list[AuditEntryResponse] = []
-    for index, entry in enumerate(audit.iter_entries()):
-        if index < offset:
-            continue
-        items.append(AuditEntryResponse.from_entry(entry))
-        if len(items) >= limit:
+    malformed = False
+    entries = audit.iter_entries(start=offset)
+    while len(items) < limit:
+        try:
+            entry = next(entries)
+        except StopIteration:
             break
+        except (ValueError, KeyError):
+            # A malformed/truncated line: stop here rather than 500. /verify
+            # reports exactly where the chain breaks.
+            malformed = True
+            break
+        items.append(AuditEntryResponse.from_entry(entry))
     return AuditListResponse(
-        items=items, offset=offset, limit=limit, returned=len(items)
+        items=items,
+        offset=offset,
+        limit=limit,
+        returned=len(items),
+        malformed=malformed,
     )

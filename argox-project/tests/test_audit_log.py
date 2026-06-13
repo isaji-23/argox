@@ -346,6 +346,40 @@ def test_api_list_entries_offset(client: TestClient) -> None:
     assert [item["seq"] for item in listed["items"]] == [3, 4]
 
 
+def test_api_list_tolerates_malformed_line(
+    client: TestClient, storage: LocalStorageBackend
+) -> None:
+    for i in range(4):
+        client.post(
+            "/api/v1/audit",
+            json={"actor": "a", "action": "act", "target": f"t{i}"},
+        )
+    # Corrupt the second sealed segment's first line (seq 3).
+    audit = AuditLog(storage, max_segment_records=2)
+    segment = audit.list_segments()[1]
+    lines = storage.get(segment.key).data.decode().splitlines()
+    lines[0] = "{not json"
+    storage.put(segment.key, ("\n".join(lines) + "\n").encode())
+
+    resp = client.get("/api/v1/audit", params={"limit": 100})
+    assert resp.status_code == 200  # one bad line must not 500 the listing
+    body = resp.json()
+    assert body["malformed"] is True
+    # The clean prefix (seq 1, 2) is still returned.
+    assert [item["seq"] for item in body["items"]] == [1, 2]
+
+
+def test_iter_entries_skips_sealed_segments_before_offset(
+    storage: LocalStorageBackend,
+) -> None:
+    audit = AuditLog(storage, max_segment_records=2)
+    for i in range(6):
+        audit.append(actor="a", action="act", target=f"t{i}", payload=i)
+    # Offset 4 lands past two sealed segments (seq 1-2, 3-4).
+    seqs = [e.record.seq for e in audit.iter_entries(start=4)]
+    assert seqs == [5, 6]
+
+
 def test_api_rejects_malformed_digest(client: TestClient) -> None:
     resp = client.post(
         "/api/v1/audit",
