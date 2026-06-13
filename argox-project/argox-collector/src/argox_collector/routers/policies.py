@@ -34,10 +34,11 @@ from typing import Any, Literal
 
 import structlog
 import yaml
-from fastapi import APIRouter, HTTPException, Query, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi import Path as PathParam
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from argox_collector.auth import Scope, require_scope
 from argox_collector.storage import (
     BlobNotFoundError,
     ConditionNotMetError,
@@ -265,7 +266,11 @@ def _etag_matches(if_none_match: str | None, etag: str) -> bool:
     return False
 
 
-@router.get("", response_model=PolicyListResponse)
+@router.get(
+    "",
+    response_model=PolicyListResponse,
+    dependencies=[Depends(require_scope(Scope.POLICY_READ))],
+)
 def list_policies(
     request: Request,
     skip: int = Query(0, ge=0),
@@ -294,7 +299,9 @@ def list_policies(
     )
 
 
-@router.get("/bundle")
+@router.get(
+    "/bundle", dependencies=[Depends(require_scope(Scope.POLICY_READ))]
+)
 def get_bundle(request: Request) -> Response:
     """Merge the rules of every active policy into one SDK-consumable YAML.
 
@@ -354,7 +361,11 @@ def get_bundle(request: Request) -> Response:
     )
 
 
-@router.get("/{policy_id}", response_model=PolicyResponse)
+@router.get(
+    "/{policy_id}",
+    response_model=PolicyResponse,
+    dependencies=[Depends(require_scope(Scope.POLICY_READ))],
+)
 def get_active_policy(
     request: Request,
     policy_id: str = PathParam(pattern=_ID_PATTERN),
@@ -391,7 +402,11 @@ def get_active_policy(
     return _response_from(document, content_hash)
 
 
-@router.get("/{policy_id}/v{version}", response_model=PolicyResponse)
+@router.get(
+    "/{policy_id}/v{version}",
+    response_model=PolicyResponse,
+    dependencies=[Depends(require_scope(Scope.POLICY_READ))],
+)
 def get_policy_version(
     request: Request,
     policy_id: str = PathParam(pattern=_ID_PATTERN),
@@ -423,7 +438,12 @@ def get_policy_version(
     return _response_from(document, content_hash)
 
 
-@router.post("", response_model=PolicyResponse, status_code=201)
+@router.post(
+    "",
+    response_model=PolicyResponse,
+    status_code=201,
+    dependencies=[Depends(require_scope(Scope.POLICY_WRITE))],
+)
 def create_policy(request: Request, payload: PolicyCreate) -> PolicyResponse:
     """Create a new policy as version 1."""
     storage = _storage(request)
@@ -454,7 +474,11 @@ def create_policy(request: Request, payload: PolicyCreate) -> PolicyResponse:
     raise _cas_exhausted()
 
 
-@router.put("/{policy_id}", response_model=PolicyResponse)
+@router.put(
+    "/{policy_id}",
+    response_model=PolicyResponse,
+    dependencies=[Depends(require_scope(Scope.POLICY_WRITE))],
+)
 def update_policy(
     request: Request,
     payload: PolicyUpdate,
@@ -500,7 +524,11 @@ def update_policy(
     raise _cas_exhausted()
 
 
-@router.delete("/{policy_id}", response_model=PolicyResponse)
+@router.delete(
+    "/{policy_id}",
+    response_model=PolicyResponse,
+    dependencies=[Depends(require_scope(Scope.POLICY_WRITE))],
+)
 def archive_policy(
     request: Request,
     policy_id: str = PathParam(pattern=_ID_PATTERN),

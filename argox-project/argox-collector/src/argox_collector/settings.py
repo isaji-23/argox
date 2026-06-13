@@ -25,9 +25,10 @@ class CollectorSettings(BaseSettings):
 
     service_name: str = "argox-collector"
     environment: str = "development"
-    # NOTE: binds all interfaces, which is intended for containerised deploys
-    # but leaves the endpoint exposed since auth is not yet in place. Tighten
-    # to 127.0.0.1, or front with auth, once COL-09 lands.
+    # Binds all interfaces for containerised deploys. Every endpoint except the
+    # health/readiness probes is gated by COL-09 auth (see the auth_* fields
+    # below), so the exposed surface is authenticated; still front with TLS and
+    # a tightened bind for non-local deployments.
     host: str = "0.0.0.0"
     port: int = 8000
     log_level: str = "INFO"
@@ -67,3 +68,29 @@ class CollectorSettings(BaseSettings):
     # over this limit are rejected with 413 before the body is fully buffered,
     # bounding memory use under concurrent or malicious uploads.
     max_payload_size: int = 10 * 1024 * 1024
+
+    # -- Authentication (COL-09) -------------------------------------------
+    # Master switch. When True (the default and the only safe production value)
+    # every endpoint except /healthz and /readyz requires a valid bearer
+    # credential. The test suite flips it off via ARGOX_AUTH_ENABLED=false.
+    auth_enabled: bool = True
+    # Optional break-glass admin key accepted without a DB lookup. Lets the
+    # first real API key be minted over HTTP (the key CRUD is admin-only) and
+    # gives deployments an injectable admin credential. Leave unset to disable.
+    bootstrap_admin_key: Optional[str] = None
+
+    # OIDC (dashboard users). All three of issuer/audience/jwks_uri must be set
+    # together to enable JWT auth; a partial config is treated as disabled.
+    # Defaults target a generic provider; for Microsoft Entra ID the issuer is
+    # https://login.microsoftonline.com/<tenant>/v2.0 and the JWKS URI is that
+    # tenant's discovery keys endpoint (see docs/collector/auth.md).
+    oidc_issuer: Optional[str] = None
+    oidc_audience: Optional[str] = None
+    oidc_jwks_uri: Optional[str] = None
+    # Claim carrying the user's roles (Entra ID emits "roles"); RBAC maps role
+    # membership to scopes.
+    oidc_role_claim: str = "roles"
+    # Role granting policy-write; role granting full admin. Unset means no user
+    # is escalated beyond the read-only baseline (read + policy-read).
+    oidc_policy_write_role: Optional[str] = None
+    oidc_admin_role: Optional[str] = None

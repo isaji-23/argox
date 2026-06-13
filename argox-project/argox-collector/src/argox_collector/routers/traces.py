@@ -7,13 +7,14 @@ import uuid
 from datetime import datetime, timezone
 
 import structlog
-from fastapi import APIRouter, BackgroundTasks, Request, Response
+from fastapi import APIRouter, BackgroundTasks, Depends, Request, Response
 from fastapi.concurrency import run_in_threadpool
 from google.protobuf import json_format
 from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import (
     ExportTraceServiceResponse,
 )
 
+from argox_collector.auth import Scope, require_scope
 from argox_collector.enrichment import enrich
 from argox_collector.index import TraceIndex
 from argox_collector.index.base import SpanRecord
@@ -102,7 +103,11 @@ def _persist_safe(**kwargs) -> None:
         )
 
 
-@router.post("/v1/traces", summary="OTLP/HTTP trace ingest")
+@router.post(
+    "/v1/traces",
+    summary="OTLP/HTTP trace ingest",
+    dependencies=[Depends(require_scope(Scope.INGEST))],
+)
 async def ingest_traces(
     request: Request, background_tasks: BackgroundTasks
 ) -> Response:

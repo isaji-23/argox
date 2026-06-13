@@ -2,18 +2,24 @@
 
 from __future__ import annotations
 
-from typing import Optional
 from contextlib import asynccontextmanager
+from typing import Optional
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from argox_collector import __version__
 from argox_collector.audit import AuditLog
+from argox_collector.auth import (
+    ApiKeyStore,
+    Authenticator,
+    build_api_key_store,
+    build_authenticator,
+)
 from argox_collector.index import TraceIndex, build_index
 from argox_collector.logging import configure_logging
 from argox_collector.middleware import PayloadSizeLimitMiddleware
-from argox_collector.routers import audit, health, policies, query, traces
+from argox_collector.routers import audit, health, keys, policies, query, traces
 from argox_collector.settings import CollectorSettings
 from argox_collector.storage import StorageBackend, build_storage
 
@@ -25,6 +31,15 @@ async def lifespan(app: FastAPI):
     if hasattr(app.state, "index") and app.state.index is not None:
         if hasattr(app.state.index, "close"):
             app.state.index.close()
+    # Close the API key store's own DuckDB connection, but only if the app
+    # opened it (an injected store belongs to the caller).
+    store = getattr(app.state, "api_key_store", None)
+    if (
+        store is not None
+        and getattr(app.state, "owns_api_key_store", False)
+        and hasattr(store, "close")
+    ):
+        store.close()
 
 
 def create_app(
@@ -33,6 +48,8 @@ def create_app(
     storage: Optional[StorageBackend] = None,
     index: Optional[TraceIndex] = None,
     audit_log: Optional[AuditLog] = None,
+    api_key_store: Optional[ApiKeyStore] = None,
+    authenticator: Optional[Authenticator] = None,
 ) -> FastAPI:
     """Build and return a configured FastAPI application.
 
@@ -46,10 +63,16 @@ def create_app(
             constructed from ``settings``.
         audit_log: Optional pre-built audit log. When omitted, one is
             constructed over ``app.state.storage`` from ``settings``.
+        api_key_store: Optional pre-built API key store. When omitted and auth
+            is enabled, one is opened on the index DB path. Tests inject a
+            temp-path store here. The app closes a store it opened itself.
+        authenticator: Optional pre-built authenticator. When omitted, one is
+            built from ``settings`` over the API key store.
 
     Returns:
         A FastAPI app with health endpoints registered, structlog wired and
-        the storage and index backends attached to ``app.state``.
+        the storage, index, audit log and authenticator attached to
+        ``app.state``.
     """
     settings = settings or CollectorSettings()
     configure_logging(level=settings.log_level)
@@ -75,6 +98,20 @@ def create_app(
             max_segment_records=settings.audit_segment_max_records,
         )
     )
+
+    # Authentication (COL-09). A key store is opened lazily only when auth is on
+    # and none was injected. The app closes a store it opened itself (tracked by
+    # ``owns_api_key_store``); an injected store's lifecycle stays with the test.
+    key_store = api_key_store
+    app.state.owns_api_key_store = False
+    if key_store is None and settings.auth_enabled:
+        key_store = build_api_key_store(settings)
+        app.state.owns_api_key_store = True
+    app.state.api_key_store = key_store
+    app.state.auth = authenticator or build_authenticator(
+        settings, key_store=key_store
+    )
+
     app.add_middleware(
         PayloadSizeLimitMiddleware, max_bytes=settings.max_payload_size
     )
@@ -93,4 +130,5 @@ def create_app(
     app.include_router(policies.router)
     app.include_router(query.router)
     app.include_router(audit.router)
+    app.include_router(keys.router)
     return app
