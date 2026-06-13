@@ -8,6 +8,7 @@ for the decisions behind these changes and
 
 | Date | Ticket | Title | PR | Status |
 |---|---|---|---|---|
+| 2026-06-13 | COL-08 | WORM audit log with hash chain | #134 | in-review |
 | 2026-06-10 | PROC-01 | IBAN mod-97 validation in PII detector | #133 | in-review |
 | 2026-06-10 | COL-07 | Enrichment worker: normalisation, cost, event PII | #132 | merged |
 | 2026-06-10 | COL-04 | Harden DuckDB indexing layer | #131 | in-review |
