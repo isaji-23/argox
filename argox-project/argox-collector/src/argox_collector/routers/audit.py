@@ -100,7 +100,12 @@ def _audit(request: Request) -> AuditLog:
     return request.app.state.audit
 
 
-@router.post("", response_model=AuditEntryResponse, status_code=201)
+@router.post(
+    "",
+    response_model=AuditEntryResponse,
+    status_code=201,
+    summary="Append an audit entry",
+)
 def append_entry(
     request: Request,
     body: AuditAppendRequest,
@@ -127,6 +132,7 @@ def append_entry(
 @router.get(
     "/verify",
     response_model=AuditVerifyResponse,
+    summary="Verify the audit hash chain",
     dependencies=[Depends(require_scope(Scope.READ))],
 )
 def verify_chain(request: Request) -> AuditVerifyResponse:
@@ -143,6 +149,7 @@ def verify_chain(request: Request) -> AuditVerifyResponse:
 @router.get(
     "",
     response_model=AuditListResponse,
+    summary="List audit entries",
     dependencies=[Depends(require_scope(Scope.READ))],
 )
 def list_entries(

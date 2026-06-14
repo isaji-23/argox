@@ -3,6 +3,8 @@
 Subcommands:
 
 - ``serve`` (default): start the FastAPI app under uvicorn.
+- ``export-openapi``: write the committed ``openapi.json`` contract, or
+  ``--check`` it for drift without writing.
 - ``keys create``: mint a new API key and print the raw secret once.
 - ``keys list``: list stored keys (metadata only, never the secret).
 - ``keys revoke``: revoke a key by id.
@@ -16,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from pathlib import Path
 from typing import Optional, Sequence
 
 from argox_collector.auth import (
@@ -24,6 +27,11 @@ from argox_collector.auth import (
     build_api_key_store,
     mint_key,
     parse_scopes,
+)
+from argox_collector.openapi_export import (
+    DEFAULT_OPENAPI_PATH,
+    build_openapi,
+    render_openapi,
 )
 from argox_collector.settings import CollectorSettings
 
@@ -41,6 +49,23 @@ def _build_parser() -> argparse.ArgumentParser:
 
     serve = sub.add_parser("serve", help="run the Collector service")
     serve.set_defaults(handler=_cmd_serve)
+
+    export = sub.add_parser(
+        "export-openapi", help="write or verify the committed openapi.json"
+    )
+    export.add_argument(
+        "--out",
+        type=Path,
+        default=DEFAULT_OPENAPI_PATH,
+        help="output path (default: the committed contract file)",
+    )
+    export.add_argument(
+        "--check",
+        action="store_true",
+        help="verify the file matches the live schema; exit 1 on drift "
+        "without writing",
+    )
+    export.set_defaults(handler=_cmd_export_openapi)
 
     keys = sub.add_parser("keys", help="manage API keys")
     keys_sub = keys.add_subparsers(dest="keys_command", required=True)
@@ -91,6 +116,26 @@ def _cmd_serve(_: argparse.Namespace) -> int:
         port=settings.port,
         log_level=settings.log_level.lower(),
     )
+    return 0
+
+
+def _cmd_export_openapi(args: argparse.Namespace) -> int:
+    rendered = render_openapi(build_openapi())
+    out: Path = args.out
+    if args.check:
+        current = out.read_text() if out.exists() else None
+        if current == rendered:
+            print(f"{out} is up to date")
+            return 0
+        print(
+            f"error: {out} is out of date — run 'argox-collector "
+            "export-openapi' and commit the result",
+            file=sys.stderr,
+        )
+        return 1
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(rendered)
+    print(f"Wrote {out}")
     return 0
 
 
