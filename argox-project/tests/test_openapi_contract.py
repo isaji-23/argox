@@ -26,7 +26,7 @@ def test_committed_openapi_matches_live_schema() -> None:
         f"{DEFAULT_OPENAPI_PATH} missing — run 'argox-collector export-openapi'"
     )
     expected = render_openapi(build_openapi())
-    actual = DEFAULT_OPENAPI_PATH.read_text()
+    actual = DEFAULT_OPENAPI_PATH.read_text(encoding="utf-8")
     assert actual == expected, (
         "openapi.json is stale — run 'argox-collector export-openapi' and "
         "regenerate the dashboard client"

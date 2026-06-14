@@ -123,7 +123,7 @@ def _cmd_export_openapi(args: argparse.Namespace) -> int:
     rendered = render_openapi(build_openapi())
     out: Path = args.out
     if args.check:
-        current = out.read_text() if out.exists() else None
+        current = out.read_text(encoding="utf-8") if out.exists() else None
         if current == rendered:
             print(f"{out} is up to date")
             return 0
@@ -134,7 +134,7 @@ def _cmd_export_openapi(args: argparse.Namespace) -> int:
         )
         return 1
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(rendered)
+    out.write_text(rendered, encoding="utf-8")
     print(f"Wrote {out}")
     return 0
 
