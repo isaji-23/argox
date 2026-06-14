@@ -7,6 +7,7 @@ from typing import Optional
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.routing import APIRoute
 
 from argox_collector import __version__
 from argox_collector.audit import AuditLog
@@ -22,6 +23,16 @@ from argox_collector.middleware import PayloadSizeLimitMiddleware
 from argox_collector.routers import audit, health, keys, policies, query, traces
 from argox_collector.settings import CollectorSettings
 from argox_collector.storage import StorageBackend, build_storage
+
+
+def _operation_id(route: APIRoute) -> str:
+    """Derive a stable OpenAPI ``operationId`` from the route handler name.
+
+    Using the handler function name (which is unique across all routers) keeps
+    the generated TypeScript client method names constant across unrelated code
+    edits, so the committed client only changes when the contract really does.
+    """
+    return route.name
 
 
 @asynccontextmanager
@@ -85,6 +96,7 @@ def create_app(
             "for the Argox observability platform."
         ),
         lifespan=lifespan,
+        generate_unique_id_function=_operation_id,
     )
     app.state.settings = settings
     app.state.storage = storage if storage is not None else build_storage(settings)

@@ -107,6 +107,20 @@ def _persist_safe(**kwargs) -> None:
     "/v1/traces",
     summary="OTLP/HTTP trace ingest",
     dependencies=[Depends(require_scope(Scope.INGEST))],
+    response_class=Response,
+    responses={
+        200: {
+            "description": (
+                "OTLP ExportTraceServiceResponse. Serialized as protobuf or "
+                "JSON to match the request Content-Type."
+            ),
+            "content": {
+                "application/x-protobuf": {},
+                "application/json": {},
+            },
+        },
+        415: {"description": "Unsupported Content-Type."},
+    },
 )
 async def ingest_traces(
     request: Request, background_tasks: BackgroundTasks

@@ -113,7 +113,9 @@ def _index(request: Request) -> TraceIndex:
     return request.app.state.index
 
 
-@router.get("/traces", response_model=TraceListResponse)
+@router.get(
+    "/traces", response_model=TraceListResponse, summary="List traces"
+)
 def list_traces(
     request: Request,
     skip: int = Query(0, ge=0),
@@ -129,7 +131,11 @@ def list_traces(
     )
 
 
-@router.get("/traces/{trace_id}", response_model=TraceDetailResponse)
+@router.get(
+    "/traces/{trace_id}",
+    response_model=TraceDetailResponse,
+    summary="Get trace detail",
+)
 def get_trace(request: Request, trace_id: str) -> TraceDetailResponse:
     """Return the full span waterfall of one trace."""
     spans, truncated = _index(request).get_trace(trace_id)
@@ -158,7 +164,11 @@ def get_trace(request: Request, trace_id: str) -> TraceDetailResponse:
     )
 
 
-@router.get("/metrics/cost", response_model=CostMetricsResponse)
+@router.get(
+    "/metrics/cost",
+    response_model=CostMetricsResponse,
+    summary="Cost metrics",
+)
 def get_metrics_cost(
     request: Request,
     window_hours: int = Query(24, ge=1, le=_MAX_WINDOW_HOURS),
@@ -169,7 +179,11 @@ def get_metrics_cost(
     )
 
 
-@router.get("/metrics/latency", response_model=LatencyMetricsResponse)
+@router.get(
+    "/metrics/latency",
+    response_model=LatencyMetricsResponse,
+    summary="Latency metrics",
+)
 def get_metrics_latency(
     request: Request,
     window_hours: int = Query(24, ge=1, le=_MAX_WINDOW_HOURS),
@@ -180,7 +194,11 @@ def get_metrics_latency(
     )
 
 
-@router.get("/metrics/success", response_model=SuccessMetricsResponse)
+@router.get(
+    "/metrics/success",
+    response_model=SuccessMetricsResponse,
+    summary="Success rate metrics",
+)
 def get_metrics_success(
     request: Request,
     window_hours: int = Query(24, ge=1, le=_MAX_WINDOW_HOURS),

@@ -269,6 +269,7 @@ def _etag_matches(if_none_match: str | None, etag: str) -> bool:
 @router.get(
     "",
     response_model=PolicyListResponse,
+    summary="List policies",
     dependencies=[Depends(require_scope(Scope.POLICY_READ))],
 )
 def list_policies(
@@ -300,7 +301,17 @@ def list_policies(
 
 
 @router.get(
-    "/bundle", dependencies=[Depends(require_scope(Scope.POLICY_READ))]
+    "/bundle",
+    summary="Merged policy bundle (YAML)",
+    dependencies=[Depends(require_scope(Scope.POLICY_READ))],
+    response_class=Response,
+    responses={
+        200: {
+            "description": "Merged PolicyDocument for the SDK parser.",
+            "content": {"application/yaml": {}},
+        },
+        304: {"description": "Bundle unchanged (If-None-Match matched)."},
+    },
 )
 def get_bundle(request: Request) -> Response:
     """Merge the rules of every active policy into one SDK-consumable YAML.
@@ -364,6 +375,7 @@ def get_bundle(request: Request) -> Response:
 @router.get(
     "/{policy_id}",
     response_model=PolicyResponse,
+    summary="Get active policy",
     dependencies=[Depends(require_scope(Scope.POLICY_READ))],
 )
 def get_active_policy(
@@ -405,6 +417,7 @@ def get_active_policy(
 @router.get(
     "/{policy_id}/v{version}",
     response_model=PolicyResponse,
+    summary="Get a specific policy version",
     dependencies=[Depends(require_scope(Scope.POLICY_READ))],
 )
 def get_policy_version(
@@ -442,6 +455,7 @@ def get_policy_version(
     "",
     response_model=PolicyResponse,
     status_code=201,
+    summary="Create a policy",
     dependencies=[Depends(require_scope(Scope.POLICY_WRITE))],
 )
 def create_policy(request: Request, payload: PolicyCreate) -> PolicyResponse:
@@ -477,6 +491,7 @@ def create_policy(request: Request, payload: PolicyCreate) -> PolicyResponse:
 @router.put(
     "/{policy_id}",
     response_model=PolicyResponse,
+    summary="Update a policy",
     dependencies=[Depends(require_scope(Scope.POLICY_WRITE))],
 )
 def update_policy(
@@ -527,6 +542,7 @@ def update_policy(
 @router.delete(
     "/{policy_id}",
     response_model=PolicyResponse,
+    summary="Archive a policy",
     dependencies=[Depends(require_scope(Scope.POLICY_WRITE))],
 )
 def archive_policy(

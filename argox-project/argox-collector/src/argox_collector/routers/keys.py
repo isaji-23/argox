@@ -88,7 +88,12 @@ def _store(request: Request) -> ApiKeyStore:
     return store
 
 
-@router.post("", response_model=ApiKeyCreateResponse, status_code=201)
+@router.post(
+    "",
+    response_model=ApiKeyCreateResponse,
+    status_code=201,
+    summary="Create an API key",
+)
 def create_key(
     request: Request,
     payload: ApiKeyCreate,
@@ -121,7 +126,7 @@ def create_key(
     return ApiKeyCreateResponse(**view.model_dump(), key=new_key.raw_key)
 
 
-@router.get("", response_model=ApiKeyListResponse)
+@router.get("", response_model=ApiKeyListResponse, summary="List API keys")
 def list_keys(
     request: Request,
     _: Principal = Depends(require_scope(Scope.ADMIN)),
@@ -134,7 +139,15 @@ def list_keys(
     )
 
 
-@router.delete("/{key_id}", status_code=204)
+@router.delete(
+    "/{key_id}",
+    status_code=204,
+    summary="Revoke an API key",
+    responses={
+        204: {"description": "Key revoked (no body)."},
+        404: {"description": "No active key with that id."},
+    },
+)
 def revoke_key(
     request: Request,
     key_id: str = PathParam(..., min_length=1),
