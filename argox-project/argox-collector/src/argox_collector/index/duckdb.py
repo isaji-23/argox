@@ -238,10 +238,17 @@ class DuckDBTraceIndex(TraceIndex):
         finally:
             cursor.close()
 
-    def list_traces(self, *, skip: int = 0, limit: int = 50) -> tuple[list[dict], int]:
-        # The agent columns prefer the root span and fall back to any span,
-        # so partially-ingested traces (root not yet arrived) still get a name.
-        query = """
+    def list_traces(
+        self,
+        *,
+        skip: int = 0,
+        limit: int = 50,
+        agent_name: Optional[str] = None,
+        status: Optional[str] = None,
+        decision: Optional[str] = None,
+    ) -> tuple[list[dict], int]:
+        # Base query to aggregate traces
+        base_query = """
             SELECT
                 trace_id,
                 MIN(start_time) AS trace_start,
@@ -256,14 +263,44 @@ class DuckDBTraceIndex(TraceIndex):
                     MAX(agent_version) FILTER (WHERE parent_span_id IS NULL),
                     MAX(agent_version)
                 ) AS agent_version,
-                COUNT(*) AS span_count
+                COUNT(*) AS span_count,
+                CASE 
+                    WHEN COUNT(*) FILTER (WHERE run_success = FALSE) > 0 THEN 'error'
+                    ELSE 'ok'
+                END AS status,
+                COALESCE(
+                    MAX(policy_decision) FILTER (WHERE policy_decision = 'block'),
+                    MAX(policy_decision) FILTER (WHERE policy_decision = 'warn'),
+                    'allow'
+                ) AS decision
             FROM spans
             GROUP BY trace_id
-            ORDER BY trace_start DESC NULLS LAST, trace_id
-            LIMIT ? OFFSET ?
         """
-        rows = self._read(query, (limit, skip))
-        total = self._read("SELECT COUNT(DISTINCT trace_id) FROM spans", ())[0][0]
+
+        # Wrap in a subquery to allow filtering on aggregated columns
+        query = f"SELECT * FROM ({base_query}) AS t WHERE 1=1"
+        count_query = f"SELECT COUNT(*) FROM ({base_query}) AS t WHERE 1=1"
+        params = []
+
+        if agent_name:
+            query += " AND agent_name = ?"
+            count_query += " AND agent_name = ?"
+            params.append(agent_name)
+        
+        if status:
+            query += " AND status = ?"
+            count_query += " AND status = ?"
+            params.append(status)
+            
+        if decision:
+            query += " AND decision = ?"
+            count_query += " AND decision = ?"
+            params.append(decision)
+
+        query += " ORDER BY trace_start DESC NULLS LAST, trace_id LIMIT ? OFFSET ?"
+        
+        rows = self._read(query, tuple(params + [limit, skip]))
+        total = self._read(count_query, tuple(params))[0][0]
 
         summaries = [
             {
@@ -275,6 +312,8 @@ class DuckDBTraceIndex(TraceIndex):
                 "agent_name": row[5],
                 "agent_version": row[6],
                 "span_count": row[7],
+                "status": row[8],
+                "decision": row[9],
             }
             for row in rows
         ]

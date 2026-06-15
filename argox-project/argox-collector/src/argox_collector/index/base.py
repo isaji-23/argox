@@ -59,16 +59,31 @@ class TraceIndex(ABC):
         """Batch add multiple span records to the index."""
 
     @abstractmethod
-    def list_traces(self, *, skip: int = 0, limit: int = 50) -> tuple[list[dict], int]:
+    def list_traces(
+        self,
+        *,
+        skip: int = 0,
+        limit: int = 50,
+        agent_name: Optional[str] = None,
+        status: Optional[str] = None,
+        decision: Optional[str] = None,
+    ) -> tuple[list[dict], int]:
         """Return paginated trace summaries plus the total trace count.
 
         Each summary aggregates the spans sharing a ``trace_id`` (start/end
         time, total cost, span count, root agent). Summaries are sorted by
         trace start time, newest first.
 
+        Args:
+            skip: Number of traces to skip.
+            limit: Maximum number of traces to return.
+            agent_name: Filter by exact agent name.
+            status: Filter by trace status ('ok' or 'error').
+            decision: Filter by policy decision ('allow', 'block', or 'warn').
+
         Returns:
             A ``(summaries, total)`` tuple where ``total`` is the number of
-            distinct traces in the index regardless of pagination.
+            distinct traces in the index matching the filters.
         """
 
     @abstractmethod

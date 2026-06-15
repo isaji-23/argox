@@ -34,6 +34,8 @@ class TraceSummary(BaseModel):
     agent_name: Optional[str] = None
     agent_version: Optional[str] = None
     span_count: int
+    status: str
+    decision: str
 
 
 class TraceListResponse(BaseModel):
@@ -113,9 +115,18 @@ def list_traces(
     request: Request,
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=_MAX_PAGE_SIZE),
+    agent_name: Optional[str] = Query(None),
+    status: Optional[str] = Query(None, pattern="^(ok|error)$"),
+    decision: Optional[str] = Query(None, pattern="^(allow|block|warn)$"),
 ) -> TraceListResponse:
     """List trace summaries, newest first."""
-    summaries, total = _index(request).list_traces(skip=skip, limit=limit)
+    summaries, total = _index(request).list_traces(
+        skip=skip,
+        limit=limit,
+        agent_name=agent_name,
+        status=status,
+        decision=decision,
+    )
     return TraceListResponse(
         items=[TraceSummary(**summary) for summary in summaries],
         total=total,

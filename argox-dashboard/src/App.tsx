@@ -2,7 +2,8 @@ import { useState, useEffect } from 'react';
 import { Sidebar } from './components/layout/Sidebar';
 import { Header } from './components/layout/Header';
 import { TracesScreen } from './components/screens/TracesScreen';
-import { AGENTS, FEATURED_TRACE } from './data/mockData';
+import { TraceDetailScreen } from './components/screens/TraceDetailScreen';
+import { AGENTS } from './data/mockData';
 
 type Route = 'metrics' | 'traces' | 'trace' | 'policies' | 'system';
 
@@ -17,6 +18,7 @@ function App() {
   const [env, setEnv] = useState('production');
   const [agent, setAgent] = useState('all');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [selectedTraceId, setSelectedTraceId] = useState<string | null>(null);
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
@@ -40,7 +42,7 @@ function App() {
         return {
           crumbs: [
             { label: 'Traces', onClick: () => setRoute('traces') },
-            { label: FEATURED_TRACE.id, mono: true }
+            { label: selectedTraceId || 'Trace', mono: true }
           ],
           showTimeControls: false
         };
@@ -62,13 +64,14 @@ function App() {
           <TracesScreen
             timeRange={timeRange}
             agent={agent}
-            onOpenTrace={(_) => {
+            onOpenTrace={(t) => {
+              setSelectedTraceId(t.id);
               setRoute('trace');
             }}
           />
         );
       case 'trace':
-        return <div className="p-6 text-text-muted">Trace Detail Screen (Coming soon)</div>;
+        return <TraceDetailScreen traceId={selectedTraceId || undefined} onBack={() => setRoute('traces')} />;
       case 'policies':
         return <div className="p-6 text-text-muted">Policies Screen (Coming soon)</div>;
       case 'system':

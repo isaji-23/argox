@@ -107,8 +107,51 @@ def test_index_list_traces_aggregates_and_sorts(index: DuckDBTraceIndex) -> None
     assert t1["total_duration_ms"] == pytest.approx(100_000.0)
     assert t1["agent_name"] == "agent-a"
     assert t1["agent_version"] == "1.0"
+    assert t1["status"] == "ok"
+    assert t1["decision"] == "allow"
     assert t1["start_time"].tzinfo is not None
     assert t1["start_time"] < t1["end_time"]
+
+    t2 = summaries[1]
+    assert t2["status"] == "error"
+
+
+def test_index_list_traces_filters_by_agent(index: DuckDBTraceIndex) -> None:
+    summaries, total = index.list_traces(agent_name="agent-a")
+    assert total == 1
+    assert summaries[0]["trace_id"] == "t1"
+
+
+def test_index_list_traces_filters_by_status(index: DuckDBTraceIndex) -> None:
+    summaries, total = index.list_traces(status="error")
+    assert total == 1
+    assert summaries[0]["trace_id"] == "t2"
+
+
+def test_index_list_traces_filters_by_decision(tmp_path: Path) -> None:
+    idx = DuckDBTraceIndex(tmp_path / "decision.duckdb")
+    idx.insert_spans(
+        [
+            SpanRecord(trace_id="t-allow", span_id="s1", start_time=NOW),
+            SpanRecord(
+                trace_id="t-block", span_id="s2", start_time=NOW,
+                policy_decision="block",
+            ),
+            SpanRecord(
+                trace_id="t-warn", span_id="s3", start_time=NOW,
+                policy_decision="warn",
+            ),
+        ]
+    )
+    # Block filter
+    summaries, total = idx.list_traces(decision="block")
+    assert total == 1
+    assert summaries[0]["trace_id"] == "t-block"
+    
+    # Allow filter (default)
+    summaries, total = idx.list_traces(decision="allow")
+    assert total == 1
+    assert summaries[0]["trace_id"] == "t-allow"
 
 
 def test_index_list_traces_paginates(index: DuckDBTraceIndex) -> None:
@@ -239,6 +282,29 @@ def test_list_traces_endpoint(client: TestClient) -> None:
     assert [item["trace_id"] for item in data["items"]] == ["t1", "t2", "t3"]
     assert data["items"][0]["span_count"] == 2
     assert data["items"][0]["total_cost"] == pytest.approx(0.07)
+    assert data["items"][0]["status"] == "ok"
+    assert data["items"][0]["decision"] == "allow"
+    assert data["items"][1]["status"] == "error"
+
+
+def test_list_traces_endpoint_filters(client: TestClient) -> None:
+    # Filter by agent
+    res = client.get("/api/v1/traces", params={"agent_name": "agent-a"})
+    assert res.json()["total"] == 1
+    assert res.json()["items"][0]["trace_id"] == "t1"
+
+    # Filter by status
+    res = client.get("/api/v1/traces", params={"status": "error"})
+    assert res.json()["total"] == 1
+    assert res.json()["items"][0]["trace_id"] == "t2"
+
+    # Filter by decision
+    res = client.get("/api/v1/traces", params={"decision": "block"})
+    assert res.json()["total"] == 0  # No blocks in mock data
+
+    # Invalid filter values
+    assert client.get("/api/v1/traces", params={"status": "invalid"}).status_code == 422
+    assert client.get("/api/v1/traces", params={"decision": "invalid"}).status_code == 422
 
 
 def test_list_traces_endpoint_pagination(client: TestClient) -> None:
