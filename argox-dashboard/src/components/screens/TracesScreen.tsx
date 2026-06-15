@@ -48,13 +48,25 @@ export function TracesScreen({ timeRange, agent, onOpenTrace }: TracesScreenProp
   const fetchTraces = async () => {
     setLoading(true);
     setError(null);
+
+    // Map frontend sort keys to backend fields
+    const sortMap: Record<string, string> = {
+      start_time: 'start_time',
+      total_duration_ms: 'duration',
+      total_cost: 'cost',
+      span_count: 'spans'
+    };
+    const backendSort = sortMap[sort.key] ? `${sortMap[sort.key]}:${sort.dir}` : undefined;
+
     try {
       const data = await api.listTraces({
         skip: (page - 1) * pageSize,
         limit: pageSize,
+        trace_id: debouncedQuery || undefined,
         agent_name: filterAgent,
         status: filterStatus,
         decision: filterDecision,
+        sort: backendSort,
       });
       setTraces(data.items);
       setTotal(data.total);
@@ -67,11 +79,11 @@ export function TracesScreen({ timeRange, agent, onOpenTrace }: TracesScreenProp
 
   useEffect(() => {
     fetchTraces();
-  }, [page, debouncedQuery, filterStatus, filterDecision, filterAgent]);
+  }, [page, debouncedQuery, filterStatus, filterDecision, filterAgent, sort]);
 
   useEffect(() => {
     setPage(1);
-  }, [debouncedQuery, filterStatus, filterDecision, filterAgent]);
+  }, [debouncedQuery, filterStatus, filterDecision, filterAgent, sort]);
 
   const fmtMs = (ms: number) => ms >= 1000 ? (ms / 1000).toFixed(2) + 's' : Math.round(ms) + 'ms';
   const fmtDate = (iso: string) => {
@@ -84,7 +96,7 @@ export function TracesScreen({ timeRange, agent, onOpenTrace }: TracesScreenProp
       key: 'trace_id',
       label: 'Trace',
       width: '1.5fr',
-      sortable: true,
+      sortable: false,
       render: (r) => (
         <div className="flex items-center gap-2.5 min-w-0">
           <StatusDot status={r.status || 'ok'} />
@@ -106,7 +118,7 @@ export function TracesScreen({ timeRange, agent, onOpenTrace }: TracesScreenProp
       key: 'agent_name',
       label: 'Agent',
       width: '1fr',
-      sortable: true,
+      sortable: false,
       render: (r) => (
         <span className="inline-flex items-center gap-1.5 text-sm text-text-secondary font-mono">
           <Icon name="bolt" size={12} className="text-text-faint" />
@@ -164,7 +176,7 @@ export function TracesScreen({ timeRange, agent, onOpenTrace }: TracesScreenProp
       label: 'Policy',
       width: '0.85fr',
       align: 'right',
-      sortable: true,
+      sortable: false,
       render: (r) => <DecisionBadge decision={r.decision || 'allow'} size="sm" />
     },
   ];

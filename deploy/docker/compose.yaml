@@ -6,6 +6,7 @@
 # See README.md in this directory for ports, environment variables and how to
 # seed demo data.
 
+name: argox
 
 services:
   azurite:

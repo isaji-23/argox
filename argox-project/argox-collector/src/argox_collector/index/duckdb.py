@@ -243,9 +243,11 @@ class DuckDBTraceIndex(TraceIndex):
         *,
         skip: int = 0,
         limit: int = 50,
+        trace_id: Optional[str] = None,
         agent_name: Optional[str] = None,
         status: Optional[str] = None,
         decision: Optional[str] = None,
+        sort: Optional[str] = None,
     ) -> tuple[list[dict], int]:
         # Base query to aggregate traces
         base_query = """
@@ -282,6 +284,11 @@ class DuckDBTraceIndex(TraceIndex):
         count_query = f"SELECT COUNT(*) FROM ({base_query}) AS t WHERE 1=1"
         params = []
 
+        if trace_id:
+            query += " AND trace_id LIKE ?"
+            count_query += " AND trace_id LIKE ?"
+            params.append(f"{trace_id}%")
+
         if agent_name:
             query += " AND agent_name = ?"
             count_query += " AND agent_name = ?"
@@ -297,7 +304,23 @@ class DuckDBTraceIndex(TraceIndex):
             count_query += " AND decision = ?"
             params.append(decision)
 
-        query += " ORDER BY trace_start DESC NULLS LAST, trace_id LIMIT ? OFFSET ?"
+        # Sorting
+        sort_map = {
+            "start_time": "trace_start",
+            "duration": "total_duration_ms",
+            "cost": "total_cost",
+            "spans": "span_count",
+        }
+        
+        if sort:
+            field, dir = sort.split(":")
+            sql_field = sort_map.get(field, "trace_start")
+            sql_dir = "ASC" if dir == "asc" else "DESC"
+            query += f" ORDER BY {sql_field} {sql_dir} NULLS LAST, trace_id"
+        else:
+            query += " ORDER BY trace_start DESC NULLS LAST, trace_id"
+
+        query += " LIMIT ? OFFSET ?"
         
         rows = self._read(query, tuple(params + [limit, skip]))
         total = self._read(count_query, tuple(params))[0][0]

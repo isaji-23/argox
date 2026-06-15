@@ -146,12 +146,12 @@ export function TraceDetailScreen({ traceId, onBack }: TraceDetailScreenProps) {
                 <div className="space-y-3">
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-mono text-text-muted">ID: {selectedSpan.span_id}</span>
-                    <DecisionBadge decision={selectedSpan.policy_decision as any} size="sm" />
+                    <DecisionBadge decision={(selectedSpan.policy_decision as any) || 'allow'} size="sm" />
                   </div>
                   <h3 className="font-bold text-md text-text-primary">{selectedSpan.name}</h3>
                   <div className="grid grid-cols-2 gap-2 mt-4">
                     <DetailBox label="Type" value={(selectedSpan.attributes.argox_type as string || 'span').toUpperCase()} />
-                    <DetailBox label="Duration" value={`${selectedSpan.duration_ms?.toFixed(1)}ms`} />
+                    <DetailBox label="Duration" value={selectedSpan.duration_ms != null ? `${selectedSpan.duration_ms.toFixed(1)}ms` : '-'} />
                     {selectedSpan.attributes.model && <DetailBox label="Model" value={selectedSpan.attributes.model as string} />}
                     {selectedSpan.attributes.tool_name && <DetailBox label="Tool" value={selectedSpan.attributes.tool_name as string} />}
                   </div>

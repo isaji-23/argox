@@ -115,17 +115,21 @@ def list_traces(
     request: Request,
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=_MAX_PAGE_SIZE),
+    trace_id: Optional[str] = Query(None, min_length=1),
     agent_name: Optional[str] = Query(None),
     status: Optional[str] = Query(None, pattern="^(ok|error)$"),
     decision: Optional[str] = Query(None, pattern="^(allow|block|warn)$"),
+    sort: Optional[str] = Query(None, pattern="^(start_time|duration|cost|spans):(asc|desc)$"),
 ) -> TraceListResponse:
     """List trace summaries, newest first."""
     summaries, total = _index(request).list_traces(
         skip=skip,
         limit=limit,
+        trace_id=trace_id,
         agent_name=agent_name,
         status=status,
         decision=decision,
+        sort=sort,
     )
     return TraceListResponse(
         items=[TraceSummary(**summary) for summary in summaries],

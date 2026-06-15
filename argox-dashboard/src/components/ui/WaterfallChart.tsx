@@ -42,8 +42,9 @@ export function WaterfallChart({ spans, totalDuration, selectedSpanId, onSelectS
       {/* Waterfall Body */}
       <div className="flex-1 overflow-y-auto min-h-0 bg-bg-base/50">
         {spans.map((span, idx) => {
-          const left = (span.t / totalDuration) * 100;
-          const width = Math.max((span.d / totalDuration) * 100, 0.5);
+          const safeTotal = totalDuration || 1;
+          const left = (span.t / safeTotal) * 100;
+          const width = Math.max((span.d / safeTotal) * 100, 0.5);
           const isSelected = selectedSpanId === span.id;
           
           return (

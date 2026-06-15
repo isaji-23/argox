@@ -64,22 +64,26 @@ class TraceIndex(ABC):
         *,
         skip: int = 0,
         limit: int = 50,
+        trace_id: Optional[str] = None,
         agent_name: Optional[str] = None,
         status: Optional[str] = None,
         decision: Optional[str] = None,
+        sort: Optional[str] = None,
     ) -> tuple[list[dict], int]:
         """Return paginated trace summaries plus the total trace count.
 
         Each summary aggregates the spans sharing a ``trace_id`` (start/end
         time, total cost, span count, root agent). Summaries are sorted by
-        trace start time, newest first.
+        trace start time, newest first, unless ``sort`` is specified.
 
         Args:
             skip: Number of traces to skip.
             limit: Maximum number of traces to return.
+            trace_id: Filter by trace_id prefix.
             agent_name: Filter by exact agent name.
             status: Filter by trace status ('ok' or 'error').
             decision: Filter by policy decision ('allow', 'block', or 'warn').
+            sort: Sorting criteria in 'field:dir' format (e.g. 'cost:desc').
 
         Returns:
             A ``(summaries, total)`` tuple where ``total`` is the number of
