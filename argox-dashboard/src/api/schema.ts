@@ -772,11 +772,8 @@ export interface components {
             duration_seconds?: number | null;
             /** Run Id */
             run_id: string;
-            /**
-             * Success
-             * @default false
-             */
-            success: boolean;
+            /** Success */
+            success?: boolean | null;
             /** Timestamp */
             timestamp?: string | null;
             tokens?: components["schemas"]["RunTokens"];

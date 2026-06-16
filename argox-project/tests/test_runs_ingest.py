@@ -125,6 +125,62 @@ def test_reingest_is_idempotent(client: TestClient) -> None:
     assert rows[0][0] == 1
 
 
+@pytest.mark.parametrize("bad_id", ["a/b", "../escape", "..", "with space", ""])
+def test_malformed_run_id_rejected_synchronously(client: TestClient, bad_id: str) -> None:
+    resp = client.post("/v1/runs", json=_sample_run(bad_id))
+    assert resp.status_code == 422
+    # Nothing written: rejection happened before the 202/background task.
+    assert not list(client.app.state.storage.list("runs/"))
+
+
+def test_negative_tokens_rejected(client: TestClient) -> None:
+    payload = _sample_run("run-neg")
+    payload["tokens"]["input"] = -1
+    resp = client.post("/v1/runs", json=payload)
+    assert resp.status_code == 422
+
+
+def test_missing_success_is_unknown_not_failed(client: TestClient) -> None:
+    payload = _sample_run("run-nosuccess")
+    del payload["success"]
+    resp = client.post("/v1/runs", json=payload)
+    assert resp.status_code == 202
+    assert _fetch_run(client, "run-nosuccess").success is None
+
+
+def test_reingest_does_not_overwrite_immutable_blob(client: TestClient) -> None:
+    first = _sample_run("run-imm")
+    first_body = json.dumps(first).encode("utf-8")
+    client.post("/v1/runs", content=first_body, headers={"content-type": CONTENT_TYPE_JSON})
+
+    divergent = _sample_run("run-imm")
+    divergent["final_output"] = "tampered"
+    divergent["tokens"]["input"] = 9999
+    client.post("/v1/runs", json=divergent)
+
+    record = _fetch_run(client, "run-imm")
+    # Blob keeps the original bytes ...
+    stored = client.app.state.storage.get(record.blob_path)
+    assert stored.data == first_body
+    # ... and the index row stays consistent with it (first-write-wins).
+    assert record.total_input_tokens == 1000
+
+
+def test_batch_dedups_run_id(client: TestClient) -> None:
+    batch = [_sample_run("run-x"), _sample_run("run-x")]
+    resp = client.post("/v1/runs", json=batch)
+    assert resp.status_code == 202
+    index = client.app.state.index
+    rows = index._read("SELECT COUNT(*) FROM runs WHERE run_id = ?", ("run-x",))
+    assert rows[0][0] == 1
+
+
+def test_oversized_batch_rejected(client: TestClient) -> None:
+    batch = [_sample_run(f"run-{i}") for i in range(1001)]
+    resp = client.post("/v1/runs", json=batch)
+    assert resp.status_code == 413
+
+
 def _ingest_span(client: TestClient, trace_id_hex: str) -> None:
     span = Span(
         trace_id=bytes.fromhex(trace_id_hex),

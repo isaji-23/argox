@@ -827,9 +827,15 @@
             "type": "string"
           },
           "success": {
-            "default": false,
-            "title": "Success",
-            "type": "boolean"
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Success"
           },
           "timestamp": {
             "anyOf": [
@@ -869,11 +875,13 @@
         "properties": {
           "input": {
             "default": 0,
+            "minimum": 0.0,
             "title": "Input",
             "type": "integer"
           },
           "output": {
             "default": 0,
+            "minimum": 0.0,
             "title": "Output",
             "type": "integer"
           }

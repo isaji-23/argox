@@ -17,9 +17,18 @@
   byte-for-byte; a batch re-serialises each element to its own blob.
 - New DuckDB `runs` table (`index/duckdb.py`): `run_id` PK, `trace_id`,
   `agent_name`, `agent_version`, `timestamp`, `success`, `total_input_tokens`,
-  `total_output_tokens`, `duration_seconds`, `cost_usd` (nullable), `blob_path`.
-  `trace_id` is indexed (`idx_runs_trace_id`). Upsert on `run_id` keeps
-  re-ingest idempotent.
+  `total_output_tokens`, `duration_seconds`, `cost_usd` (nullable), `blob_path`,
+  `ingested_at`. `trace_id` is indexed (`idx_runs_trace_id`). Blobs are written
+  create-only (`expected_etag="*"`) and the index insert is first-write-wins
+  (`ON CONFLICT DO NOTHING`), so a re-ingest never mutates an existing immutable
+  record.
+- `run_id` is validated at the API boundary (`[A-Za-z0-9._-]{1,200}`, no
+  traversal) since it becomes a blob-path segment; malformed ids are rejected
+  synchronously with `422` instead of failing silently in a background write.
+- Batches are capped (`413` over 1000 records) and de-duplicated by `run_id`;
+  token counts reject negatives; `success` is tri-state (`None` when omitted,
+  not counted as a failed run). `get_run_by_trace_id` orders by the
+  collector-assigned `ingested_at`, not the free-form client `timestamp`.
 - New `RunRecord` dataclass and three `TraceIndex` methods (`insert_run`,
   `get_run`, `get_run_by_trace_id`); the last is the span→run join.
 - Router registered in `app.py`; `openapi.json` and the dashboard TS client

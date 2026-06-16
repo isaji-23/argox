@@ -52,19 +52,9 @@ _INSERT_RUN_SQL = """
     INSERT INTO runs (
         run_id, trace_id, agent_name, agent_version, timestamp,
         success, total_input_tokens, total_output_tokens,
-        duration_seconds, cost_usd, blob_path
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT (run_id) DO UPDATE SET
-        trace_id = COALESCE(excluded.trace_id, runs.trace_id),
-        agent_name = COALESCE(excluded.agent_name, runs.agent_name),
-        agent_version = COALESCE(excluded.agent_version, runs.agent_version),
-        timestamp = COALESCE(excluded.timestamp, runs.timestamp),
-        success = COALESCE(excluded.success, runs.success),
-        total_input_tokens = excluded.total_input_tokens,
-        total_output_tokens = excluded.total_output_tokens,
-        duration_seconds = COALESCE(excluded.duration_seconds, runs.duration_seconds),
-        cost_usd = COALESCE(excluded.cost_usd, runs.cost_usd),
-        blob_path = COALESCE(excluded.blob_path, runs.blob_path)
+        duration_seconds, cost_usd, blob_path, ingested_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT (run_id) DO NOTHING
 """
 
 _RUN_COLUMNS = (
@@ -193,7 +183,8 @@ class DuckDBTraceIndex(TraceIndex):
                     total_output_tokens BIGINT,
                     duration_seconds DOUBLE,
                     cost_usd DOUBLE,
-                    blob_path VARCHAR
+                    blob_path VARCHAR,
+                    ingested_at TIMESTAMP
                 )
             """)
             # trace_id is indexed so the Query API can join from a span back
@@ -480,6 +471,7 @@ class DuckDBTraceIndex(TraceIndex):
             _finite_or_none(record.duration_seconds),
             _finite_or_none(record.cost_usd),
             record.blob_path,
+            datetime.now(timezone.utc).replace(tzinfo=None),
         )
         with self._lock:
             self._conn.execute(_INSERT_RUN_SQL, row)
@@ -491,10 +483,13 @@ class DuckDBTraceIndex(TraceIndex):
         return self._row_to_run(rows[0]) if rows else None
 
     def get_run_by_trace_id(self, trace_id: str) -> Optional[RunRecord]:
-        # Newest first so a re-used trace_id resolves to the latest run.
+        # Order by the collector-assigned ingest time, not the client-supplied
+        # ``timestamp`` (a free-form VARCHAR whose lexicographic order need not
+        # match chronology), so a re-used trace_id resolves to the run ingested
+        # most recently.
         rows = self._read(
             f"SELECT {_RUN_COLUMNS} FROM runs WHERE trace_id = ? "
-            "ORDER BY timestamp DESC NULLS LAST LIMIT 1",
+            "ORDER BY ingested_at DESC NULLS LAST LIMIT 1",
             (trace_id,),
         )
         return self._row_to_run(rows[0]) if rows else None

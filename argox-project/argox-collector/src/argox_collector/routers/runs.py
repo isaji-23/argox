@@ -15,17 +15,18 @@ synchronous and returns ``200 OK`` only once the records are committed.
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timezone
 from typing import Optional, Union
 
 import structlog
 from fastapi import APIRouter, BackgroundTasks, Depends, Request, Response
 from fastapi.concurrency import run_in_threadpool
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from argox_collector.auth import Scope, require_scope
 from argox_collector.index import RunRecord, TraceIndex
-from argox_collector.storage import StorageBackend
+from argox_collector.storage import ConditionNotMetError, StorageBackend
 
 logger = structlog.get_logger(__name__)
 
@@ -33,6 +34,18 @@ router = APIRouter(tags=["runs"])
 
 _DURABLE_HEADER = "x-argox-durable"
 _CONTENT_TYPE_JSON = "application/json"
+
+# Upper bound on records per submission. The global payload-size middleware
+# already caps the request body; this caps the element count so a single
+# request cannot fan out into an unbounded number of blob writes.
+_MAX_BATCH_RECORDS = 1000
+
+# run_id becomes a blob-path segment (runs/{date}/{run_id}.json), so it must be
+# a single safe filename component: no slashes, no traversal, no control
+# characters. Validated at the API boundary so a malformed id is rejected
+# synchronously (before the 202) rather than failing silently in a background
+# blob write.
+_RUN_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,200}$")
 
 
 class RunTokens(BaseModel):
@@ -44,8 +57,8 @@ class RunTokens(BaseModel):
 
     model_config = ConfigDict(extra="allow")
 
-    input: int = 0
-    output: int = 0
+    input: int = Field(default=0, ge=0)
+    output: int = Field(default=0, ge=0)
 
 
 class RunRecordIn(BaseModel):
@@ -68,10 +81,24 @@ class RunRecordIn(BaseModel):
     agent_name: str = ""
     agent_version: str = ""
     timestamp: Optional[str] = None
-    success: bool = False
+    # Optional tri-state: a record that omits success is left unknown (None)
+    # rather than indexed as a failed run, which would skew success metrics.
+    success: Optional[bool] = None
     duration_seconds: Optional[float] = None
     cost_usd: Optional[float] = None
     tokens: RunTokens = Field(default_factory=RunTokens)
+
+    @field_validator("run_id")
+    @classmethod
+    def _validate_run_id(cls, value: str) -> str:
+        if not _RUN_ID_RE.fullmatch(value):
+            raise ValueError(
+                "run_id must be 1-200 chars of [A-Za-z0-9._-] (it is used as a "
+                "blob-path segment)"
+            )
+        if value in {".", ".."}:
+            raise ValueError("run_id must not be a path-traversal segment")
+        return value
 
 
 # A submission is one record or a batch of them.
@@ -110,14 +137,24 @@ def _persist(
     Raises on any failure so the durable path can surface it. The background
     path wraps this in :func:`_persist_safe`, which logs and swallows because
     the client has already been acknowledged.
+
+    The blob is written create-only (``expected_etag="*"``) so an existing run
+    blob is never overwritten — the record is immutable. A re-ingest therefore
+    keeps the original blob; the index insert still runs so a row missing from
+    a partially-failed earlier attempt is recovered (``insert_run`` is itself
+    first-write-wins on ``run_id``).
     """
     for record, blob in items:
-        storage.put(
-            record.blob_path,
-            blob,
-            content_type=_CONTENT_TYPE_JSON,
-            metadata={"run_id": record.run_id},
-        )
+        try:
+            storage.put(
+                record.blob_path,
+                blob,
+                content_type=_CONTENT_TYPE_JSON,
+                metadata={"run_id": record.run_id},
+                expected_etag="*",
+            )
+        except ConditionNotMetError:
+            logger.info("run_blob_exists", run_id=record.run_id)
         index.insert_run(record)
 
 
@@ -143,7 +180,14 @@ def _build_items(
     if isinstance(body, list):
         elements = json.loads(raw_body)
         items: list[tuple[RunRecord, bytes]] = []
+        seen: set[str] = set()
         for payload, element in zip(body, elements):
+            # Duplicate run_ids in one batch share a blob path; keep the first
+            # so the second cannot silently overwrite it (create-only would
+            # reject it anyway, but skipping avoids the wasted write).
+            if payload.run_id in seen:
+                continue
+            seen.add(payload.run_id)
             blob = json.dumps(element, ensure_ascii=False).encode("utf-8")
             items.append((_to_record(payload, _blob_path(payload.run_id, now)), blob))
         return items
@@ -176,6 +220,15 @@ async def ingest_runs(
     a background task (``202``) or, when ``X-Argox-Durable: true`` is set, runs
     it in the threadpool and returns ``200`` only once committed.
     """
+    if isinstance(body, list) and len(body) > _MAX_BATCH_RECORDS:
+        return Response(
+            content=json.dumps(
+                {"error": f"batch exceeds {_MAX_BATCH_RECORDS} records"}
+            ),
+            media_type=_CONTENT_TYPE_JSON,
+            status_code=413,
+        )
+
     raw_body = await request.body()
     now = datetime.now(timezone.utc)
     items = _build_items(body, raw_body, now)

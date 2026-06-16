@@ -137,10 +137,13 @@ class TraceIndex(ABC):
 
     @abstractmethod
     def insert_run(self, record: RunRecord) -> None:
-        """Add (or upsert) a single run summary to the index.
+        """Add a single run summary to the index.
 
-        Idempotent on ``run_id``: re-ingesting the same run overwrites the
-        existing row rather than raising, so retried submissions converge.
+        First-write-wins on ``run_id``: an existing row is left untouched
+        rather than overwritten, mirroring the immutable run blob. A re-ingest
+        is therefore a safe no-op, while a row missing from a partially-failed
+        earlier attempt is still created. The enrichment worker backfills
+        ``cost_usd`` through its own update path, not this method.
         """
 
     @abstractmethod
