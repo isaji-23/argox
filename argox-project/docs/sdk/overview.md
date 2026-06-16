@@ -95,7 +95,11 @@ overhead percentage is `(total_ms - phase_timings["agent_exec"]) / total_ms * 10
 - **One span per run.** Token totals, policy decisions, blocked-tool lists and
   processor events attach to `argox.agent.run` via OTel GenAI semantic
   conventions (`gen_ai.usage.input_tokens`, etc.). Any compatible
-  `SpanExporter` can consume it.
+  `SpanExporter` can consume it. The root span also carries `argox.agent.name`
+  (set early from the run's agent name) and `argox.run.success` (set in
+  `finally` from the run outcome, so a policy block records `false`); the
+  Collector promotes both into queryable columns. The SDK emits them itself —
+  no manual attribute setting in the runner is needed.
 - **Fail-open by default.** Processors registered with `strict=False` log
   errors as span events and pass the value through unchanged. `strict=True`
   aborts the run. `asyncio.CancelledError` always propagates.
