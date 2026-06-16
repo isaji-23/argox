@@ -38,6 +38,31 @@ class SpanRecord:
     events: tuple[Mapping[str, Any], ...] = ()
 
 
+@dataclass(frozen=True)
+class RunRecord:
+    """Relational summary of a single agent run (``POST /v1/runs``).
+
+    This is the flattened, queryable projection of an ``AgentRunMetrics``
+    record. The full immutable payload lives in the blob store at
+    ``blob_path``; only the columns needed to list, filter and join runs are
+    promoted here. ``trace_id`` lets the Query API join from a span back to
+    its originating run, and ``cost_usd`` is left ``None`` at ingest time and
+    backfilled later by the enrichment worker (#92).
+    """
+
+    run_id: str
+    trace_id: Optional[str] = None
+    agent_name: Optional[str] = None
+    agent_version: Optional[str] = None
+    timestamp: Optional[str] = None
+    success: Optional[bool] = None
+    total_input_tokens: int = 0
+    total_output_tokens: int = 0
+    duration_seconds: Optional[float] = None
+    cost_usd: Optional[float] = None
+    blob_path: Optional[str] = None
+
+
 class TraceIndexError(RuntimeError):
     """Base class for index backend failures."""
 
@@ -108,6 +133,30 @@ class TraceIndex(ABC):
         Only root spans with a reported ``run_success`` enter the rate;
         spans that never reported an outcome are excluded rather than
         counted as failures.
+        """
+
+    @abstractmethod
+    def insert_run(self, record: RunRecord) -> None:
+        """Add a single run summary to the index.
+
+        First-write-wins on ``run_id``: an existing row is left untouched
+        rather than overwritten, mirroring the immutable run blob. A re-ingest
+        is therefore a safe no-op, while a row missing from a partially-failed
+        earlier attempt is still created. The enrichment worker backfills
+        ``cost_usd`` through its own update path, not this method.
+        """
+
+    @abstractmethod
+    def get_run(self, run_id: str) -> Optional[RunRecord]:
+        """Return the run summary for ``run_id``, or ``None`` if unknown."""
+
+    @abstractmethod
+    def get_run_by_trace_id(self, trace_id: str) -> Optional[RunRecord]:
+        """Return the run whose ``trace_id`` matches, or ``None`` if unknown.
+
+        This is the span-to-run join: given a span's ``trace_id`` the Query
+        API recovers the full run record (prompt, output, per-call tokens)
+        from the blob referenced by :attr:`RunRecord.blob_path`.
         """
 
     @abstractmethod

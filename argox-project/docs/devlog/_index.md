@@ -8,6 +8,7 @@ for the decisions behind these changes and
 
 | Date | Ticket | Title | PR | Status |
 |---|---|---|---|---|
+| 2026-06-16 | COL-11 | /v1/runs ingest endpoint and run-record storage | #141 | in-review |
 | 2026-06-14 | COL-10 | OpenAPI contract and typed TS client pipeline | #136 | in-review |
 | 2026-06-13 | COL-09 | Auth middleware — API keys + OIDC | #135 | in-review |
 | 2026-06-13 | COL-08 | WORM audit log with hash chain | #134 | in-review |

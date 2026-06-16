@@ -364,6 +364,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Agent run-summary ingest
+         * @description Accept one or a batch of run records and persist them.
+         *
+         *     Validates the payload synchronously, then either delegates persistence to
+         *     a background task (``202``) or, when ``X-Argox-Durable: true`` is set, runs
+         *     it in the threadpool and returns ``200`` only once committed.
+         */
+        post: operations["ingest_runs"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/traces": {
         parameters: {
             query?: never;
@@ -717,6 +741,67 @@ export interface components {
             operator: "eq" | "neq" | "gt" | "gte" | "lt" | "lte" | "contains" | "in";
             /** Threshold */
             threshold: unknown;
+        };
+        /**
+         * RunRecordIn
+         * @description A single ``AgentRunMetrics``-shaped run record.
+         *
+         *     Mirrors :meth:`argox.core.state.AgentRunMetrics.to_dict`. Only ``run_id``
+         *     is required; everything else defaults so partial records still index. The
+         *     Collector does not scrub content (PII redaction is the SDK's job) and
+         *     preserves unknown fields on the immutable blob via ``extra="allow"``.
+         *
+         *     ``trace_id`` is optional and top-level: the SDK exporter (EXP-09) sets it
+         *     so the Query API can join a span back to its run. ``cost_usd`` is left
+         *     unset at ingest and backfilled by the enrichment worker (#92).
+         */
+        RunRecordIn: {
+            /**
+             * Agent Name
+             * @default
+             */
+            agent_name: string;
+            /**
+             * Agent Version
+             * @default
+             */
+            agent_version: string;
+            /** Cost Usd */
+            cost_usd?: number | null;
+            /** Duration Seconds */
+            duration_seconds?: number | null;
+            /** Run Id */
+            run_id: string;
+            /** Success */
+            success?: boolean | null;
+            /** Timestamp */
+            timestamp?: string | null;
+            tokens?: components["schemas"]["RunTokens"];
+            /** Trace Id */
+            trace_id?: string | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * RunTokens
+         * @description Token totals carried by a run record.
+         *
+         *     Extra keys (e.g. ``total`` or ``by_api_call``) are preserved on the blob
+         *     but ignored by the index, which only promotes the input/output totals.
+         */
+        RunTokens: {
+            /**
+             * Input
+             * @default 0
+             */
+            input: number;
+            /**
+             * Output
+             * @default 0
+             */
+            output: number;
+        } & {
+            [key: string]: unknown;
         };
         /**
          * SpanDetail
@@ -1443,6 +1528,51 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["ReadinessResponse"];
                 };
+            };
+        };
+    };
+    ingest_runs: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RunRecordIn"] | components["schemas"]["RunRecordIn"][];
+            };
+        };
+        responses: {
+            /** @description Run record(s) persisted synchronously (sent with X-Argox-Durable: true). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Run record(s) accepted for asynchronous persistence. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Durable persistence failed; the batch was not committed. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

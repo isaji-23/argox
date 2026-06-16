@@ -158,7 +158,13 @@ by versioned policy CRUD under `/api/v1/policies`. The Collector also exposes
 a read-only Query API for the dashboard (COL-06): paginated trace summaries
 (`GET /api/v1/traces`), per-trace span waterfalls (`GET /api/v1/traces/{id}`)
 and trailing-window aggregations (`GET /api/v1/metrics/cost|latency|success`)
-served from the DuckDB index. Ingest-time enrichment (COL-07) normalises
+served from the DuckDB index. Alongside the lightweight span path, a parallel
+run-summary ingest path (COL-11) accepts full run content the spans omit:
+`POST /v1/runs` takes one or a batch of `AgentRunMetrics`-shaped records, stores
+each as an immutable blob (`runs/{YYYY-MM-DD}/{run_id}.json`) and projects a
+queryable summary into a DuckDB `runs` table whose indexed `trace_id` joins a
+span back to its run (see ADR-0007; the SDK exporter that posts these is the
+EXP-09 follow-up). Ingest-time enrichment (COL-07) normalises
 variant GenAI attribute shapes (legacy `gen_ai.usage.prompt_tokens`,
 OpenInference `llm.*`) onto the canonical keys, computes per-span `run_cost`
 from a YAML pricing table (unknown models log a warning and skip), and tags
