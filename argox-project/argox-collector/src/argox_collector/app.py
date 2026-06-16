@@ -20,7 +20,15 @@ from argox_collector.auth import (
 from argox_collector.index import TraceIndex, build_index
 from argox_collector.logging import configure_logging
 from argox_collector.middleware import PayloadSizeLimitMiddleware
-from argox_collector.routers import audit, health, keys, policies, query, traces
+from argox_collector.routers import (
+    audit,
+    health,
+    keys,
+    policies,
+    query,
+    runs,
+    traces,
+)
 from argox_collector.settings import CollectorSettings
 from argox_collector.storage import StorageBackend, build_storage
 
@@ -139,6 +147,7 @@ def create_app(
         )
     app.include_router(health.router)
     app.include_router(traces.router)
+    app.include_router(runs.router)
     app.include_router(policies.router)
     app.include_router(query.router)
     app.include_router(audit.router)

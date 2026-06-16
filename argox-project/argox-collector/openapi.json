@@ -786,6 +786,101 @@
         "title": "RuleCondition",
         "type": "object"
       },
+      "RunRecordIn": {
+        "additionalProperties": true,
+        "description": "A single ``AgentRunMetrics``-shaped run record.\n\nMirrors :meth:`argox.core.state.AgentRunMetrics.to_dict`. Only ``run_id``\nis required; everything else defaults so partial records still index. The\nCollector does not scrub content (PII redaction is the SDK's job) and\npreserves unknown fields on the immutable blob via ``extra=\"allow\"``.\n\n``trace_id`` is optional and top-level: the SDK exporter (EXP-09) sets it\nso the Query API can join a span back to its run. ``cost_usd`` is left\nunset at ingest and backfilled by the enrichment worker (#92).",
+        "properties": {
+          "agent_name": {
+            "default": "",
+            "title": "Agent Name",
+            "type": "string"
+          },
+          "agent_version": {
+            "default": "",
+            "title": "Agent Version",
+            "type": "string"
+          },
+          "cost_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost Usd"
+          },
+          "duration_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration Seconds"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "success": {
+            "default": false,
+            "title": "Success",
+            "type": "boolean"
+          },
+          "timestamp": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timestamp"
+          },
+          "tokens": {
+            "$ref": "#/components/schemas/RunTokens"
+          },
+          "trace_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trace Id"
+          }
+        },
+        "required": [
+          "run_id"
+        ],
+        "title": "RunRecordIn",
+        "type": "object"
+      },
+      "RunTokens": {
+        "additionalProperties": true,
+        "description": "Token totals carried by a run record.\n\nExtra keys (e.g. ``total`` or ``by_api_call``) are preserved on the blob\nbut ignored by the index, which only promotes the input/output totals.",
+        "properties": {
+          "input": {
+            "default": 0,
+            "title": "Input",
+            "type": "integer"
+          },
+          "output": {
+            "default": 0,
+            "title": "Output",
+            "type": "integer"
+          }
+        },
+        "title": "RunTokens",
+        "type": "object"
+      },
       "SpanDetail": {
         "description": "One span inside a trace waterfall.",
         "properties": {
@@ -1968,6 +2063,58 @@
         "summary": "Readiness probe",
         "tags": [
           "health"
+        ]
+      }
+    },
+    "/v1/runs": {
+      "post": {
+        "description": "Accept one or a batch of run records and persist them.\n\nValidates the payload synchronously, then either delegates persistence to\na background task (``202``) or, when ``X-Argox-Durable: true`` is set, runs\nit in the threadpool and returns ``200`` only once committed.",
+        "operationId": "ingest_runs",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/RunRecordIn"
+                  },
+                  {
+                    "items": {
+                      "$ref": "#/components/schemas/RunRecordIn"
+                    },
+                    "type": "array"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Run record(s) persisted synchronously (sent with X-Argox-Durable: true)."
+          },
+          "202": {
+            "description": "Run record(s) accepted for asynchronous persistence."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "description": "Durable persistence failed; the batch was not committed."
+          }
+        },
+        "summary": "Agent run-summary ingest",
+        "tags": [
+          "runs"
         ]
       }
     },

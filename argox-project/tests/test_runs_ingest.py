@@ -1,0 +1,163 @@
+"""Tests for the COL-11 run-summary ingest endpoint (``POST /v1/runs``)."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+from argox.core.state import AgentRunMetrics, ApiCallRecord
+from argox_collector.app import create_app
+from argox_collector.ingest.otlp import CONTENT_TYPE_JSON
+from argox_collector.settings import CollectorSettings
+from fastapi.testclient import TestClient
+from google.protobuf import json_format
+from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import (
+    ExportTraceServiceRequest,
+)
+from opentelemetry.proto.common.v1.common_pb2 import AnyValue, KeyValue
+from opentelemetry.proto.trace.v1.trace_pb2 import ResourceSpans, ScopeSpans, Span
+
+TRACE_ID_HEX = "0102030405060708090a0b0c0d0e0f10"
+
+
+@pytest.fixture
+def settings(tmp_path: Path) -> CollectorSettings:
+    return CollectorSettings(
+        storage_local_root=tmp_path / "blobs",
+        index_duckdb_path=tmp_path / "index.duckdb",
+    )
+
+
+@pytest.fixture
+def client(settings: CollectorSettings) -> TestClient:
+    return TestClient(create_app(settings))
+
+
+def _sample_run(run_id: str = "run-1", trace_id: str | None = None) -> dict:
+    """Build an ``AgentRunMetrics.to_dict()`` payload, optionally with trace_id."""
+    metrics = AgentRunMetrics(
+        agent_name="demo-agent",
+        run_id=run_id,
+        agent_version="1.2.3",
+        prompt="hello",
+        final_output="world",
+        success=True,
+        api_calls=[
+            ApiCallRecord(call_number=1, input_tokens=1000, output_tokens=500, total_tokens=1500)
+        ],
+    )
+    metrics.end_time = metrics.start_time + 2.5
+    payload = metrics.to_dict()
+    if trace_id is not None:
+        payload["trace_id"] = trace_id
+    return payload
+
+
+def _fetch_run(client: TestClient, run_id: str):
+    index = client.app.state.index
+    return index.get_run(run_id)
+
+
+def test_single_run_returns_202_and_indexes(client: TestClient) -> None:
+    payload = _sample_run()
+    resp = client.post("/v1/runs", json=payload)
+    assert resp.status_code == 202
+
+    record = _fetch_run(client, "run-1")
+    assert record is not None
+    assert record.agent_name == "demo-agent"
+    assert record.agent_version == "1.2.3"
+    assert record.success is True
+    assert record.total_input_tokens == 1000
+    assert record.total_output_tokens == 500
+    assert record.duration_seconds == pytest.approx(2.5)
+    assert record.cost_usd is None  # filled later by the enrichment worker
+    assert record.blob_path.startswith("runs/")
+    assert record.blob_path.endswith("/run-1.json")
+
+
+def test_blob_matches_payload_byte_for_byte(client: TestClient) -> None:
+    payload = _sample_run()
+    body = json.dumps(payload).encode("utf-8")
+    resp = client.post(
+        "/v1/runs", content=body, headers={"content-type": CONTENT_TYPE_JSON}
+    )
+    assert resp.status_code == 202
+
+    record = _fetch_run(client, "run-1")
+    stored = client.app.state.storage.get(record.blob_path)
+    assert stored.data == body
+
+
+def test_batch_indexes_all_records(client: TestClient) -> None:
+    batch = [_sample_run("run-a"), _sample_run("run-b")]
+    resp = client.post("/v1/runs", json=batch)
+    assert resp.status_code == 202
+
+    assert _fetch_run(client, "run-a") is not None
+    assert _fetch_run(client, "run-b") is not None
+    # Each record gets its own immutable blob.
+    rec_b = _fetch_run(client, "run-b")
+    stored = client.app.state.storage.get(rec_b.blob_path)
+    assert json.loads(stored.data)["run_id"] == "run-b"
+
+
+def test_durable_header_commits_synchronously(client: TestClient) -> None:
+    payload = _sample_run("run-durable")
+    resp = client.post(
+        "/v1/runs", json=payload, headers={"X-Argox-Durable": "true"}
+    )
+    assert resp.status_code == 200
+    assert _fetch_run(client, "run-durable") is not None
+
+
+def test_missing_run_id_is_rejected(client: TestClient) -> None:
+    resp = client.post("/v1/runs", json={"agent_name": "no-id"})
+    assert resp.status_code == 422
+
+
+def test_reingest_is_idempotent(client: TestClient) -> None:
+    client.post("/v1/runs", json=_sample_run("run-dup"))
+    client.post("/v1/runs", json=_sample_run("run-dup"))
+    index = client.app.state.index
+    rows = index._read("SELECT COUNT(*) FROM runs WHERE run_id = ?", ("run-dup",))
+    assert rows[0][0] == 1
+
+
+def _ingest_span(client: TestClient, trace_id_hex: str) -> None:
+    span = Span(
+        trace_id=bytes.fromhex(trace_id_hex),
+        span_id=bytes.fromhex("1112131415161718"),
+        name="argox.agent.run",
+        start_time_unix_nano=1_000_000_000,
+        end_time_unix_nano=1_500_000_000,
+        attributes=[
+            KeyValue(key="argox.agent.name", value=AnyValue(string_value="demo-agent"))
+        ],
+    )
+    request = ExportTraceServiceRequest(
+        resource_spans=[ResourceSpans(scope_spans=[ScopeSpans(spans=[span])])]
+    )
+    body = json_format.MessageToJson(request).encode("utf-8")
+    resp = client.post(
+        "/v1/traces", content=body, headers={"content-type": CONTENT_TYPE_JSON}
+    )
+    assert resp.status_code == 202
+
+
+def test_trace_id_join_span_to_run(client: TestClient) -> None:
+    """A span and a run sharing a trace_id can be joined index-side."""
+    _ingest_span(client, TRACE_ID_HEX)
+    resp = client.post("/v1/runs", json=_sample_run("run-join", trace_id=TRACE_ID_HEX))
+    assert resp.status_code == 202
+
+    index = client.app.state.index
+    # The span landed under this trace_id ...
+    spans, _ = index.get_trace(TRACE_ID_HEX)
+    assert spans and spans[0].trace_id == TRACE_ID_HEX
+    # ... and the join recovers the matching run record.
+    run = index.get_run_by_trace_id(TRACE_ID_HEX)
+    assert run is not None
+    assert run.run_id == "run-join"
+    assert run.blob_path is not None

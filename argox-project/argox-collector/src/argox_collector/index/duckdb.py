@@ -12,7 +12,12 @@ from typing import Any, Optional
 import duckdb
 import structlog
 
-from argox_collector.index.base import SpanRecord, TraceIndex, TraceIndexError
+from argox_collector.index.base import (
+    RunRecord,
+    SpanRecord,
+    TraceIndex,
+    TraceIndexError,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -41,6 +46,32 @@ _INSERT_SQL = """
         run_success = COALESCE(excluded.run_success, spans.run_success),
         attributes = COALESCE(excluded.attributes, spans.attributes)
 """
+
+
+_INSERT_RUN_SQL = """
+    INSERT INTO runs (
+        run_id, trace_id, agent_name, agent_version, timestamp,
+        success, total_input_tokens, total_output_tokens,
+        duration_seconds, cost_usd, blob_path
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT (run_id) DO UPDATE SET
+        trace_id = COALESCE(excluded.trace_id, runs.trace_id),
+        agent_name = COALESCE(excluded.agent_name, runs.agent_name),
+        agent_version = COALESCE(excluded.agent_version, runs.agent_version),
+        timestamp = COALESCE(excluded.timestamp, runs.timestamp),
+        success = COALESCE(excluded.success, runs.success),
+        total_input_tokens = excluded.total_input_tokens,
+        total_output_tokens = excluded.total_output_tokens,
+        duration_seconds = COALESCE(excluded.duration_seconds, runs.duration_seconds),
+        cost_usd = COALESCE(excluded.cost_usd, runs.cost_usd),
+        blob_path = COALESCE(excluded.blob_path, runs.blob_path)
+"""
+
+_RUN_COLUMNS = (
+    "run_id, trace_id, agent_name, agent_version, timestamp, "
+    "success, total_input_tokens, total_output_tokens, "
+    "duration_seconds, cost_usd, blob_path"
+)
 
 
 def _to_naive_utc(dt: Optional[datetime]) -> Optional[datetime]:
@@ -146,6 +177,28 @@ class DuckDBTraceIndex(TraceIndex):
             # Create indexes for common query patterns
             self._conn.execute("CREATE INDEX IF NOT EXISTS idx_spans_start_time ON spans (start_time)")
             self._conn.execute("CREATE INDEX IF NOT EXISTS idx_spans_agent_name ON spans (agent_name)")
+
+            # Run summaries (COL-11). The full record lives in the blob store;
+            # this table holds the flat, queryable projection. cost_usd is
+            # nullable and backfilled by the enrichment worker (#92).
+            self._conn.execute("""
+                CREATE TABLE IF NOT EXISTS runs (
+                    run_id VARCHAR PRIMARY KEY,
+                    trace_id VARCHAR,
+                    agent_name VARCHAR,
+                    agent_version VARCHAR,
+                    timestamp VARCHAR,
+                    success BOOLEAN,
+                    total_input_tokens BIGINT,
+                    total_output_tokens BIGINT,
+                    duration_seconds DOUBLE,
+                    cost_usd DOUBLE,
+                    blob_path VARCHAR
+                )
+            """)
+            # trace_id is indexed so the Query API can join from a span back
+            # to its run record (COL-13).
+            self._conn.execute("CREATE INDEX IF NOT EXISTS idx_runs_trace_id ON runs (trace_id)")
 
     def insert_span(self, record: SpanRecord) -> None:
         self.insert_spans([record])
@@ -413,6 +466,54 @@ class DuckDBTraceIndex(TraceIndex):
             "successful_runs": successful,
             "success_rate": (successful / total) if total else None,
         }
+
+    def insert_run(self, record: RunRecord) -> None:
+        row = (
+            record.run_id,
+            record.trace_id,
+            record.agent_name,
+            record.agent_version,
+            record.timestamp,
+            record.success,
+            int(record.total_input_tokens or 0),
+            int(record.total_output_tokens or 0),
+            _finite_or_none(record.duration_seconds),
+            _finite_or_none(record.cost_usd),
+            record.blob_path,
+        )
+        with self._lock:
+            self._conn.execute(_INSERT_RUN_SQL, row)
+
+    def get_run(self, run_id: str) -> Optional[RunRecord]:
+        rows = self._read(
+            f"SELECT {_RUN_COLUMNS} FROM runs WHERE run_id = ?", (run_id,)
+        )
+        return self._row_to_run(rows[0]) if rows else None
+
+    def get_run_by_trace_id(self, trace_id: str) -> Optional[RunRecord]:
+        # Newest first so a re-used trace_id resolves to the latest run.
+        rows = self._read(
+            f"SELECT {_RUN_COLUMNS} FROM runs WHERE trace_id = ? "
+            "ORDER BY timestamp DESC NULLS LAST LIMIT 1",
+            (trace_id,),
+        )
+        return self._row_to_run(rows[0]) if rows else None
+
+    @staticmethod
+    def _row_to_run(row: tuple) -> RunRecord:
+        return RunRecord(
+            run_id=row[0],
+            trace_id=row[1],
+            agent_name=row[2],
+            agent_version=row[3],
+            timestamp=row[4],
+            success=row[5],
+            total_input_tokens=row[6] or 0,
+            total_output_tokens=row[7] or 0,
+            duration_seconds=row[8],
+            cost_usd=row[9],
+            blob_path=row[10],
+        )
 
     def health_check(self) -> None:
         try:
