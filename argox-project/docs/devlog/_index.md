@@ -14,6 +14,7 @@ for the decisions behind these changes and
 | 2026-06-21 | PLUGIN-06 | Auto-emit a child span per tool call | #152 | in-review |
 | 2026-06-21 | COL-17 | Backfill runs.cost_usd from model and token totals | #151 | in-review |
 | 2026-06-20 | PLUGIN-05 | Set gen_ai.request.model from Agent.model | #150 | in-review |
+| 2026-06-18 | PLUGIN-04 | Implement argox-plugin-azure-foundry | #147 | in-review |
 | 2026-06-16 | CORE-08 | Emit run.success and agent.name on the agent.run root span | #146 | in-review |
 | 2026-06-16 | COL-11 | /v1/runs ingest endpoint and run-record storage | #141 | in-review |
 | 2026-06-14 | COL-10 | OpenAPI contract and typed TS client pipeline | #136 | in-review |

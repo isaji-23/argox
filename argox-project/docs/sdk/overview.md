@@ -172,6 +172,7 @@ live in the integration packages (e.g. a future `argox-exporter-dashboard`).
 **Available:** `argox-core` (Manager, decorator, interfaces, state, OTel init,
 semconv, policy parser + local cache, `ConsoleSpanLogger`, `JsonlSpanExporter`,
 `OTLPSpanExporter`), `argox-plugin-openai` (real plugin),
+`argox-plugin-azure-foundry` (integration with Azure AI Foundry Agent Service),
 `argox-plugin-debug` (stub), `argox-exporter-azure` (`AzureBlobSpanExporter`
 — fully implemented), end-to-end Azure OpenAI demo.
 
