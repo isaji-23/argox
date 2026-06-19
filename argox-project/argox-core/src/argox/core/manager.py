@@ -24,6 +24,7 @@ from argox.interfaces.plugin import ArgoxPlugin, ToolArgsRunner
 from argox.interfaces.policy import PolicyClient
 from argox.interfaces.processor import ArgoxProcessor
 from argox.semconv.attributes import (
+    ARGOX_AGENT_NAME,
     ARGOX_POLICY_DECISION,
     ARGOX_POLICY_RULE_ID,
     ARGOX_PROCESSOR_APPLIED,
@@ -32,6 +33,7 @@ from argox.semconv.attributes import (
     ARGOX_PROCESSOR_STRICT,
     ARGOX_PROCESSOR_TOOL_NAME,
     ARGOX_RUN_BLOCKED_TOOLS,
+    ARGOX_RUN_SUCCESS,
     EVENT_PROCESSOR_APPLIED,
     EVENT_PROCESSOR_ERROR,
     SPAN_AGENT_RUN,
@@ -168,6 +170,9 @@ class ArgoxManager:
         tracer = trace.get_tracer("argox")
 
         with tracer.start_as_current_span(SPAN_AGENT_RUN) as span:
+            # Promoted by the Collector into the queryable agent name; set early so
+            # it is present even if the run raises before completion.
+            span.set_attribute(ARGOX_AGENT_NAME, metrics.agent_name)
             try:
                 # 1. Process input
                 with self._phase(metrics, "processors_input"):
@@ -260,6 +265,10 @@ class ArgoxManager:
                 return output
 
             finally:
+                # Promoted by the Collector into ``spans.run_success`` for the
+                # success-rate card. ``metrics.success`` stays False on any error
+                # path, including a policy block, so a blocked run records False.
+                span.set_attribute(ARGOX_RUN_SUCCESS, metrics.success)
                 if applied_processors:
                     span.set_attribute(
                         ARGOX_PROCESSOR_APPLIED,
