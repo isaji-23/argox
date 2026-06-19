@@ -148,13 +148,11 @@ class TestRegistration:
         mgr.register_processor(proc)
         assert any(p is proc for p, _ in mgr._processors)
 
-    def test_unknown_plugin_raises(self):
+    @pytest.mark.asyncio
+    async def test_unknown_plugin_raises(self):
         mgr = ArgoxManager()
         with pytest.raises(KeyError):
-            import asyncio
-            asyncio.get_event_loop().run_until_complete(
-                mgr.run(_FakeAgent(), "prompt", "missing", _fake_runner)
-            )
+            await mgr.run(_FakeAgent(), "prompt", "missing", _fake_runner)
 
 
 # ---------------------------------------------------------------------------

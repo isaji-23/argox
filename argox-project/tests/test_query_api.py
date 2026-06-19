@@ -371,3 +371,250 @@ def test_metrics_validate_window_bounds(client: TestClient) -> None:
         url = f"/api/v1/metrics/{path}"
         assert client.get(url, params={"window_hours": 0}).status_code == 422
         assert client.get(url, params={"window_hours": 721}).status_code == 422
+
+
+def _search_sort_spans() -> list[SpanRecord]:
+    """Diverse trace data specifically for testing prefix filtering, sorting and wildcard escaping."""
+    return [
+        # t1: newest trace, root + child. Cost only on the root span.
+        SpanRecord(
+            trace_id="t1-abc",
+            span_id="s1",
+            name="root-span-A",
+            start_time=NOW - timedelta(minutes=5),
+            end_time=NOW - timedelta(minutes=4),
+            duration_ms=60_000.0,
+            agent_name="agent-alpha",
+            agent_version="1.0",
+            run_cost=0.05,
+            run_success=True,
+            attributes={"model": "gpt-4o"},
+            policy_decision="allow",
+        ),
+        SpanRecord(
+            trace_id="t1-abc",
+            span_id="s2",
+            parent_span_id="s1",
+            name="llm-call-A",
+            start_time=NOW - timedelta(minutes=4, seconds=50),
+            end_time=NOW - timedelta(minutes=4, seconds=10),
+            duration_ms=40_000.0,
+            agent_name="agent-alpha",
+            agent_version="1.0",
+            run_cost=0.02,
+            policy_decision="allow",
+        ),
+        # t2: older trace, failed run.
+        SpanRecord(
+            trace_id="t2-xyz",
+            span_id="s3",
+            name="root-span-B",
+            start_time=NOW - timedelta(minutes=30),
+            end_time=NOW - timedelta(minutes=29),
+            duration_ms=30_000.0,
+            agent_name="agent-beta",
+            agent_version="2.0",
+            run_cost=0.10,
+            run_success=False,
+            policy_decision="block",
+        ),
+        # t3: trace with a specific pattern in ID, moderate duration/cost
+        SpanRecord(
+            trace_id="t3_pattern_1",
+            span_id="s4",
+            name="root-span-C",
+            start_time=NOW - timedelta(minutes=15),
+            end_time=NOW - timedelta(minutes=10),
+            duration_ms=50_000.0,
+            agent_name="agent-alpha",
+            agent_version="1.1",
+            run_cost=0.08,
+            run_success=True,
+            policy_decision="warn",
+        ),
+        # t4: another trace with pattern, longer duration, lower cost
+        SpanRecord(
+            trace_id="t4_pattern_2",
+            span_id="s5",
+            name="root-span-D",
+            start_time=NOW - timedelta(minutes=20),
+            end_time=NOW - timedelta(minutes=12),
+            duration_ms=80_000.0,
+            agent_name="agent-beta",
+            agent_version="2.1",
+            run_cost=0.03,
+            run_success=True,
+            policy_decision="allow",
+        ),
+        # t5: trace to test escaping of '_' and '%' in trace_id
+        SpanRecord(
+            trace_id="t5-with%wild_card",
+            span_id="s6",
+            name="root-span-E",
+            start_time=NOW - timedelta(minutes=10),
+            end_time=NOW - timedelta(minutes=8),
+            duration_ms=20_000.0,
+            agent_name="agent-gamma",
+            agent_version="3.0",
+            run_cost=0.01,
+            run_success=True,
+            policy_decision="allow",
+        ),
+        # t6: trace for pagination and further sorting tests (lowest cost, highest span count)
+        SpanRecord(
+            trace_id="t6-last",
+            span_id="s7",
+            name="root-span-F",
+            start_time=NOW - timedelta(minutes=2),
+            end_time=NOW - timedelta(minutes=1),
+            duration_ms=10_000.0,
+            agent_name="agent-delta",
+            agent_version="4.0",
+            run_cost=0.005,
+            run_success=True,
+            policy_decision="allow",
+        ),
+        SpanRecord(
+            trace_id="t6-last",
+            span_id="s8",
+            parent_span_id="s7",
+            name="child-F1",
+            start_time=NOW - timedelta(minutes=1, seconds=40),
+            end_time=NOW - timedelta(minutes=1, seconds=20),
+            duration_ms=20_000.0,
+            agent_name="agent-delta",
+            agent_version="4.0",
+            run_cost=0.001,
+            policy_decision="allow",
+        ),
+        SpanRecord(
+            trace_id="t6-last",
+            span_id="s9",
+            parent_span_id="s7",
+            name="child-F2",
+            start_time=NOW - timedelta(minutes=1, seconds=30),
+            end_time=NOW - timedelta(minutes=1, seconds=10),
+            duration_ms=20_000.0,
+            agent_name="agent-delta",
+            agent_version="4.0",
+            run_cost=0.001,
+            policy_decision="allow",
+        ),
+    ]
+
+
+@pytest.fixture
+def search_sort_index(tmp_path: Path) -> DuckDBTraceIndex:
+    idx = DuckDBTraceIndex(tmp_path / "search_sort.duckdb")
+    idx.insert_spans(_search_sort_spans())
+    return idx
+
+
+@pytest.fixture
+def search_sort_client(search_sort_index: DuckDBTraceIndex, tmp_path: Path) -> TestClient:
+    settings = CollectorSettings(
+        storage_local_root=tmp_path / "blobs_search_sort",
+        index_duckdb_path=tmp_path / "unused_search_sort.duckdb",
+    )
+    return TestClient(create_app(settings, index=search_sort_index))
+
+
+def test_index_list_traces_filters_by_trace_id_prefix(search_sort_index: DuckDBTraceIndex) -> None:
+    summaries, total = search_sort_index.list_traces(trace_id="t1-ab")
+    assert total == 1
+    assert summaries[0]["trace_id"] == "t1-abc"
+
+    summaries, total = search_sort_index.list_traces(trace_id="t")
+    assert total == 6
+    assert {s["trace_id"] for s in summaries} == {"t1-abc", "t2-xyz", "t3_pattern_1", "t4_pattern_2", "t5-with%wild_card", "t6-last"}
+
+    # Test with special LIKE characters in the search string (should be escaped)
+    summaries, total = search_sort_index.list_traces(trace_id="t5-with%wild_card")
+    assert total == 1
+    assert summaries[0]["trace_id"] == "t5-with%wild_card"
+
+    summaries, total = search_sort_index.list_traces(trace_id="t5-with_wild") # Should not match literal '%' in trace_id
+    assert total == 0
+
+    summaries, total = search_sort_index.list_traces(trace_id="t3_patter")
+    assert total == 1
+    assert summaries[0]["trace_id"] == "t3_pattern_1"
+
+
+@pytest.mark.parametrize(
+    "sort_key, sort_dir, expected_order",
+    [
+        ("start_time", "desc", ["t6-last", "t1-abc", "t5-with%wild_card", "t3_pattern_1", "t4_pattern_2", "t2-xyz"]),
+        ("start_time", "asc", ["t2-xyz", "t4_pattern_2", "t3_pattern_1", "t5-with%wild_card", "t1-abc", "t6-last"]),
+        ("duration", "desc", ["t1-abc", "t4_pattern_2", "t3_pattern_1", "t6-last", "t2-xyz", "t5-with%wild_card"]), # t1-abc is (60k+40k=100k)
+        ("duration", "asc", ["t5-with%wild_card", "t2-xyz", "t3_pattern_1", "t6-last", "t4_pattern_2", "t1-abc"]), # t6-last is (10k+20k+20k=50k)
+        ("cost", "desc", ["t2-xyz", "t3_pattern_1", "t1-abc", "t4_pattern_2", "t5-with%wild_card", "t6-last"]), # t1-abc is (0.05+0.02=0.07)
+        ("cost", "asc", ["t6-last", "t5-with%wild_card", "t4_pattern_2", "t1-abc", "t3_pattern_1", "t2-xyz"]), # t6-last is (0.005+0.001+0.001=0.007)
+        ("spans", "desc", ["t6-last", "t1-abc", "t2-xyz", "t3_pattern_1", "t4_pattern_2", "t5-with%wild_card"]), # t6-last is 3, t1-abc is 2, others are 1
+        ("spans", "asc", ["t2-xyz", "t3_pattern_1", "t4_pattern_2", "t5-with%wild_card", "t1-abc", "t6-last"]),
+    ],
+)
+def test_index_list_traces_sorts_by_column_and_direction(
+    search_sort_index: DuckDBTraceIndex, sort_key: str, sort_dir: str, expected_order: list[str]
+) -> None:
+    summaries, total = search_sort_index.list_traces(sort=f"{sort_key}:{sort_dir}")
+    assert total == 6
+    assert [s["trace_id"] for s in summaries] == expected_order
+
+
+def test_list_traces_endpoint_filters_by_trace_id_prefix(search_sort_client: TestClient) -> None:
+    res = search_sort_client.get("/api/v1/traces", params={"trace_id": "t1-ab"})
+    assert res.status_code == 200
+    assert res.json()["total"] == 1
+    assert res.json()["items"][0]["trace_id"] == "t1-abc"
+
+    res = search_sort_client.get("/api/v1/traces", params={"trace_id": "t"})
+    assert res.status_code == 200
+    assert res.json()["total"] == 6
+    assert {item["trace_id"] for item in res.json()["items"]} == {"t1-abc", "t2-xyz", "t3_pattern_1", "t4_pattern_2", "t5-with%wild_card", "t6-last"}
+
+    # Test with special LIKE characters in the search string (should be escaped)
+    res = search_sort_client.get("/api/v1/traces", params={"trace_id": "t5-with%wild_card"})
+    assert res.status_code == 200
+    assert res.json()["total"] == 1
+    assert res.json()["items"][0]["trace_id"] == "t5-with%wild_card"
+
+    res = search_sort_client.get("/api/v1/traces", params={"trace_id": "t5-with_wild"})
+    assert res.status_code == 200
+    assert res.json()["total"] == 0
+
+    res = search_sort_client.get("/api/v1/traces", params={"trace_id": "t3_patter"})
+    assert res.status_code == 200
+    assert res.json()["total"] == 1
+    assert res.json()["items"][0]["trace_id"] == "t3_pattern_1"
+
+
+@pytest.mark.parametrize(
+    "sort_key, sort_dir, expected_order",
+    [
+        ("start_time", "desc", ["t6-last", "t1-abc", "t5-with%wild_card", "t3_pattern_1", "t4_pattern_2", "t2-xyz"]),
+        ("start_time", "asc", ["t2-xyz", "t4_pattern_2", "t3_pattern_1", "t5-with%wild_card", "t1-abc", "t6-last"]),
+        ("duration", "desc", ["t1-abc", "t4_pattern_2", "t3_pattern_1", "t6-last", "t2-xyz", "t5-with%wild_card"]),
+        ("duration", "asc", ["t5-with%wild_card", "t2-xyz", "t3_pattern_1", "t6-last", "t4_pattern_2", "t1-abc"]),
+        ("cost", "desc", ["t2-xyz", "t3_pattern_1", "t1-abc", "t4_pattern_2", "t5-with%wild_card", "t6-last"]),
+        ("cost", "asc", ["t6-last", "t5-with%wild_card", "t4_pattern_2", "t1-abc", "t3_pattern_1", "t2-xyz"]),
+        ("spans", "desc", ["t6-last", "t1-abc", "t2-xyz", "t3_pattern_1", "t4_pattern_2", "t5-with%wild_card"]),
+        ("spans", "asc", ["t2-xyz", "t3_pattern_1", "t4_pattern_2", "t5-with%wild_card", "t1-abc", "t6-last"]),
+    ],
+)
+def test_list_traces_endpoint_sorts_by_column_and_direction(
+    search_sort_client: TestClient, sort_key: str, sort_dir: str, expected_order: list[str]
+) -> None:
+    res = search_sort_client.get("/api/v1/traces", params={"sort": f"{sort_key}:{sort_dir}"})
+    assert res.status_code == 200
+    assert res.json()["total"] == 6
+    assert [item["trace_id"] for item in res.json()["items"]] == expected_order
+
+
+def test_list_traces_endpoint_malformed_sort_string_returns_422(search_sort_client: TestClient) -> None:
+    res = search_sort_client.get("/api/v1/traces", params={"sort": "invalid"})
+    assert res.status_code == 422
+    res = search_sort_client.get("/api/v1/traces", params={"sort": "start_time:invalid_dir"})
+    assert res.status_code == 422
+    res = search_sort_client.get("/api/v1/traces", params={"sort": "invalid_field:asc"})
+    assert res.status_code == 422

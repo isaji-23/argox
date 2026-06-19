@@ -285,9 +285,9 @@ class DuckDBTraceIndex(TraceIndex):
         params = []
 
         if trace_id:
-            query += " AND trace_id LIKE ?"
-            count_query += " AND trace_id LIKE ?"
-            params.append(f"{trace_id}%")
+            query += r" AND trace_id LIKE ? ESCAPE '\'"
+            count_query += r" AND trace_id LIKE ? ESCAPE '\'"
+            params.append(f"{self._escape_like_wildcards(trace_id)}%")
 
         if agent_name:
             query += " AND agent_name = ?"
@@ -313,9 +313,13 @@ class DuckDBTraceIndex(TraceIndex):
         }
         
         if sort:
-            field, dir = sort.split(":")
+            if ":" in sort:
+                parts = sort.split(":", 1)
+                field, direction = parts[0], parts[1]
+            else:
+                field, direction = "start_time", "desc"
             sql_field = sort_map.get(field, "trace_start")
-            sql_dir = "ASC" if dir == "asc" else "DESC"
+            sql_dir = "ASC" if direction.lower() == "asc" else "DESC"
             query += f" ORDER BY {sql_field} {sql_dir} NULLS LAST, trace_id"
         else:
             query += " ORDER BY trace_start DESC NULLS LAST, trace_id"
@@ -379,6 +383,11 @@ class DuckDBTraceIndex(TraceIndex):
             for row in rows[:max_spans]
         ]
         return spans, truncated
+
+    @staticmethod
+    def _escape_like_wildcards(s: str) -> str:
+        """Escape SQL LIKE wildcards '%' and '_' and the escape char '\\'."""
+        return s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
     @staticmethod
     def _decode_attributes(raw: Optional[str], trace_id: str, span_id: str) -> dict:
@@ -491,3 +500,4 @@ class DuckDBTraceIndex(TraceIndex):
         """Close the DuckDB connection."""
         with self._lock:
             self._conn.close()
+
