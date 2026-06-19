@@ -1,0 +1,562 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Argox — Live Traces</title>
+  <style>
+    :root {
+      --bg: #0d1117;
+      --panel: #161b22;
+      --border: #30363d;
+      --text: #e6edf3;
+      --muted: #8b949e;
+      --accent: #58a6ff;
+      --ok: #3fb950;
+      --bad: #f85149;
+      --flash: #1f6feb;
+      --detail-w: 620px;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+    }
+    header {
+      padding: 20px 28px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: baseline;
+      gap: 16px;
+    }
+    header h1 { font-size: 20px; margin: 0; }
+    header .status { font-size: 13px; color: var(--muted); }
+    header .dot {
+      display: inline-block; width: 9px; height: 9px; border-radius: 50%;
+      background: var(--muted); margin-right: 6px; vertical-align: middle;
+    }
+    header .dot.live { background: var(--ok); box-shadow: 0 0 6px var(--ok); }
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 14px;
+      padding: 20px 28px;
+    }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 16px;
+    }
+    .card .label { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+    .card .value { font-size: 26px; font-weight: 600; margin-top: 6px; }
+    main { padding: 0 28px 40px; }
+    table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--border); }
+    th { color: var(--muted); font-weight: 500; font-size: 12px; text-transform: uppercase; }
+    td.mono, th.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    tr.trace-row { cursor: pointer; }
+    tr.trace-row:hover { background: #1c2128; }
+    tr.trace-row.selected td { background: #1c2128; box-shadow: inset 2px 0 0 var(--accent); }
+    tr.flash td { animation: flash 1.2s ease-out; }
+    @keyframes flash {
+      from { background: var(--flash); }
+      to { background: transparent; }
+    }
+    .pill { padding: 2px 8px; border-radius: 999px; font-size: 12px; }
+    .pill.ok { background: rgba(63,185,80,.15); color: var(--ok); }
+    .pill.bad { background: rgba(248,81,73,.15); color: var(--bad); }
+    /* Right-side drawer: fixed/overlay so opening or swapping a trace never
+       reflows the page (no scroll jump). Slides in over a dimmed backdrop. */
+    #detail {
+      position: fixed; top: 0; right: 0; z-index: 50;
+      width: var(--detail-w); height: 100vh;
+      background: var(--panel);
+      border-left: 1px solid var(--border);
+      padding: 0 20px 24px;
+      overflow-y: auto;
+      transform: translateX(100%);
+      transition: transform .18s ease;
+      box-shadow: -16px 0 48px rgba(0,0,0,.45);
+    }
+    #detail.open { transform: translateX(0); }
+    /* Drag handle on the drawer's left edge to resize its width. Anchored just
+       left of the drawer (right: var(--detail-w)); fixed so it ignores scroll. */
+    #detail-resizer {
+      position: fixed; top: 0; right: var(--detail-w); z-index: 51;
+      width: 12px; height: 100vh; cursor: ew-resize;
+      display: none;
+    }
+    #detail-resizer.open { display: block; }
+    #detail-resizer::before {
+      content: ""; position: absolute; left: 5px; top: 0;
+      width: 2px; height: 100%; background: var(--border);
+      transition: background .12s;
+    }
+    #detail-resizer:hover::before, #detail-resizer.dragging::before { background: var(--accent); }
+    #backdrop {
+      position: fixed; inset: 0; z-index: 40;
+      background: rgba(1,4,9,.55);
+      opacity: 0; pointer-events: none;
+      transition: opacity .18s ease;
+    }
+    #backdrop.open { opacity: 1; pointer-events: auto; }
+    /* Sticky header keeps the title + Close button in view while the waterfall
+       scrolls inside the drawer. */
+    #detail .detail-head {
+      position: sticky; top: 0; z-index: 1;
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 12px; padding: 18px 0 12px; margin-bottom: 4px;
+      background: var(--panel); border-bottom: 1px solid var(--border);
+    }
+    #detail h3 { margin: 0; font-size: 15px; }
+    #detail .close {
+      flex: none;
+      display: inline-flex; align-items: center; gap: 6px;
+      background: transparent; color: var(--muted);
+      border: 1px solid var(--border); border-radius: 6px;
+      padding: 6px 12px; font-size: 13px; line-height: 1;
+      cursor: pointer; transition: background .12s, color .12s, border-color .12s;
+    }
+    #detail .close:hover { background: rgba(248,81,73,.12); color: var(--bad); border-color: var(--bad); }
+    #detail .close .x { font-size: 14px; }
+    .empty { color: var(--muted); padding: 30px 12px; text-align: center; }
+
+    .detail-meta { font-size: 12px; color: var(--muted); margin-bottom: 14px; }
+    .detail-meta .truncated { color: var(--bad); }
+
+    /* Waterfall */
+    .waterfall { font-size: 13px; }
+    .wf-row {
+      display: grid;
+      /* minmax(0, …) (not 220px) so a long span name can never push the first
+         column past its fractional share. Each row is its own grid, so a px
+         min-width would let long-named rows widen column 1 and misalign with
+         the header and other rows. The name truncates with an ellipsis instead. */
+      grid-template-columns: minmax(0, 2fr) minmax(0, 3fr) 88px 70px;
+      align-items: center;
+      gap: 10px;
+      padding: 6px 8px;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+    .wf-row:hover { background: #1c2128; }
+    .wf-row.open { background: #1c2128; }
+    .wf-head {
+      cursor: default; color: var(--muted); font-size: 11px;
+      text-transform: uppercase; letter-spacing: .04em;
+      border-bottom: 1px solid var(--border); border-radius: 0;
+    }
+    .wf-head:hover { background: transparent; }
+    .wf-head .twirl { display: none; }
+    .wf-name {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .wf-name .twirl { color: var(--muted); margin-right: 4px; display: inline-block; width: 10px; }
+    .wf-track {
+      position: relative; height: 14px;
+      background: #0d1117; border-radius: 3px; border: 1px solid var(--border);
+    }
+    .wf-bar {
+      position: absolute; top: 0; height: 100%;
+      background: var(--accent); border-radius: 3px; min-width: 2px;
+    }
+    .wf-bar.bad { background: var(--bad); }
+    .wf-dur, .wf-cost { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); }
+    .wf-attrs {
+      margin: 0 8px 8px;
+      padding: 10px 12px;
+      background: #0d1117;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 12px;
+    }
+    .wf-attrs .kv { display: grid; grid-template-columns: 240px 1fr; gap: 8px; padding: 2px 0; }
+    .wf-attrs .k { color: var(--muted); }
+    .wf-attrs .v { color: var(--text); word-break: break-all; }
+    .wf-attrs .section { color: var(--accent); margin: 8px 0 4px; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+    .wf-attrs .empty-attrs { color: var(--muted); }
+    .ask {
+      display: flex; align-items: center; gap: 10px;
+      padding: 16px 28px; border-bottom: 1px solid var(--border);
+    }
+    .ask input {
+      flex: 1; max-width: 520px;
+      background: var(--bg); color: var(--text);
+      border: 1px solid var(--border); border-radius: 6px;
+      padding: 9px 12px; font-size: 14px;
+    }
+    .ask input:focus { outline: none; border-color: var(--accent); }
+    .ask button {
+      background: var(--accent); color: #0d1117; border: none;
+      border-radius: 6px; padding: 9px 16px; font-size: 14px;
+      font-weight: 600; cursor: pointer;
+    }
+    .ask button:disabled { opacity: .5; cursor: default; }
+    .ask-status { font-size: 13px; color: var(--muted); }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Argox · Live Traces</h1>
+    <span class="status"><span id="dot" class="dot"></span><span id="statusText">connecting…</span></span>
+  </header>
+
+  <section class="ask">
+    <input id="ask-prompt" type="text" placeholder="Ask the Azure agent… (e.g. weather in Madrid)" />
+    <button id="ask-btn" onclick="askAzure()">Ask Azure</button>
+    <span id="ask-status" class="ask-status"></span>
+  </section>
+
+  <section class="metrics">
+    <div class="card"><div class="label">Total traces</div><div class="value" id="m-traces">—</div></div>
+    <div class="card"><div class="label">Cost (24h)</div><div class="value" id="m-cost">—</div></div>
+    <div class="card"><div class="label">Latency avg / p95</div><div class="value" id="m-latency">—</div></div>
+    <div class="card"><div class="label">Success rate</div><div class="value" id="m-success">—</div></div>
+  </section>
+
+  <main>
+    <table>
+      <thead>
+        <tr>
+          <th>Time</th>
+          <th>Agent</th>
+          <th class="mono">Trace ID</th>
+          <th>Duration</th>
+          <th>Cost</th>
+          <th>Spans</th>
+        </tr>
+      </thead>
+      <tbody id="rows"></tbody>
+    </table>
+    <div id="empty" class="empty">Waiting for traces…</div>
+
+    <div id="backdrop" onclick="closeDetail()"></div>
+    <div id="detail-resizer" title="Drag to resize"></div>
+    <div id="detail">
+      <div class="detail-head">
+        <h3 id="detail-title"></h3>
+        <button type="button" class="close" onclick="closeDetail()">
+          <span class="x">✕</span> Close
+        </button>
+      </div>
+      <div id="detail-meta" class="detail-meta"></div>
+      <div class="wf-row wf-head">
+        <div class="wf-name">Span</div>
+        <div>Timeline</div>
+        <div class="wf-dur">Duration</div>
+        <div class="wf-cost">Cost</div>
+      </div>
+      <div id="waterfall" class="waterfall"></div>
+    </div>
+  </main>
+
+  <script>
+    // Collector base URL. Override by appending ?api=http://host:port to the page URL.
+    const API = new URLSearchParams(location.search).get("api")
+      || (location.protocol + "//" + location.hostname + ":8000");
+    // Azure bridge URL (the on-demand run trigger). Defaults to the same host
+    // that served this page on port 8002, so it follows localhost/Tailscale
+    // automatically. Override with ?azure=...
+    const AZURE = new URLSearchParams(location.search).get("azure")
+      || (location.protocol + "//" + location.hostname + ":8002");
+    const POLL_MS = 1000;
+
+    const seen = new Set();          // trace_ids already rendered (to flash only new ones)
+    let firstLoad = true;
+    let detailReq = 0;               // monotonic token: drop stale detail responses
+    let selectedTrace = null;        // trace_id shown in the drawer (highlight + keep across refreshes)
+
+    const fmtTime = (iso) => iso ? new Date(iso).toLocaleTimeString() : "—";
+    const fmtCost = (n) => (n == null) ? "—" : "$" + Number(n).toFixed(4);
+    const fmtMs = (n) => (n == null) ? "—" : Math.round(n) + " ms";
+
+    function setStatus(live, text) {
+      document.getElementById("dot").classList.toggle("live", live);
+      document.getElementById("statusText").textContent = text;
+    }
+
+    async function getJSON(path) {
+      const res = await fetch(API + path);
+      if (!res.ok) throw new Error(path + " -> " + res.status);
+      return res.json();
+    }
+
+    async function refreshMetrics() {
+      try {
+        const [cost, latency, success] = await Promise.all([
+          getJSON("/api/v1/metrics/cost"),
+          getJSON("/api/v1/metrics/latency"),
+          getJSON("/api/v1/metrics/success"),
+        ]);
+        document.getElementById("m-cost").textContent = fmtCost(cost.total_cost);
+        document.getElementById("m-latency").textContent =
+          fmtMs(latency.avg_latency_ms) + " / " + fmtMs(latency.p95_latency_ms);
+        document.getElementById("m-success").textContent =
+          success.success_rate == null ? "—" : Math.round(success.success_rate * 100) + "%";
+      } catch (e) { /* metrics are best-effort; trace list drives status */ }
+    }
+
+    async function refreshTraces() {
+      const data = await getJSON("/api/v1/traces?limit=25");
+      document.getElementById("m-traces").textContent = data.total;
+
+      const tbody = document.getElementById("rows");
+      const empty = document.getElementById("empty");
+      empty.style.display = data.items.length ? "none" : "block";
+
+      tbody.innerHTML = "";
+      for (const t of data.items) {
+        const isNew = !seen.has(t.trace_id);
+        if (isNew) seen.add(t.trace_id);
+        const tr = document.createElement("tr");
+        tr.className = "trace-row"
+          + (isNew && !firstLoad ? " flash" : "")
+          + (t.trace_id === selectedTrace ? " selected" : "");
+        tr.dataset.trace = t.trace_id;
+        tr.innerHTML = `
+          <td>${fmtTime(t.start_time)}</td>
+          <td>${t.agent_name || "—"}</td>
+          <td class="mono">${t.trace_id.slice(0, 16)}</td>
+          <td>${fmtMs(t.total_duration_ms)}</td>
+          <td>${fmtCost(t.total_cost)}</td>
+          <td>${t.span_count}</td>`;
+        tr.onclick = () => showDetail(t.trace_id, t.agent_name);
+        tbody.appendChild(tr);
+      }
+      firstLoad = false;
+    }
+
+    const esc = (s) => String(s)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    const fmtVal = (v) => (v && typeof v === "object") ? JSON.stringify(v) : String(v);
+
+    // Order spans into a parent->child tree, depth-first by start_time, so the
+    // waterfall reads top-to-bottom in execution order with children indented.
+    function orderSpans(spans) {
+      const byParent = new Map();
+      const ids = new Set(spans.map((s) => s.span_id));
+      for (const s of spans) {
+        // A span whose parent is absent from this trace is treated as a root.
+        const key = (s.parent_span_id && ids.has(s.parent_span_id)) ? s.parent_span_id : null;
+        if (!byParent.has(key)) byParent.set(key, []);
+        byParent.get(key).push(s);
+      }
+      for (const arr of byParent.values()) {
+        arr.sort((a, b) => (Date.parse(a.start_time) || 0) - (Date.parse(b.start_time) || 0));
+      }
+      const out = [];
+      const walk = (key, depth) => {
+        for (const s of byParent.get(key) || []) {
+          out.push({ span: s, depth });
+          walk(s.span_id, depth + 1);
+        }
+      };
+      walk(null, 0);
+      // Fallback: if the tree missed any span (cyclic/odd data), append them flat.
+      if (out.length < spans.length) {
+        const seen = new Set(out.map((o) => o.span.span_id));
+        for (const s of spans) if (!seen.has(s.span_id)) out.push({ span: s, depth: 0 });
+      }
+      return out;
+    }
+
+    function attrsHtml(s) {
+      const meta = [
+        ["span_id", s.span_id],
+        ["parent_span_id", s.parent_span_id || "—"],
+        ["start", s.start_time || "—"],
+        ["end", s.end_time || "—"],
+        ["duration", fmtMs(s.duration_ms)],
+        ["run_cost", fmtCost(s.run_cost)],
+        ["run_success", s.run_success == null ? "—" : String(s.run_success)],
+        ["policy_decision", s.policy_decision || "—"],
+      ];
+      let html = '<div class="section">span</div>';
+      for (const [k, v] of meta) html += `<div class="kv"><span class="k">${k}</span><span class="v">${esc(v)}</span></div>`;
+      const attrs = s.attributes || {};
+      const keys = Object.keys(attrs).sort();
+      html += '<div class="section">attributes</div>';
+      if (!keys.length) html += '<div class="empty-attrs">no attributes</div>';
+      for (const k of keys) html += `<div class="kv"><span class="k">${esc(k)}</span><span class="v">${esc(fmtVal(attrs[k]))}</span></div>`;
+      return html;
+    }
+
+    function closeDetail() {
+      detailReq++;                 // invalidate any in-flight detail fetch
+      selectedTrace = null;
+      document.getElementById("detail").classList.remove("open");
+      document.getElementById("backdrop").classList.remove("open");
+      document.getElementById("detail-resizer").classList.remove("open");
+      document.querySelectorAll("tr.trace-row.selected")
+        .forEach((r) => r.classList.remove("selected"));
+    }
+    // Escape closes the open detail panel.
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") closeDetail();
+    });
+
+    async function showDetail(traceId, agent) {
+      // Show the panel and a loading line right away so a click always gives
+      // visible feedback, even before the fetch resolves (or if it fails).
+      const req = ++detailReq;
+      selectedTrace = traceId;
+      document.querySelectorAll("tr.trace-row").forEach((r) =>
+        r.classList.toggle("selected", r.dataset.trace === traceId));
+      const detailEl = document.getElementById("detail");
+      const titleEl = document.getElementById("detail-title");
+      const metaEl = document.getElementById("detail-meta");
+      const wfEl = document.getElementById("waterfall");
+      titleEl.textContent = (agent || "trace") + " · " + traceId.slice(0, 16);
+      metaEl.textContent = "loading…";
+      wfEl.innerHTML = "";
+      detailEl.classList.add("open");
+      document.getElementById("backdrop").classList.add("open");
+      document.getElementById("detail-resizer").classList.add("open");
+      detailEl.scrollTop = 0;
+
+      let detail;
+      try {
+        detail = await getJSON("/api/v1/traces/" + traceId);
+      } catch (e) {
+        // A fresh trace can 404 briefly before its detail is queryable. Surface
+        // it instead of silently leaving stale content, and offer a retry.
+        if (req !== detailReq) return;   // a newer click superseded this one
+        metaEl.innerHTML = '<span class="truncated">could not load trace — '
+          + 'click the row again to retry</span>';
+        return;
+      }
+      // A newer click already won the race; discard this late response.
+      if (req !== detailReq) return;
+
+      try {
+        const spans = detail.spans || [];
+        const ordered = orderSpans(spans);
+        // Trace window for proportional bars: earliest start to latest end.
+        const starts = spans.map((s) => Date.parse(s.start_time)).filter((n) => !isNaN(n));
+        const ends = spans.map((s) => Date.parse(s.end_time)).filter((n) => !isNaN(n));
+        const t0 = starts.length ? Math.min(...starts) : 0;
+        const t1 = ends.length ? Math.max(...ends) : t0 + 1;
+        const span = Math.max(t1 - t0, 1);
+
+        const meta = document.getElementById("detail-meta");
+        meta.innerHTML = `${spans.length} span(s)`
+          + (detail.truncated ? ' · <span class="truncated">truncated</span>' : "");
+
+        const wf = document.getElementById("waterfall");
+        wf.innerHTML = "";
+        for (const { span: s, depth } of ordered) {
+          const st = Date.parse(s.start_time);
+          const en = Date.parse(s.end_time);
+          const left = !isNaN(st) ? ((st - t0) / span) * 100 : 0;
+          const width = (!isNaN(st) && !isNaN(en)) ? ((en - st) / span) * 100 : 100;
+          const bad = s.run_success === false || s.policy_decision === "block";
+
+          const row = document.createElement("div");
+          row.className = "wf-row";
+          row.innerHTML = `
+            <div class="wf-name" style="padding-left:${depth * 16}px">
+              <span class="twirl">▸</span>${esc(s.name || "—")}</div>
+            <div class="wf-track"><div class="wf-bar ${bad ? "bad" : ""}"
+              style="left:${left}%;width:${Math.max(width, 1)}%"></div></div>
+            <div class="wf-dur">${fmtMs(s.duration_ms)}</div>
+            <div class="wf-cost">${fmtCost(s.run_cost)}</div>`;
+
+          const panel = document.createElement("div");
+          panel.className = "wf-attrs";
+          panel.style.display = "none";
+          panel.innerHTML = attrsHtml(s);
+
+          row.onclick = () => {
+            const open = panel.style.display !== "none";
+            panel.style.display = open ? "none" : "block";
+            row.classList.toggle("open", !open);
+            row.querySelector(".twirl").textContent = open ? "▸" : "▾";
+          };
+          wf.appendChild(row);
+          wf.appendChild(panel);
+        }
+      } catch (e) { /* ignore transient render failures */ }
+    }
+
+    async function tick() {
+      try {
+        await refreshTraces();
+        await refreshMetrics();
+        setStatus(true, "live · polling " + API);
+      } catch (e) {
+        setStatus(false, "cannot reach collector at " + API);
+      }
+    }
+
+    async function askAzure() {
+      const btn = document.getElementById("ask-btn");
+      const input = document.getElementById("ask-prompt");
+      const status = document.getElementById("ask-status");
+      const prompt = input.value.trim();
+      btn.disabled = true;
+      status.textContent = "running…";
+      try {
+        const res = await fetch(AZURE + "/ask", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ prompt }),
+        });
+        if (!res.ok) throw new Error("bridge -> " + res.status);
+        const data = await res.json();
+        status.textContent = (data.success ? "✓ " : "blocked · ")
+          + (data.trace_id ? data.trace_id.slice(0, 12) : "");
+        // Pull the new trace in immediately rather than waiting for the timer.
+        tick();
+      } catch (e) {
+        status.textContent = "bridge unreachable at " + AZURE;
+      } finally {
+        btn.disabled = false;
+      }
+    }
+    document.getElementById("ask-prompt").addEventListener("keydown", (e) => {
+      if (e.key === "Enter") askAzure();
+    });
+
+    // --- Drawer resize: drag the left-edge handle to set the drawer width ---
+    const resizer = document.getElementById("detail-resizer");
+    let dragging = false;
+
+    function setDetailWidth(px) {
+      // Clamp: readable minimum, never wider than ~96% of the viewport.
+      const w = Math.max(360, Math.min(px, window.innerWidth * 0.96));
+      document.documentElement.style.setProperty("--detail-w", w + "px");
+      try { localStorage.setItem("argox-detail-w", String(Math.round(w))); } catch (e) {}
+    }
+
+    resizer.addEventListener("mousedown", (e) => {
+      dragging = true;
+      resizer.classList.add("dragging");
+      document.body.style.userSelect = "none";  // no text selection while dragging
+      e.preventDefault();
+    });
+    window.addEventListener("mousemove", (e) => {
+      if (!dragging) return;
+      // Drawer is anchored right, so width = distance from the cursor to the edge.
+      setDetailWidth(window.innerWidth - e.clientX);
+    });
+    window.addEventListener("mouseup", () => {
+      if (!dragging) return;
+      dragging = false;
+      resizer.classList.remove("dragging");
+      document.body.style.userSelect = "";
+    });
+
+    // Restore the last width (or a sensible default for the current viewport).
+    setDetailWidth(parseInt(localStorage.getItem("argox-detail-w"), 10)
+      || Math.min(620, window.innerWidth * 0.94));
+
+    tick();
+    setInterval(tick, POLL_MS);
+  </script>
+</body>
+</html>
