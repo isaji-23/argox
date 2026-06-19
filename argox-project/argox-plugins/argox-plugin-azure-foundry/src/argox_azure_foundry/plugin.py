@@ -19,11 +19,16 @@ Phase 0 — Investigation Results:
 from __future__ import annotations
 
 import asyncio
+import copy
+import functools
+import logging
 import time
 from typing import Any, Callable
 
 from argox.core.state import AgentRunMetrics, ApiCallRecord, ToolCallRecord
 from argox.interfaces.plugin import ArgoxPlugin, ToolArgsRunner
+
+logger = logging.getLogger(__name__)
 
 
 class ArgoxAzureFoundryPlugin(ArgoxPlugin):
@@ -50,7 +55,7 @@ class ArgoxAzureFoundryPlugin(ArgoxPlugin):
 
         # We need to import FunctionTool inside to avoid hard dependency in core
         try:
-            from azure.ai.projects.models import FunctionTool
+            from azure.ai.projects.models import AsyncFunctionTool, FunctionTool
         except ImportError:
             # If the user is using the SDK, it should be available.
             # If not, we can't instrument tools.
@@ -58,7 +63,7 @@ class ArgoxAzureFoundryPlugin(ArgoxPlugin):
 
         new_tools = []
         for tool in target.tools:
-            if isinstance(tool, FunctionTool):
+            if isinstance(tool, (FunctionTool, AsyncFunctionTool)):
                 new_tools.append(self._wrap_function_tool(tool, metrics, tool_args_runner))
             else:
                 new_tools.append(tool)
@@ -76,7 +81,7 @@ class ArgoxAzureFoundryPlugin(ArgoxPlugin):
         if not usage:
             return
 
-        # Azure SDK models often use camelCase or specific attribute names.
+        # Azure SDK models use snake_case for usage attributes like prompt_tokens.
         # Based on docs/architecture.md and Phase 0, we use getattr.
         input_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
         output_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
@@ -109,6 +114,7 @@ class ArgoxAzureFoundryPlugin(ArgoxPlugin):
         if hasattr(raw_result, "content"):
             return str(raw_result.content)
         
+        logger.warning("Could not extract output: raw_result does not have 'content' attribute.")
         return ""
 
     def _wrap_function_tool(
@@ -118,68 +124,91 @@ class ArgoxAzureFoundryPlugin(ArgoxPlugin):
         runner: ToolArgsRunner | None
     ) -> Any:
         """Wrap an azure.ai.projects.models.FunctionTool to intercept calls."""
-        # FunctionTool has a 'functions' attribute which is a list of callables
-        # or it handles them via a dictionary internally.
-        # Actually, FunctionTool in azure-ai-projects works by taking a set of functions.
-        # We need to wrap each function in the tool.
-        
-        # If we can't easily wrap inside FunctionTool (it might be sealed/immutable),
-        # we might need to recreate it.
-        from azure.ai.projects.models import FunctionTool
+        try:
+            from azure.ai.projects.models import AsyncFunctionTool
+            is_async = isinstance(tool, AsyncFunctionTool)
+        except ImportError:
+            is_async = False
 
-        original_functions = getattr(tool, "_functions", {}) # Implementation detail of SDK
+        original_functions = getattr(tool, "_functions", {})
         if not original_functions:
-            # Try to get from public API if exists
             return tool
 
+        wrapped_tool = copy.copy(tool)
         wrapped_functions = {}
         for name, func in original_functions.items():
-            wrapped_functions[name] = self._make_wrapper(name, func, metrics, runner)
+            if is_async:
+                wrapped_functions[name] = self._make_async_wrapper(name, func, metrics, runner)
+            else:
+                wrapped_functions[name] = self._make_sync_wrapper(name, func, metrics, runner)
 
-        # Recreate the tool with wrapped functions
-        new_tool = FunctionTool(functions=list(wrapped_functions.values()))
-        return new_tool
+        wrapped_tool._functions = wrapped_functions
+        return wrapped_tool
 
-    def _make_wrapper(
+    def _make_sync_wrapper(
         self, 
         name: str, 
         func: Callable, 
         metrics: AgentRunMetrics, 
         runner: ToolArgsRunner | None
     ) -> Callable:
-        """Create a wrapper for a tool function."""
+        """Create a sync wrapper for a sync tool function."""
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            record = ToolCallRecord(name=name, start=time.time())
+            metrics.tools_called.append(record)
+            
+            try:
+                if runner:
+                    try:
+                        loop = asyncio.get_running_loop()
+                    except RuntimeError:
+                        loop = None
+                    
+                    if loop and loop.is_running():
+                        import concurrent.futures
+                        with concurrent.futures.ThreadPoolExecutor() as pool:
+                            kwargs = pool.submit(asyncio.run, runner(name, kwargs)).result()
+                    else:
+                        kwargs = asyncio.run(runner(name, kwargs))
+                
+                result = func(*args, **kwargs)
+                
+                record.end = time.time()
+                record.result = str(result)
+                return result
+            except Exception as e:
+                record.end = time.time()
+                record.result = f"Error: {str(e)}"
+                raise
         
+        return wrapper
+
+    def _make_async_wrapper(
+        self, 
+        name: str, 
+        func: Callable, 
+        metrics: AgentRunMetrics, 
+        runner: ToolArgsRunner | None
+    ) -> Callable:
+        """Create an async wrapper for an async tool function."""
+        @functools.wraps(func)
         async def wrapper(*args, **kwargs):
             record = ToolCallRecord(name=name, start=time.time())
             metrics.tools_called.append(record)
             
             try:
-                # 1. Mutate arguments if runner is provided
                 if runner:
-                    # In Azure, tool calls usually pass arguments as kwargs
                     kwargs = await runner(name, kwargs)
                 
-                # 2. Execute original function
-                if asyncio.iscoroutinefunction(func):
-                    result = await func(*args, **kwargs)
-                else:
-                    # Run sync function in executor or directly? 
-                    # Project context suggests async-first.
-                    result = func(*args, **kwargs)
+                result = await func(*args, **kwargs)
                 
-                # 3. Record success
                 record.end = time.time()
                 record.result = str(result)
                 return result
             except Exception as e:
-                # 4. Record failure and re-raise
                 record.end = time.time()
                 record.result = f"Error: {str(e)}"
                 raise
-        
-        # Preserve original metadata if possible for the SDK to pick up signatures
-        wrapper.__name__ = func.__name__
-        wrapper.__doc__ = func.__doc__
-        wrapper.__annotations__ = func.__annotations__
         
         return wrapper

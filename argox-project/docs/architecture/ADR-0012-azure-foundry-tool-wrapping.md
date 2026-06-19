@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Date:** 2026-06-18
-- **Deciders:** MarcosCS2004, Gemini CLI
+- **Deciders:** MarcosCS2004
 - **Ticket:** [PLUGIN-04]
 
 ## Context

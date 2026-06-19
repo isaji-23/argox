@@ -1,7 +1,7 @@
 import pytest
 import time
 import sys
-from unittest.mock import MagicMock, AsyncMock
+from unittest.mock import MagicMock
 
 # Mocking Azure SDK because it might not be installed
 class MockFunctionTool:
@@ -12,15 +12,21 @@ class MockFunctionTool:
             for f in functions:
                 self._functions[f.__name__] = f
 
-# Pre-mock the module so monkeypatch can find it
-mock_models = MagicMock()
-mock_models.FunctionTool = MockFunctionTool
-sys.modules["azure.ai"] = MagicMock()
-sys.modules["azure.ai.projects"] = MagicMock()
-sys.modules["azure.ai.projects.models"] = mock_models
+class MockAsyncFunctionTool(MockFunctionTool):
+    pass
+
+@pytest.fixture(autouse=True)
+def mock_azure_sdk(monkeypatch):
+    mock_models = MagicMock()
+    mock_models.FunctionTool = MockFunctionTool
+    mock_models.AsyncFunctionTool = MockAsyncFunctionTool
+    monkeypatch.setitem(sys.modules, "azure", MagicMock())
+    monkeypatch.setitem(sys.modules, "azure.ai", MagicMock())
+    monkeypatch.setitem(sys.modules, "azure.ai.projects", MagicMock())
+    monkeypatch.setitem(sys.modules, "azure.ai.projects.models", mock_models)
 
 from argox_azure_foundry.plugin import ArgoxAzureFoundryPlugin
-from argox.core.state import AgentRunMetrics, ToolCallRecord
+from argox.core.state import AgentRunMetrics
 
 @pytest.fixture
 def plugin():
@@ -34,8 +40,37 @@ def test_plugin_name(plugin):
     assert plugin.name == "azure-foundry"
 
 @pytest.mark.asyncio
-async def test_instrument_wraps_tools(plugin, metrics, monkeypatch):
+async def test_instrument_wraps_async_tools(plugin, metrics):
     async def sample_tool(location: str):
+        return f"Weather in {location} is fine"
+    
+    mock_agent = MagicMock()
+    mock_tool = MockAsyncFunctionTool(functions=[sample_tool])
+    mock_agent.tools = [mock_tool]
+    
+    # Tool args runner
+    async def tool_args_runner(name, args):
+        args["location"] = "London"
+        return args
+    
+    plugin.instrument(mock_agent, metrics, tool_args_runner)
+    
+    assert len(mock_agent.tools) == 1
+    wrapped_tool = mock_agent.tools[0]
+    assert isinstance(wrapped_tool, MockAsyncFunctionTool)
+    
+    # Verify the function is wrapped
+    wrapped_func = wrapped_tool._functions["sample_tool"]
+    
+    result = await wrapped_func(location="Paris")
+    
+    assert result == "Weather in London is fine"
+    assert len(metrics.tools_called) == 1
+    assert metrics.tools_called[0].name == "sample_tool"
+    assert metrics.tools_called[0].result == "Weather in London is fine"
+
+def test_instrument_wraps_sync_tools(plugin, metrics):
+    def sample_tool(location: str):
         return f"Weather in {location} is fine"
     
     mock_agent = MagicMock()
@@ -56,7 +91,7 @@ async def test_instrument_wraps_tools(plugin, metrics, monkeypatch):
     # Verify the function is wrapped
     wrapped_func = wrapped_tool._functions["sample_tool"]
     
-    result = await wrapped_func(location="Paris")
+    result = wrapped_func(location="Paris")
     
     assert result == "Weather in London is fine"
     assert len(metrics.tools_called) == 1

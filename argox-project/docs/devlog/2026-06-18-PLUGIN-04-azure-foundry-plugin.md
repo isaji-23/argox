@@ -1,7 +1,7 @@
 # [PLUGIN-04] Implement argox-plugin-azure-foundry
 
 - **Date:** 2026-06-18
-- **PR:** #139  ·  **Branch:** feat/PLUGIN-04-foundry-agent-plugin
+- **PR:** #147  ·  **Branch:** feat/PLUGIN-04-argox-plugin-azure-foundry
 - **Status:** in-review
 
 ## What changed
