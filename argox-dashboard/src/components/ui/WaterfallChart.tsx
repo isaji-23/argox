@@ -1,4 +1,4 @@
-import { cn } from '../../lib/utils';
+import { cn, fmtMs } from '../../lib/utils';
 import { Icon } from '../shared/Icon';
 
 interface Span {
@@ -35,7 +35,7 @@ export function WaterfallChart({ spans, totalDuration, selectedSpanId, onSelectS
           <div className="absolute right-0 top-0 h-full border-r border-border-faint" />
           
           <span className="absolute left-0 top-0 ml-1">0ms</span>
-          <span className="absolute right-0 top-0 mr-1">{totalDuration}ms</span>
+          <span className="absolute right-0 top-0 mr-1">{fmtMs(totalDuration)}</span>
         </div>
       </div>
 
@@ -92,7 +92,7 @@ export function WaterfallChart({ spans, totalDuration, selectedSpanId, onSelectS
                 >
                   {/* Duration label inside or beside */}
                   <span className="absolute left-full ml-2 text-[10px] font-mono text-text-muted opacity-0 group-hover:opacity-100 whitespace-nowrap">
-                    {span.d}ms
+                    {fmtMs(span.d)}
                   </span>
                 </div>
               </div>

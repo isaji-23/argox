@@ -41,6 +41,15 @@ export interface TraceDetailResponse {
   truncated: boolean;
 }
 
+export class APIError extends Error {
+  status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = 'APIError';
+    this.status = status;
+  }
+}
+
 export const api = {
   async listTraces(params: {
     skip?: number;
@@ -61,13 +70,16 @@ export const api = {
     if (params.sort) searchParams.set('sort', params.sort);
 
     const res = await fetch(`${API_BASE}/traces?${searchParams.toString()}`);
-    if (!res.ok) throw new Error('Failed to fetch traces');
+    if (!res.ok) throw new APIError('Failed to fetch traces', res.status);
     return res.json();
   },
 
   async getTrace(traceId: string): Promise<TraceDetailResponse> {
     const res = await fetch(`${API_BASE}/traces/${encodeURIComponent(traceId)}`);
-    if (!res.ok) throw new Error(`Failed to fetch trace ${traceId}`);
+    if (!res.ok) {
+      const msg = res.status === 404 ? `Trace ${traceId} not found` : `Failed to fetch trace ${traceId}`;
+      throw new APIError(msg, res.status);
+    }
     return res.json();
   }
 };

@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useCallback } from 'react';
 import { Icon } from '../shared/Icon';
 import { Button } from '../ui/Button';
 import { Panel } from '../ui/Panel';
@@ -20,8 +20,11 @@ export function TraceDetailScreen({ traceId, onBack }: TraceDetailScreenProps) {
   const [truncated, setTruncated] = useState(false);
   const [selectedSpanId, setSelectedSpanId] = useState<string | null>(null);
 
-  const fetchTrace = async () => {
-    if (!traceId) return;
+  const fetchTrace = useCallback(async () => {
+    if (!traceId) {
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     setError(null);
     try {
@@ -36,11 +39,11 @@ export function TraceDetailScreen({ traceId, onBack }: TraceDetailScreenProps) {
     } finally {
       setLoading(false);
     }
-  };
+  }, [traceId]);
 
   useEffect(() => {
     fetchTrace();
-  }, [traceId]);
+  }, [fetchTrace]);
 
   const traceSummary = useMemo(() => {
     if (spans.length === 0) return null;

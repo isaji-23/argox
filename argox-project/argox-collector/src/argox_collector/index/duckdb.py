@@ -249,8 +249,15 @@ class DuckDBTraceIndex(TraceIndex):
         decision: Optional[str] = None,
         sort: Optional[str] = None,
     ) -> tuple[list[dict], int]:
-        # Base query to aggregate traces
-        base_query = """
+        # Pre-filter by trace_id on the raw spans table if possible to speed up aggregation.
+        spans_where = ""
+        base_params = []
+        if trace_id:
+            spans_where = r" WHERE trace_id LIKE ? ESCAPE '\'"
+            base_params.append(f"{self._escape_like_wildcards(trace_id)}%")
+
+        # Base query to aggregate traces.
+        base_query = f"""
             SELECT
                 trace_id,
                 MIN(start_time) AS trace_start,
@@ -276,35 +283,31 @@ class DuckDBTraceIndex(TraceIndex):
                     'allow'
                 ) AS decision
             FROM spans
+            {spans_where}
             GROUP BY trace_id
         """
 
-        # Wrap in a subquery to allow filtering on aggregated columns
-        query = f"SELECT * FROM ({base_query}) AS t WHERE 1=1"
-        count_query = f"SELECT COUNT(*) FROM ({base_query}) AS t WHERE 1=1"
-        params = []
-
-        if trace_id:
-            query += r" AND trace_id LIKE ? ESCAPE '\'"
-            count_query += r" AND trace_id LIKE ? ESCAPE '\'"
-            params.append(f"{self._escape_like_wildcards(trace_id)}%")
+        # Wrap in a subquery to allow filtering on aggregated columns.
+        # We use COUNT(*) OVER () AS _total_count to calculate the total matching count
+        # in a single query execution pass, avoiding double aggregation.
+        query = f"SELECT *, COUNT(*) OVER () AS _total_count FROM ({base_query}) AS t WHERE 1=1"
+        params = list(base_params)
 
         if agent_name:
             query += " AND agent_name = ?"
-            count_query += " AND agent_name = ?"
             params.append(agent_name)
         
         if status:
             query += " AND status = ?"
-            count_query += " AND status = ?"
             params.append(status)
             
         if decision:
             query += " AND decision = ?"
-            count_query += " AND decision = ?"
             params.append(decision)
 
         # Sorting
+        # Keep this mapping synchronized with the route validation in the collector api.
+        # Router uses: pattern="^(start_time|duration|cost|spans):(asc|desc)$"
         sort_map = {
             "start_time": "trace_start",
             "duration": "total_duration_ms",
@@ -327,7 +330,28 @@ class DuckDBTraceIndex(TraceIndex):
         query += " LIMIT ? OFFSET ?"
         
         rows = self._read(query, tuple(params + [limit, skip]))
-        total = self._read(count_query, tuple(params))[0][0]
+        
+        # If rows are returned, we extract total from the window column in the first row.
+        # If no rows are returned and skip > 0, we fallback to a lightweight count query
+        # to find the total count past the offset.
+        if rows:
+            total = rows[0][-1]
+        else:
+            if skip == 0:
+                total = 0
+            else:
+                count_query = f"SELECT COUNT(*) FROM ({base_query}) AS t WHERE 1=1"
+                count_params = list(base_params)
+                if agent_name:
+                    count_query += " AND agent_name = ?"
+                    count_params.append(agent_name)
+                if status:
+                    count_query += " AND status = ?"
+                    count_params.append(status)
+                if decision:
+                    count_query += " AND decision = ?"
+                    count_params.append(decision)
+                total = self._read(count_query, tuple(count_params))[0][0]
 
         summaries = [
             {
