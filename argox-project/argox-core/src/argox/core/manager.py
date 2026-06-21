@@ -165,7 +165,14 @@ class ArgoxManager:
             metrics.phase_timings = {key: 0.0 for key in self._PHASE_KEYS}
         ctx = RunContext(run_id=metrics.run_id, agent_name=metrics.agent_name, metadata=metadata or {})
 
-        original_tools = _snapshot_tools(agent)
+        # Instrument a per-run copy of the agent instead of mutating the shared
+        # instance. The same ``Agent`` object is commonly driven by concurrent
+        # ``run()`` calls (singleton agent + concurrent requests); mutating its
+        # ``tools``/``hooks`` in place races across runs, leaking tool wrappers
+        # and recording one request's tool data into another's metrics. The copy
+        # gives each run its own ``tools`` list and ``hooks`` binding, so no
+        # restore step is needed and the shared agent is never touched (#153).
+        run_agent = _clone_agent(agent)
         applied_processors: list[str] = []
         tracer = trace.get_tracer("argox")
 
@@ -193,7 +200,7 @@ class ArgoxManager:
                     record_policy_decision(decision="ok", rule_id=None)
 
                 # 3. Filter tools via policy
-                raw_tools = _extract_tool_names(agent) if tools is None else tools
+                raw_tools = _extract_tool_names(run_agent) if tools is None else tools
                 if self._policy is not None and raw_tools:
                     with self._phase(metrics, "tool_filter"):
                         for tool_name in raw_tools:
@@ -209,7 +216,7 @@ class ArgoxManager:
                             ARGOX_RUN_BLOCKED_TOOLS,
                             [t["name"] for t in metrics.tools_blocked],
                         )
-                    _apply_tool_filter(agent, metrics.tools_available)
+                    _apply_tool_filter(run_agent, metrics.tools_available)
                 else:
                     metrics.tools_available.extend(raw_tools)
 
@@ -226,7 +233,7 @@ class ArgoxManager:
                     tool_args_runner = _tool_args_runner
 
                 instrumented = plugin.instrument(
-                    agent, metrics, tool_args_runner=tool_args_runner,
+                    run_agent, metrics, tool_args_runner=tool_args_runner,
                 )
                 with self._phase(metrics, "agent_exec"):
                     raw_result = await runner(instrumented, processed_prompt)
@@ -274,7 +281,6 @@ class ArgoxManager:
                         ARGOX_PROCESSOR_APPLIED,
                         list(dict.fromkeys(applied_processors)),
                     )
-                _restore_tools(agent, original_tools)
                 if metrics.end_time is None:
                     metrics.end_time = time.time()
                 record_run_duration(
@@ -437,17 +443,31 @@ def _extract_tool_names(agent: Any) -> list[str]:
     return names
 
 
-def _snapshot_tools(agent: Any) -> list | None:
-    """Return a shallow copy of agent.tools, or None if the attribute is absent."""
-    if not hasattr(agent, "tools"):
-        return None
-    return list(agent.tools)
+def _clone_agent(agent: Any) -> Any:
+    """Return a per-run shallow copy of ``agent`` for safe instrumentation.
 
+    Instrumentation (policy tool-filtering and the plugin's ``hooks``/``tools``
+    rewrite) must not mutate the shared agent: the same instance is routinely
+    driven by concurrent ``run()`` calls, where in-place mutation races and
+    cross-contaminates runs (#153). The clone owns its own ``tools`` list so a
+    run's filtering and tool-wrapping never reach the original or a sibling run.
 
-def _restore_tools(agent: Any, snapshot: list | None) -> None:
-    """Restore agent.tools to its pre-run state."""
-    if snapshot is not None:
-        agent.tools = snapshot
+    A shallow copy is sufficient: the manager and plugins only *rebind*
+    ``tools`` and ``hooks`` on the clone (never mutate shared nested objects in
+    place), and the plugin wraps tools onto copies of the originals. If the
+    agent cannot be copied, the original is returned so behaviour degrades to
+    the previous in-place semantics rather than failing the run.
+    """
+    try:
+        clone = copy.copy(agent)
+    except Exception:
+        return agent
+    if hasattr(agent, "tools"):
+        try:
+            clone.tools = list(agent.tools)
+        except Exception:
+            pass
+    return clone
 
 
 def _apply_tool_filter(agent: Any, allowed: list[str]) -> None:

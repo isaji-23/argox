@@ -278,7 +278,10 @@ class TestAgentInjection:
         assert run("hi") == "ok"
         assert len(seen) == 1
         assert isinstance(seen[0], _WrappingAgent)
-        assert seen[0].inner is agent
+        # The Manager instruments a per-run copy, so the wrapper wraps that copy,
+        # never the caller's shared agent (#153).
+        assert seen[0].inner is not agent
+        assert isinstance(seen[0].inner, _FakeAgent)
 
     def test_agent_param_with_async_function(self) -> None:
         import asyncio as _asyncio
@@ -303,19 +306,22 @@ class TestAgentInjection:
         def run(prompt: str) -> _FakeResult:
             return _FakeResult()
 
-        with pytest.warns(RuntimeWarning, match="instrumentation lost"):
+        with pytest.warns(RuntimeWarning, match="instrumentation is lost"):
             run("hi")
 
-    def test_no_warning_when_plugin_mutates_in_place(self) -> None:
+    def test_warns_without_agent_param_even_for_in_place_plugin(self) -> None:
+        """The Manager now instruments a per-run copy (#153), so even an
+        in-place-mutating plugin cannot reach the closure/global agent. A
+        function without an ``agent`` parameter therefore loses instrumentation
+        and must be warned, just like a wrapping plugin."""
         agent = _FakeAgent()
 
         @monitor(plugin=_RecordingPlugin(), agent=agent)
         def run(prompt: str) -> _FakeResult:
             return _FakeResult()
 
-        with warnings.catch_warnings():
-            warnings.simplefilter("error", RuntimeWarning)
-            run("hi")  # must not raise — no warning expected
+        with pytest.warns(RuntimeWarning, match="instrumentation is lost"):
+            run("hi")
 
     def test_agent_param_does_not_warn_even_when_wrapping(self) -> None:
         agent = _FakeAgent()

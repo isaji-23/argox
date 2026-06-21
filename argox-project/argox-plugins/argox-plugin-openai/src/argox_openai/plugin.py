@@ -86,18 +86,17 @@ class ArgoxOpenAIPlugin(ArgoxPlugin):
     """ArgoxPlugin implementation for the OpenAI Agents SDK.
 
     Note:
-        ``instrument`` mutates ``agent.hooks`` and does not restore it. The
-        Manager replaces the hooks on every ``run()`` call, so this is safe for
-        manager-driven workflows. Running the agent directly via ``Runner`` outside
-        the Manager after a managed run will still trigger the previous run's hooks.
+        ``instrument`` mutates ``agent.hooks`` and ``agent.tools`` in place and
+        does not restore them. The Manager calls ``instrument`` on a per-run
+        copy of the agent (``_clone_agent``), so the caller's shared instance is
+        never touched and concurrent runs never collide (#153). Instrumenting an
+        agent directly outside the Manager mutates that object in place.
 
-        ``agent.tools`` is always rewritten to a list of cloned
-        :class:`FunctionTool` instances whose ``on_invoke_tool`` is a shim that
-        opens a child span around the invocation (and, when a
-        ``tool_args_runner`` is supplied, runs the processor chain before
-        delegating). The originals are never mutated;
-        ``ArgoxManager._restore_tools`` puts the original list back after the run,
-        so subsequent direct ``Runner`` calls observe the untouched tools.
+        ``agent.tools`` is rewritten to a list of cloned :class:`FunctionTool`
+        instances whose ``on_invoke_tool`` is a shim that opens a child span
+        around the invocation (and, when a ``tool_args_runner`` is supplied, runs
+        the processor chain before delegating). The original tool objects are
+        never mutated.
     """
 
     @property

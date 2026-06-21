@@ -18,12 +18,14 @@ The decorator supports both sync and async target functions and locates the
 agent instance from the function's closure or module globals when it is not
 passed explicitly via the ``agent`` keyword.
 
-When the wrapped function declares an ``agent`` parameter the decorator
-injects the agent returned by ``plugin.instrument(...)`` into that slot, so
-plugins that wrap the agent (rather than mutating it in place) keep their
-instrumentation active during execution. When the function only takes the
-prompt and the plugin returns a wrapper distinct from the original agent, a
-``RuntimeWarning`` is emitted to flag that instrumentation will be lost.
+The Manager instruments a *per-run copy* of the agent (never the shared
+instance) so concurrent runs cannot race on its ``hooks``/``tools`` (#153).
+The instrumented object is therefore always distinct from the agent located in
+the closure/globals. When the wrapped function declares an ``agent`` parameter
+the decorator injects that instrumented copy into the slot, so the run uses the
+instrumented agent. When the function only takes the prompt, the instrumented
+copy cannot be threaded in and a ``RuntimeWarning`` is emitted to flag that
+instrumentation will be lost — declare an ``agent`` parameter to receive it.
 """
 
 from __future__ import annotations
@@ -210,12 +212,12 @@ def monitor(
                         bound_kwargs["prompt"] = processed_prompt
                     if instrumented_agent is not agent_obj:
                         warnings.warn(
-                            "Plugin returned an instrumented wrapper distinct "
-                            "from the original agent but the decorated "
-                            "function does not accept an `agent` parameter. "
-                            "The wrapper will be discarded and instrumentation "
-                            "lost. Declare an `agent` parameter so the "
-                            "decorator can inject it.",
+                            "The Manager instrumented a per-run copy of the "
+                            "agent, but the decorated function does not accept "
+                            "an `agent` parameter, so the instrumented copy "
+                            "cannot be injected and is discarded — "
+                            "instrumentation is lost. Declare an `agent` "
+                            "parameter so the decorator can inject it.",
                             RuntimeWarning,
                             stacklevel=2,
                         )
