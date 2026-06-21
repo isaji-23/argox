@@ -68,18 +68,21 @@ When the `@argox.monitor`-decorated function is called, `ArgoxManager`
    transformed. Ideal for PII redaction before the LLM sees it.
 2. **Policy · `check_input`** — `block` aborts the run with `PermissionError`.
 3. **Policy · `is_tool_allowed` (per tool)** — blocked tools are physically
-   removed from `agent.tools` before the agent starts; restored in `finally`.
-4. **Plugin · `instrument(agent, metrics)`** — plugin wraps the agent with
-   framework-specific hooks and wraps every `FunctionTool` so each call emits an
-   `execute_tool {name}` child span (PLUGIN-06), then the user's runner executes.
+   removed from the per-run agent copy before the agent starts.
+4. **Plugin · `instrument(agent, metrics)`** — the Manager passes a per-run copy
+   of the agent (`_clone_agent`, ADR-0010), never the caller's shared instance;
+   the plugin wraps that copy with framework-specific hooks and wraps every
+   `FunctionTool` so each call emits an `execute_tool {name}` child span
+   (PLUGIN-06), then the user's runner executes.
 5. **Plugin · `extract_tokens` / `extract_output`** — token usage and the LLM's
    textual answer are pulled from the runner result.
 6. **Processors · `output` phase** — final text passes through all processors
    before returning to the caller.
 7. **Policy · `check_output`** — last chance to block; violation re-raises
    `PermissionError`.
-8. **`finally` · seal & export** — restore `agent.tools`, stamp `end_time`, fill
-   the span with OTel GenAI semconv, invoke each `ExporterBase.export(metrics)`.
+8. **`finally` · seal & export** — stamp `end_time`, fill the span with OTel
+   GenAI semconv, invoke each `ExporterBase.export(metrics)`. No tool restore is
+   needed: the shared agent was never mutated, only its per-run copy.
 
 Phase timing is **opt-in**: construct `ArgoxManager(enable_phase_timings=True)`
 (default `False`) and each phase boundary is timed with `time.perf_counter()` and
@@ -113,9 +116,13 @@ overhead percentage is `(total_ms - phase_timings["agent_exec"]) / total_ms * 10
 - **Fail-open by default.** Processors registered with `strict=False` log
   errors as span events and pass the value through unchanged. `strict=True`
   aborts the run. `asyncio.CancelledError` always propagates.
-- **Tools filtered before start.** Blocked tools are removed from `agent.tools`
-  in preflight and restored in `finally` — the agent literally cannot call them
-  during that run.
+- **Tools filtered before start.** Blocked tools are removed from the per-run
+  agent copy in preflight — the agent literally cannot call them during that run,
+  and the caller's shared instance is left untouched (ADR-0010).
+- **Instrumentation never touches the shared agent.** Each run instruments its
+  own shallow copy of the agent, so the same `Agent` object can be driven by
+  concurrent runs without their tool wrappers or per-run `hooks`/`metrics` racing
+  (ADR-0010).
 - **Two possible exits.** Policy block (input, tool, or output) →
   `PermissionError`. Anything else → final string returned to the caller. No
   third state.
@@ -136,7 +143,10 @@ overhead percentage is `(total_ms - phase_timings["agent_exec"]) / total_ms * 10
    globals.
 4. **Locates the prompt** — first positional after `self`/`cls`, or `prompt=`.
 5. **Injects the instrumented agent** back into the wrapped function if its
-   signature declares an `agent` parameter.
+   signature declares an `agent` parameter. Because the Manager instruments a
+   per-run copy (ADR-0010), this injection is the only way the run reaches the
+   instrumented agent: a prompt-only function keeps using the original closure
+   agent and emits a `RuntimeWarning` that instrumentation is lost.
 6. **Supports sync and async** — clear error if a sync wrapper is invoked inside
    an already-running event loop.
 

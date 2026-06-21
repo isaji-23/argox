@@ -42,9 +42,10 @@ invocation:
 Because the shim is `async` and awaited by the SDK runner in the **same task** as
 the active `argox.agent.run` span, `start_as_current_span` parents the tool span
 automatically — no ContextVar handling (unlike the demo's old sync-body
-approach). Always-wrapping is safe because `ArgoxManager._snapshot_tools` /
-`_restore_tools` already snapshot `agent.tools` before `instrument()` and restore
-the original list in the run's `finally`, so the mutation never leaks past a run.
+approach). Always-wrapping is safe because the Manager instruments a per-run
+copy of the agent (`_clone_agent`), so the wrapping never reaches the caller's
+shared instance — see ADR-0010, which superseded the original `_snapshot_tools` /
+`_restore_tools` snapshot-and-restore mechanism this ADR first relied on.
 
 Span emission is thus the **plugin's** responsibility, not the tool author's: a
 monitored run emits one child span per function-tool call with zero user
