@@ -170,9 +170,12 @@ class ArgoxManager:
         # ``run()`` calls (singleton agent + concurrent requests); mutating its
         # ``tools``/``hooks`` in place races across runs, leaking tool wrappers
         # and recording one request's tool data into another's metrics. The copy
-        # gives each run its own ``tools`` list and ``hooks`` binding, so no
-        # restore step is needed and the shared agent is never touched (#153).
-        run_agent = _clone_agent(agent)
+        # gives each run its own ``tools`` list and ``hooks`` binding, so the
+        # shared agent is never touched (#153). If the agent cannot be copied,
+        # ``_prepare_run_agent`` falls back to instrumenting the shared instance
+        # and returns a restore callable that resets ``tools`` in the ``finally``,
+        # so even that path never leaks a wrapped tool list past the run.
+        run_agent, restore_run_agent = _prepare_run_agent(agent)
         applied_processors: list[str] = []
         tracer = trace.get_tracer("argox")
 
@@ -281,6 +284,10 @@ class ArgoxManager:
                         ARGOX_PROCESSOR_APPLIED,
                         list(dict.fromkeys(applied_processors)),
                     )
+                # No-op when the agent was cloned; restores tools only on the
+                # uncopyable-agent fallback path so the shared instance is left
+                # as the caller passed it.
+                restore_run_agent()
                 if metrics.end_time is None:
                     metrics.end_time = time.time()
                 record_run_duration(
@@ -443,31 +450,47 @@ def _extract_tool_names(agent: Any) -> list[str]:
     return names
 
 
-def _clone_agent(agent: Any) -> Any:
-    """Return a per-run shallow copy of ``agent`` for safe instrumentation.
+def _prepare_run_agent(agent: Any) -> tuple[Any, Callable[[], None]]:
+    """Return the agent to instrument for this run and a restore callable.
 
     Instrumentation (policy tool-filtering and the plugin's ``hooks``/``tools``
     rewrite) must not mutate the shared agent: the same instance is routinely
     driven by concurrent ``run()`` calls, where in-place mutation races and
-    cross-contaminates runs (#153). The clone owns its own ``tools`` list so a
-    run's filtering and tool-wrapping never reach the original or a sibling run.
+    cross-contaminates runs (#153). The normal path returns a per-run shallow
+    copy that owns its own ``tools`` list, so a run's filtering and tool-wrapping
+    never reach the original or a sibling run, and the returned restore callable
+    is a no-op.
 
     A shallow copy is sufficient: the manager and plugins only *rebind*
     ``tools`` and ``hooks`` on the clone (never mutate shared nested objects in
-    place), and the plugin wraps tools onto copies of the originals. If the
-    agent cannot be copied, the original is returned so behaviour degrades to
-    the previous in-place semantics rather than failing the run.
+    place), and the plugin wraps tools onto copies of the originals.
+
+    Fallback: if the agent cannot be copied, the shared instance is instrumented
+    in place and the restore callable snapshots and resets ``agent.tools`` so the
+    wrapped/filtered tool list does not leak past the run. This matches the
+    pre-clone snapshot-and-restore semantics — it does not protect a *concurrent*
+    run on the same uncopyable agent, but a single run never leaks.
     """
     try:
         clone = copy.copy(agent)
     except Exception:
-        return agent
+        snapshot = list(agent.tools) if hasattr(agent, "tools") else None
+
+        def _restore() -> None:
+            if snapshot is not None:
+                agent.tools = snapshot
+
+        return agent, _restore
     if hasattr(agent, "tools"):
         try:
             clone.tools = list(agent.tools)
         except Exception:
             pass
-    return clone
+    return clone, _noop
+
+
+def _noop() -> None:
+    """Restore callable used when the agent was cloned (nothing to restore)."""
 
 
 def _apply_tool_filter(agent: Any, allowed: list[str]) -> None:

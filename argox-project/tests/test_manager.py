@@ -458,6 +458,82 @@ class TestPolicy:
         assert agent.tools == ["safe", "dangerous"]
 
     @pytest.mark.asyncio
+    async def test_single_manager_concurrent_runs_share_agent_safely(self):
+        """One manager + one shared agent + concurrent runs: the singleton-agent
+        pattern from #153. Both runs see their own filtered copy and the shared
+        agent is left intact."""
+        import asyncio
+
+        class _AgentWithTools(_FakeAgent):
+            tools = ["safe", "dangerous"]
+
+        agent = _AgentWithTools()
+        seen: list[list] = []
+
+        async def spy_runner(ag: Any, prompt: str) -> _FakeResponse:
+            await asyncio.sleep(0)  # force interleaving across the two runs
+            seen.append(list(ag.tools))
+            await asyncio.sleep(0)
+            return _FakeResponse()
+
+        mgr = ArgoxManager(policy=_BlockToolPolicy("dangerous"))
+        mgr.register_plugin(_FakePlugin())
+
+        await asyncio.gather(
+            mgr.run(agent, "a", "fake", spy_runner, tools=["safe", "dangerous"]),
+            mgr.run(agent, "b", "fake", spy_runner, tools=["safe", "dangerous"]),
+        )
+
+        assert seen == [["safe"], ["safe"]]
+        assert agent.tools == ["safe", "dangerous"]
+
+    @pytest.mark.asyncio
+    async def test_uncopyable_agent_falls_back_and_restores_tools(self):
+        """When the agent cannot be copied, the run instruments it in place but
+        restores tools in finally, so no wrapped/filtered list leaks past the
+        run (the clone-failure fallback path)."""
+
+        class _UncopyableAgent(_FakeAgent):
+            tools = ["safe", "dangerous"]
+
+            def __copy__(self):
+                raise TypeError("not copyable")
+
+        agent = _UncopyableAgent()
+        seen: list[list] = []
+
+        async def spy_runner(ag: Any, prompt: str) -> _FakeResponse:
+            # Fallback instruments the shared instance directly.
+            assert ag is agent
+            seen.append(list(ag.tools))
+            return _FakeResponse()
+
+        mgr = ArgoxManager(policy=_BlockToolPolicy("dangerous"))
+        mgr.register_plugin(_FakePlugin())
+        await mgr.run(agent, "prompt", "fake", spy_runner, tools=["safe", "dangerous"])
+
+        # Runner saw the filtered list, but tools are restored afterwards.
+        assert seen[0] == ["safe"]
+        assert agent.tools == ["safe", "dangerous"]
+
+    @pytest.mark.asyncio
+    async def test_uncopyable_agent_restores_tools_on_error(self):
+        """The fallback restore must run even when the run raises."""
+
+        class _UncopyableAgent(_FakeAgent):
+            tools = ["safe", "dangerous"]
+
+            def __copy__(self):
+                raise TypeError("not copyable")
+
+        agent = _UncopyableAgent()
+        mgr = ArgoxManager(policy=_BlockInputPolicy())
+        mgr.register_plugin(_FakePlugin())
+        with pytest.raises(PermissionError):
+            await mgr.run(agent, "bad", "fake", _fake_runner, tools=["safe", "dangerous"])
+        assert agent.tools == ["safe", "dangerous"]
+
+    @pytest.mark.asyncio
     async def test_failing_exporter_does_not_mask_run_result(self):
         """A raising exporter must not propagate and must not suppress the return value."""
 

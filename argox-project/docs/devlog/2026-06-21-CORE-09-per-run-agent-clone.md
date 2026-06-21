@@ -12,10 +12,11 @@
   receives the copy. The `finally` no longer restores `agent.tools` because the
   shared instance is never touched.
   - Replaced the `_snapshot_tools` / `_restore_tools` helper pair with
-    `_clone_agent`, which `copy.copy`s the agent and gives the copy its own
-    `tools` list. If the agent cannot be copied, the original is returned so
-    behaviour degrades to the previous in-place semantics rather than failing the
-    run.
+    `_prepare_run_agent`, which `copy.copy`s the agent, gives the copy its own
+    `tools` list, and returns a restore callable (a no-op on the copy path). If
+    the agent cannot be copied it falls back to instrumenting the shared instance
+    and the restore callable snapshots/resets `agent.tools` in the `finally`, so
+    even that path never leaks a wrapped tool list past a single run.
   - `_extract_tool_names` is read from the copy.
 - `argox-plugins/argox-plugin-openai/src/argox_openai/plugin.py`: docstring only.
   The `instrument` note now states it mutates `hooks`/`tools` in place on the
@@ -61,6 +62,11 @@ trade-off with the `@monitor` closure pattern. Supersedes the
   (closure/global agent) now always warn that instrumentation is lost — this used
   to work for in-place-mutating plugins. The live demo already uses the
   injection pattern, so it is unaffected.
+- PR-review follow-up (#155): the original clone-failure fallback returned the
+  shared agent and dropped the restore, which would leave it filtered/wrapped
+  permanently. Hardened to snapshot/reset `tools` in the `finally`
+  (`test_uncopyable_agent_falls_back_and_restores_tools`,
+  `test_uncopyable_agent_restores_tools_on_error`).
 - Out of scope (lower-severity, same root cause): `_ArgoxAgentHooks.on_tool_end`
   pairs an end to a start by a reversed `name == tool.name and end is None` scan.
   Per-run cloning fixes cross-request mixing, but within a single run with

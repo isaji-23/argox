@@ -31,12 +31,19 @@ PLUGIN-06 (#152) widened the `tools` race by making wrapping unconditional
 `ArgoxManager.run` instruments a **per-run shallow copy** of the agent rather
 than the shared instance:
 
-- `_clone_agent(agent)` returns `copy.copy(agent)` and rebinds the copy's
-  `tools` to its own `list(agent.tools)`. A shallow copy is sufficient: the
-  Manager and plugins only *rebind* `tools`/`hooks` on the copy (they never
+- `_prepare_run_agent(agent)` returns `(copy.copy(agent), noop)` and rebinds the
+  copy's `tools` to its own `list(agent.tools)`. A shallow copy is sufficient:
+  the Manager and plugins only *rebind* `tools`/`hooks` on the copy (they never
   mutate shared nested objects in place), and the plugin wraps tools onto copies
-  of the originals. If the agent cannot be copied, the original is returned so
-  behaviour degrades to the previous in-place semantics rather than failing.
+  of the originals.
+- **Uncopyable-agent fallback.** If `copy.copy` raises, the Manager instruments
+  the shared instance in place and `_prepare_run_agent` returns a restore
+  callable that snapshots and resets `agent.tools` in the run's `finally`. This
+  reproduces the pre-clone snapshot-and-restore semantics exactly: a single run
+  never leaks a wrapped/filtered tool list. It does **not** make a *concurrent*
+  run on the same uncopyable agent safe — that case is unreachable for the
+  copyable agents the SDK targets, and failing the run instead was rejected as
+  more disruptive than degrading to the prior behaviour.
 - Tool filtering (`_apply_tool_filter`), plugin instrumentation
   (`plugin.instrument`), and the runner all operate on the copy. The shared
   agent is never mutated, so the `finally` no longer restores anything and
