@@ -171,7 +171,12 @@ run-summary ingest path (COL-11) accepts full run content the spans omit:
 each as an immutable blob (`runs/{YYYY-MM-DD}/{run_id}.json`) and projects a
 queryable summary into a DuckDB `runs` table whose indexed `trace_id` joins a
 span back to its run (see ADR-0007; the SDK exporter that posts these is the
-EXP-09 follow-up). Ingest-time enrichment (COL-07) normalises
+EXP-09 follow-up). The `runs.cost_usd` column, left NULL at ingest, is
+backfilled (COL-17) via a separate `UPDATE` from the run's `model` and token
+totals — falling back to the model its spans carry (`gen_ai.request.model`)
+joined by `trace_id` — priced against a TTL-cached LiteLLM map with the bundled
+YAML table as offline fallback (unknown models log a warning and stay NULL).
+Ingest-time enrichment (COL-07) normalises
 variant GenAI attribute shapes (legacy `gen_ai.usage.prompt_tokens`,
 OpenInference `llm.*`) onto the canonical keys, computes per-span `run_cost`
 from a YAML pricing table (unknown models log a warning and skip), and tags
