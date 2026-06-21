@@ -16,3 +16,4 @@ decision future contributors should not silently re-open.
 | ADR-0007 | [Run-summary ingest as a parallel path, separate from spans](ADR-0007-run-summary-ingest-route-b.md) | accepted |
 | ADR-0008 | [Run-cost pricing source and model resolution](ADR-0008-run-cost-pricing-source-and-model-resolution.md) | accepted |
 | ADR-0009 | [Plugin owns tool-call spans via unconditional FunctionTool wrapping](ADR-0009-plugin-owns-tool-call-spans.md) | accepted |
+| ADR-0010 | [Instrument a per-run copy of the agent, not the shared instance](ADR-0010-per-run-agent-copy.md) | accepted |
