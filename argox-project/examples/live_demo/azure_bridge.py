@@ -54,7 +54,6 @@ from agents import (
 )
 from dotenv import load_dotenv
 from openai import AsyncOpenAI
-from opentelemetry import context as otel_context
 from opentelemetry import trace
 from opentelemetry.trace import Status, StatusCode
 
@@ -71,24 +70,14 @@ from argox_openai import ArgoxOpenAIPlugin
 _EXAMPLES_DIR = Path(__file__).resolve().parent.parent
 _POLICY_PATH = _EXAMPLES_DIR / "policies" / "demo_policy.yaml"
 
-# Tracer used to open a child span per tool call. get_tracer returns a proxy
-# that resolves the global provider lazily, so it is safe to build at import
-# time (before init_telemetry installs the provider in the bridge __init__).
-# Each tool runs inside Runner.run while the argox.agent.run span is current,
-# so these spans attach to it as children and the dashboard waterfall shows the
-# real tool-call breakdown instead of a single root span.
+# Tracer used to emit a child span per *blocked* tool. Executed tools get their
+# spans from ArgoxOpenAIPlugin (PLUGIN-06); blocked tools are stripped before the
+# run and never invoked, so the demo still renders them here. get_tracer returns
+# a proxy that resolves the global provider lazily, so it is safe to build at
+# import time (before init_telemetry installs the provider in __init__). The
+# blocked-span loop runs while the argox.agent.run span is current, so the spans
+# attach to it as children using the ambient context.
 _tracer = trace.get_tracer("argox-azure-demo")
-
-# Holds the OTel context captured at the start of each run (the context in which
-# the argox.agent.run span is current). Tools read it to parent their child span
-# explicitly, so the tool span lands in the same trace even if the agents SDK
-# runs the tool in a worker thread or a task that lost the ambient context.
-# A ContextVar (not a global) keeps this correct under concurrent requests:
-# each run/task — and each thread spawned via asyncio.to_thread, which copies
-# the context — sees its own value.
-_run_ctx_var: contextvars.ContextVar = contextvars.ContextVar(
-    "argox_run_ctx", default=None
-)
 
 # Per-run list of tools the policy blocked, recorded by _RecordingPolicy as the
 # SDK evaluates each tool. A ContextVar (reset at the start of every ask) keeps
@@ -110,38 +99,30 @@ _DEFAULT_PROMPT = (
 
 @function_tool
 def get_weather(city: str) -> str:
-    """Return the current weather for a city (fake data)."""
-    with _tracer.start_as_current_span(
-        "tool.get_weather", context=_run_ctx_var.get()
-    ) as span:
-        span.set_attribute("tool.name", "get_weather")
-        span.set_attribute("tool.arg.city", city)
-        print(f"[tool:get_weather] received: city={city!r}")
-        # Roughly half the time, simulate a slow upstream so the dashboard
-        # waterfall shows a visibly long bar for this tool span. Synchronous
-        # sleep is fine: the agents SDK runs sync tools in a worker thread.
-        if random.random() < 0.5:
-            delay = random.uniform(1.5, 2.5)
-            span.set_attribute("tool.slow", True)
-            time.sleep(delay)
-        result = f"It is sunny and 24C in {city}."
-        span.set_attribute("tool.result", result)
-        return result
+    """Return the current weather for a city (fake data).
+
+    No manual span here: ``ArgoxOpenAIPlugin`` (PLUGIN-06) wraps every
+    FunctionTool and emits an ``execute_tool get_weather`` child span under the
+    run span automatically, so the dashboard waterfall already shows this call.
+    """
+    print(f"[tool:get_weather] received: city={city!r}")
+    # Roughly half the time, simulate a slow upstream so the dashboard waterfall
+    # shows a visibly long bar for this tool's span. Synchronous sleep is fine:
+    # the agents SDK runs sync tools in a worker thread.
+    if random.random() < 0.5:
+        time.sleep(random.uniform(1.5, 2.5))
+    return f"It is sunny and 24C in {city}."
 
 
 @function_tool
 def log_user_activity(email: str, action: str) -> str:
-    """Persist a user activity record (fake sink — prints what it received)."""
-    with _tracer.start_as_current_span(
-        "tool.log_user_activity", context=_run_ctx_var.get()
-    ) as span:
-        span.set_attribute("tool.name", "log_user_activity")
-        span.set_attribute("tool.arg.email", email)
-        span.set_attribute("tool.arg.action", action)
-        print(f"[tool:log_user_activity] received: email={email!r} action={action!r}")
-        result = f"logged action={action!r} for {email}"
-        span.set_attribute("tool.result", result)
-        return result
+    """Persist a user activity record (fake sink — prints what it received).
+
+    The plugin emits the tool-call span automatically (PLUGIN-06); the raw email
+    argument is intentionally not placed on the span (PII).
+    """
+    print(f"[tool:log_user_activity] received: email={email!r} action={action!r}")
+    return f"logged action={action!r} for {email}"
 
 
 @function_tool
@@ -276,9 +257,6 @@ class AzureAgentBridge:
             # The trace_id is captured so the /v1/runs summary joins back.
             span = trace.get_current_span()
             captured["trace_id"] = format(span.get_span_context().trace_id, "032x")
-            # Capture this context so the tools parent their child spans to this
-            # exact run span (see _run_ctx_var).
-            _run_ctx_var.set(otel_context.get_current())
             span.set_attribute("argox.agent.name", agent.name)
             span.set_attribute("argox.agent.version", "1.0.0")
             if model:
@@ -291,9 +269,7 @@ class AzureAgentBridge:
             # decision the Collector promotes into the queryable policy_decision
             # column, so the dashboard waterfall shows it as a red, blocked row.
             for blocked in _blocked_tools_var.get() or []:
-                with _tracer.start_as_current_span(
-                    f"tool.{blocked['name']}", context=_run_ctx_var.get()
-                ) as bspan:
+                with _tracer.start_as_current_span(f"tool.{blocked['name']}") as bspan:
                     bspan.set_attribute("tool.name", blocked["name"])
                     bspan.set_attribute("tool.blocked", True)
                     bspan.set_attribute("argox.policy.decision", "block")

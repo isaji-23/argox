@@ -19,11 +19,13 @@ from argox_openai.plugin import (
     _resolve_request_model,
     _wrap_function_tool,
 )
+from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
 )
+from opentelemetry.trace import StatusCode
 
 
 def _make_agent() -> Agent:
@@ -440,12 +442,16 @@ class TestWrapFunctionTool:
 
 
 class TestInstrumentWrapsTools:
-    def test_instrument_skips_wrapping_when_runner_is_none(self):
+    def test_instrument_wraps_function_tools_even_without_runner(self):
+        # PLUGIN-06: wrapping is unconditional so every tool call emits a span,
+        # independent of whether processors (and thus a runner) are present.
         agent = _make_agent()
         object.__setattr__(agent, "tools", [_echo_tool])
         plugin = ArgoxOpenAIPlugin()
         plugin.instrument(agent, AgentRunMetrics(agent_name="t"))
-        assert agent.tools == [_echo_tool]  # untouched, same instance
+        assert agent.tools[0] is not _echo_tool  # wrapped copy
+        assert isinstance(agent.tools[0], FunctionTool)
+        assert agent.tools[0].name == _echo_tool.name
 
     def test_instrument_wraps_function_tools_when_runner_is_provided(self):
         agent = _make_agent()
@@ -563,17 +569,18 @@ class TestProcessorChainReachesTools:
         assert sink == []
 
     @pytest.mark.asyncio
-    async def test_no_processors_means_no_tool_wrapping(self):
+    async def test_no_processors_still_wraps_but_forwards_raw(self):
         """When no processors are registered the Manager passes None as the
-        runner, the OpenAI plugin must not wrap any FunctionTool, and the
-        SDK observes the original raw JSON byte-for-byte."""
+        runner. PLUGIN-06: the OpenAI plugin still wraps each FunctionTool (so a
+        span is emitted) but, with no runner, forwards the raw JSON byte-for-byte
+        with no parse/serialize round-trip."""
         sink: list[str] = []
         recording_tool = _make_recording_function_tool("record", sink)
 
         async def fake_runner(agent: Any, prompt: str):
             tool = next(t for t in agent.tools if t.name == "record")
-            # Tool instance must be the unmodified original, not a wrapped copy.
-            assert tool is recording_tool
+            # Wrapped copy, not the original — wrapping is unconditional.
+            assert tool is not recording_tool
             ctx = SimpleNamespace(tool_name=tool.name)
             await tool.on_invoke_tool(ctx, '{"text":"hi"}')
             return _make_run_result("done", _make_usage(1, 1))
@@ -586,6 +593,8 @@ class TestProcessorChainReachesTools:
         await mgr.run(agent, "hi", "openai", fake_runner)
         # Raw JSON reached the tool unchanged — no parse/serialize round-trip.
         assert sink == ['{"text":"hi"}']
+        # agent.tools restored to the original after the run.
+        assert agent.tools == [recording_tool]
 
     @pytest.mark.asyncio
     async def test_fail_open_tool_args_lets_original_args_reach_tool(self):
@@ -612,3 +621,153 @@ class TestProcessorChainReachesTools:
         await mgr.run(agent, "hi", "openai", fake_runner)
         # Original args (pre-processor) reached the recording tool.
         assert sink == [json.dumps({"text": "x"})]
+
+
+# ---------------------------------------------------------------------------
+# PLUGIN-06 — per-tool-call child spans
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def span_exporter() -> InMemorySpanExporter:
+    """Install a global SDK TracerProvider (once) and return a fresh exporter.
+
+    The plugin emits tool spans through ``trace.get_tracer("argox")``, which
+    resolves to the global provider, so the test installs an SDK provider
+    globally and attaches its own in-memory exporter for assertions.
+    """
+    provider = trace.get_tracer_provider()
+    if not isinstance(provider, TracerProvider):
+        provider = TracerProvider()
+        trace.set_tracer_provider(provider)
+    exporter = InMemorySpanExporter()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    return exporter
+
+
+def _tool_spans(exporter: InMemorySpanExporter) -> list[Any]:
+    return [s for s in exporter.get_finished_spans() if s.name.startswith("execute_tool ")]
+
+
+def _run_span(exporter: InMemorySpanExporter) -> Any:
+    return next(s for s in exporter.get_finished_spans() if s.name == "argox.agent.run")
+
+
+class TestToolCallSpans:
+    @pytest.mark.asyncio
+    async def test_one_child_span_per_tool_call(self, span_exporter):
+        sink: list[str] = []
+        recording_tool = _make_recording_function_tool("record", sink)
+
+        async def fake_runner(agent: Any, prompt: str):
+            tool = next(t for t in agent.tools if t.name == "record")
+            ctx = SimpleNamespace(tool_name=tool.name)
+            for _ in range(3):
+                await tool.on_invoke_tool(ctx, '{"text":"hi"}')
+            return _make_run_result("done", _make_usage(1, 1))
+
+        mgr = ArgoxManager()
+        mgr.register_plugin(ArgoxOpenAIPlugin())
+        agent = _make_agent()
+        object.__setattr__(agent, "tools", [recording_tool])
+        await mgr.run(agent, "hi", "openai", fake_runner)
+
+        spans = _tool_spans(span_exporter)
+        assert len(spans) == 3
+        for span in spans:
+            assert span.name == "execute_tool record"
+            assert span.attributes["gen_ai.operation.name"] == "execute_tool"
+            assert span.attributes["gen_ai.tool.name"] == "record"
+
+    @pytest.mark.asyncio
+    async def test_tool_span_is_child_of_run_span(self, span_exporter):
+        recording_tool = _make_recording_function_tool("record", [])
+
+        async def fake_runner(agent: Any, prompt: str):
+            tool = next(t for t in agent.tools if t.name == "record")
+            ctx = SimpleNamespace(tool_name=tool.name)
+            await tool.on_invoke_tool(ctx, '{"text":"hi"}')
+            return _make_run_result("done", _make_usage(1, 1))
+
+        mgr = ArgoxManager()
+        mgr.register_plugin(ArgoxOpenAIPlugin())
+        agent = _make_agent()
+        object.__setattr__(agent, "tools", [recording_tool])
+        await mgr.run(agent, "hi", "openai", fake_runner)
+
+        run_span = _run_span(span_exporter)
+        tool_span = _tool_spans(span_exporter)[0]
+        assert tool_span.parent is not None
+        assert tool_span.parent.span_id == run_span.context.span_id
+        assert tool_span.context.trace_id == run_span.context.trace_id
+
+    @pytest.mark.asyncio
+    async def test_failing_tool_records_exception_and_error_status(self, span_exporter):
+        async def _boom(ctx: Any, raw_input: str) -> str:
+            raise ValueError("tool exploded")
+
+        failing_tool = FunctionTool(
+            name="boom",
+            description="always fails",
+            params_json_schema={
+                "type": "object", "properties": {},
+                "required": [], "additionalProperties": False,
+            },
+            on_invoke_tool=_boom,
+            strict_json_schema=False,
+        )
+
+        async def fake_runner(agent: Any, prompt: str):
+            tool = next(t for t in agent.tools if t.name == "boom")
+            ctx = SimpleNamespace(tool_name=tool.name)
+            with pytest.raises(ValueError, match="tool exploded"):
+                await tool.on_invoke_tool(ctx, "{}")
+            return _make_run_result("done", _make_usage(1, 1))
+
+        mgr = ArgoxManager()
+        mgr.register_plugin(ArgoxOpenAIPlugin())
+        agent = _make_agent()
+        object.__setattr__(agent, "tools", [failing_tool])
+        await mgr.run(agent, "hi", "openai", fake_runner)
+
+        tool_span = _tool_spans(span_exporter)[0]
+        assert tool_span.status.status_code == StatusCode.ERROR
+        assert any(e.name == "exception" for e in tool_span.events)
+
+    @pytest.mark.asyncio
+    async def test_span_emitted_without_any_processors(self, span_exporter):
+        # Acceptance: wrapping (and thus span emission) happens even with no
+        # processors registered, i.e. when the Manager passes runner=None.
+        recording_tool = _make_recording_function_tool("record", [])
+
+        async def fake_runner(agent: Any, prompt: str):
+            tool = next(t for t in agent.tools if t.name == "record")
+            ctx = SimpleNamespace(tool_name=tool.name)
+            await tool.on_invoke_tool(ctx, '{"text":"hi"}')
+            return _make_run_result("done", _make_usage(1, 1))
+
+        mgr = ArgoxManager()
+        mgr.register_plugin(ArgoxOpenAIPlugin())  # no processors
+        agent = _make_agent()
+        object.__setattr__(agent, "tools", [recording_tool])
+        await mgr.run(agent, "hi", "openai", fake_runner)
+
+        assert len(_tool_spans(span_exporter)) == 1
+
+    @pytest.mark.asyncio
+    async def test_wrapping_does_not_leak_after_run(self, span_exporter):
+        recording_tool = _make_recording_function_tool("record", [])
+
+        async def fake_runner(agent: Any, prompt: str):
+            tool = next(t for t in agent.tools if t.name == "record")
+            ctx = SimpleNamespace(tool_name=tool.name)
+            await tool.on_invoke_tool(ctx, '{"text":"hi"}')
+            return _make_run_result("done", _make_usage(1, 1))
+
+        mgr = ArgoxManager()
+        mgr.register_plugin(ArgoxOpenAIPlugin())
+        agent = _make_agent()
+        object.__setattr__(agent, "tools", [recording_tool])
+        await mgr.run(agent, "hi", "openai", fake_runner)
+        # agent.tools is identical (by value) before and after the run.
+        assert agent.tools == [recording_tool]
