@@ -180,17 +180,25 @@ def _backfill_cost(
 ) -> None:
     """Price a run's cost and write it (COL-17), never raising.
 
-    Resolves the model from the run record first, then from its spans via
-    ``trace_id`` (PLUGIN-05). A client-supplied ``cost_usd`` is left as-is.
+    Tries the run's self-reported ``model`` first, then falls back to the model
+    its spans carry via ``trace_id`` (PLUGIN-05). The fallback runs whenever the
+    self-reported model fails to price — absent OR unknown to the table — so a
+    typo'd or unpriced ``model`` does not block a span model that would price.
+    A client-supplied ``cost_usd`` is left as-is.
     """
     if pricing is None or record.cost_usd is not None:
         return
     try:
-        model = record.model or _model_from_trace(record, index)
-        if not model:
+        if record.model:
+            cost = enrich_run_cost(record, pricing)
+            if cost is not None:
+                index.set_run_cost(record.run_id, cost)
+                return
+        # Self-reported model absent or unpriced: fall back to the span model.
+        span_model = _model_from_trace(record, index)
+        if not span_model or span_model == record.model:
             return
-        priced = record if record.model else dataclasses.replace(record, model=model)
-        cost = enrich_run_cost(priced, pricing)
+        cost = enrich_run_cost(dataclasses.replace(record, model=span_model), pricing)
         if cost is not None:
             index.set_run_cost(record.run_id, cost)
     except Exception:  # noqa: BLE001 - cost is best-effort; the run is already stored

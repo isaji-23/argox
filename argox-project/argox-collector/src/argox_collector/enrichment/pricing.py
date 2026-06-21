@@ -17,6 +17,7 @@ import urllib.request
 from functools import lru_cache
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlparse
 
 import structlog
 import yaml
@@ -41,6 +42,14 @@ LITELLM_PRICING_URL = (
 
 # Network timeout (seconds) for the refresh-time fetch.
 _FETCH_TIMEOUT_SECONDS = 15.0
+
+# Upper bound on the fetched payload (bytes). The LiteLLM map is ~1-2 MB; this
+# caps memory so a misconfigured or hostile URL cannot stream unbounded data.
+_FETCH_MAX_BYTES = 32 * 1024 * 1024
+
+# Only plain HTTP(S) is fetched. Blocks file://, ftp:// and similar schemes
+# urllib would otherwise follow from an attacker-influenced --url.
+_ALLOWED_FETCH_SCHEMES = ("http", "https")
 
 
 def load_pricing(path: Optional[Path] = None) -> PricingTable:
@@ -111,10 +120,18 @@ def fetch_remote_pricing(
         A model-name (lowercased) to ``{"input", "output"}`` USD-per-1k table.
 
     Raises:
-        OSError, ValueError: On a network failure or unparseable payload.
+        ValueError: On a non-HTTP(S) URL, an oversized payload, or an
+            unparseable / non-object body.
+        OSError: On a network failure.
     """
+    if urlparse(url).scheme not in _ALLOWED_FETCH_SCHEMES:
+        raise ValueError(f"refusing non-HTTP(S) pricing URL: {url!r}")
     with urllib.request.urlopen(url, timeout=timeout) as response:  # noqa: S310
-        raw = json.loads(response.read().decode("utf-8"))
+        # Read one byte past the cap to detect (and reject) an oversized body.
+        body = response.read(_FETCH_MAX_BYTES + 1)
+    if len(body) > _FETCH_MAX_BYTES:
+        raise ValueError(f"pricing payload exceeds {_FETCH_MAX_BYTES} bytes")
+    raw = json.loads(body.decode("utf-8"))
     if not isinstance(raw, dict):
         raise ValueError("remote pricing payload is not a JSON object")
 

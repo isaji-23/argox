@@ -67,6 +67,12 @@ _RUN_COLUMNS = (
 # Pull the model id from a trace's spans for the run-cost fallback (COL-17).
 # The attribute keys contain dots, so each is a double-quoted JSON path
 # component rather than a nested lookup. Request model wins over response.
+#
+# Limitation: MAX() picks the lexicographically largest model, not "the" model.
+# For a single-model run (the common case) that is the only model, so it is
+# correct. For a genuinely multi-model run there is no single right answer here
+# — pricing the run's token totals at one model's rate is approximate; exact
+# per-call cost would need per-span pricing summed over the trace (see ADR-0008).
 _TRACE_MODEL_SQL = (
     "SELECT COALESCE("
     f"  MAX(json_extract_string(attributes, '$.\"{semconv.GEN_AI_REQUEST_MODEL}\"')),"

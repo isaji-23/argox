@@ -305,6 +305,20 @@ def test_cost_falls_back_to_span_model(client: TestClient) -> None:
     assert record.cost_usd == pytest.approx(0.0075)
 
 
+def test_cost_unpriced_self_model_falls_back_to_span(client: TestClient) -> None:
+    """A self-reported model unknown to the table still prices from the span."""
+    _ingest_span(client, TRACE_ID_HEX, model="gpt-4o")
+    resp = client.post(
+        "/v1/runs",
+        json=_sample_run("run-typo", trace_id=TRACE_ID_HEX, model="gpt-4o-typo"),
+    )
+    assert resp.status_code == 202
+    record = _fetch_run(client, "run-typo")
+    # Self-reported model is kept as-is, but cost came from the span model.
+    assert record.model == "gpt-4o-typo"
+    assert record.cost_usd == pytest.approx(0.0075)
+
+
 def test_cost_null_when_no_model_anywhere(client: TestClient) -> None:
     """No run model and no span model -> cost stays NULL (no crash)."""
     _ingest_span(client, TRACE_ID_HEX)  # span carries no model

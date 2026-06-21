@@ -6,6 +6,7 @@ import io
 import json
 from pathlib import Path
 
+import pytest
 from argox_collector import __main__ as cli
 from argox_collector.enrichment import pricing as pricing_mod
 from argox_collector.enrichment.pricing import (
@@ -45,6 +46,22 @@ def test_fetch_remote_pricing_normalises_per_token_to_per_1k(monkeypatch) -> Non
     assert table["gpt-4o"]["input"] == 0.0025
     assert table["gpt-4o"]["output"] == 0.01
     assert "sample_spec" not in table
+
+
+def test_fetch_remote_pricing_rejects_non_http_scheme() -> None:
+    with pytest.raises(ValueError, match="non-HTTP"):
+        fetch_remote_pricing("file:///etc/passwd")
+
+
+def test_fetch_remote_pricing_rejects_oversized_payload(monkeypatch) -> None:
+    big = b"x" * (pricing_mod._FETCH_MAX_BYTES + 10)
+
+    def _open(url, timeout):  # noqa: ANN001 - test stub
+        return io.BytesIO(big)
+
+    monkeypatch.setattr(pricing_mod.urllib.request, "urlopen", _open)
+    with pytest.raises(ValueError, match="exceeds"):
+        fetch_remote_pricing("https://example.test/big.json")
 
 
 def test_filter_pricing_keeps_only_matching_prefixes() -> None:
