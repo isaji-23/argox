@@ -70,7 +70,8 @@ When the `@argox.monitor`-decorated function is called, `ArgoxManager`
 3. **Policy · `is_tool_allowed` (per tool)** — blocked tools are physically
    removed from `agent.tools` before the agent starts; restored in `finally`.
 4. **Plugin · `instrument(agent, metrics)`** — plugin wraps the agent with
-   framework-specific hooks, then the user's runner executes.
+   framework-specific hooks and wraps every `FunctionTool` so each call emits an
+   `execute_tool {name}` child span (PLUGIN-06), then the user's runner executes.
 5. **Plugin · `extract_tokens` / `extract_output`** — token usage and the LLM's
    textual answer are pulled from the runner result.
 6. **Processors · `output` phase** — final text passes through all processors
@@ -92,10 +93,15 @@ overhead percentage is `(total_ms - phase_timings["agent_exec"]) / total_ms * 10
 
 ## 4. Key behaviours
 
-- **One span per run.** Token totals, policy decisions, blocked-tool lists and
-  processor events attach to `argox.agent.run` via OTel GenAI semantic
-  conventions (`gen_ai.usage.input_tokens`, etc.). Any compatible
-  `SpanExporter` can consume it. The root span also carries `argox.agent.name`
+- **One root span per run, one child span per tool call.** Token totals, policy
+  decisions, blocked-tool lists and processor events attach to the
+  `argox.agent.run` root via OTel GenAI semantic conventions
+  (`gen_ai.usage.input_tokens`, etc.). `ArgoxOpenAIPlugin` additionally emits one
+  `execute_tool {name}` child span per function-tool call
+  (`gen_ai.operation.name=execute_tool`, `gen_ai.tool.name`; ERROR status +
+  recorded exception on failure), so the dashboard waterfall shows the tool
+  breakdown with no user instrumentation (PLUGIN-06, ADR-0009). Any compatible
+  `SpanExporter` can consume them. The root span also carries `argox.agent.name`
   (set early from the run's agent name) and `argox.run.success` (set in
   `finally` from the run outcome, so a policy block records `false`); the
   Collector promotes both into queryable columns. The SDK emits them itself —
