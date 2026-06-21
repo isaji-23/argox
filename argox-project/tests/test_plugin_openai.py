@@ -9,13 +9,21 @@ from typing import Any
 import pytest
 from agents import Agent, function_tool
 from agents.tool import FunctionTool
-
 from argox.core.context import RunContext
 from argox.core.manager import ArgoxManager
 from argox.core.state import AgentRunMetrics
 from argox.interfaces.processor import ArgoxProcessor
 from argox_openai import ArgoxOpenAIPlugin
-from argox_openai.plugin import _ArgoxAgentHooks, _wrap_function_tool
+from argox_openai.plugin import (
+    _ArgoxAgentHooks,
+    _resolve_request_model,
+    _wrap_function_tool,
+)
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+    InMemorySpanExporter,
+)
 
 
 def _make_agent() -> Agent:
@@ -66,6 +74,52 @@ class TestInstrument:
         object.__setattr__(agent, "hooks", object())
         ArgoxOpenAIPlugin().instrument(agent, AgentRunMetrics(agent_name="t"))
         assert isinstance(agent.hooks, _ArgoxAgentHooks)
+
+
+# ---------------------------------------------------------------------------
+# PLUGIN-05 — gen_ai.request.model span attribute
+# ---------------------------------------------------------------------------
+
+
+class TestResolveRequestModel:
+    def test_string_is_returned_directly(self):
+        assert _resolve_request_model("gpt-4o-mini") == "gpt-4o-mini"
+
+    def test_none_returns_none(self):
+        assert _resolve_request_model(None) is None
+
+    def test_empty_string_returns_none(self):
+        assert _resolve_request_model("") is None
+
+    def test_model_object_read_via_model_attribute(self):
+        assert _resolve_request_model(SimpleNamespace(model="gpt-4o")) == "gpt-4o"
+
+    def test_model_object_without_id_returns_none(self):
+        assert _resolve_request_model(SimpleNamespace(other="x")) is None
+
+
+class TestRequestModelSpanAttribute:
+    """``instrument`` tags the active run span with ``gen_ai.request.model``."""
+
+    @staticmethod
+    def _instrument_within_span(agent: Agent) -> Any:
+        exporter = InMemorySpanExporter()
+        provider = TracerProvider()
+        provider.add_span_processor(SimpleSpanProcessor(exporter))
+        tracer = provider.get_tracer("test")
+        with tracer.start_as_current_span("argox.agent.run"):
+            ArgoxOpenAIPlugin().instrument(agent, AgentRunMetrics(agent_name="t"))
+        return exporter.get_finished_spans()[0]
+
+    def test_sets_request_model_from_agent_model(self):
+        span = self._instrument_within_span(_make_agent())
+        assert span.attributes["gen_ai.request.model"] == "gpt-4o-mini"
+
+    def test_attribute_absent_when_model_unresolvable(self):
+        # No explicit model => Agent.model is None => attribute left unset.
+        agent = Agent(name="no-model", instructions="test", model=None)
+        span = self._instrument_within_span(agent)
+        assert "gen_ai.request.model" not in span.attributes
 
 
 # ---------------------------------------------------------------------------

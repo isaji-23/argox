@@ -12,6 +12,7 @@ license = { text = "MIT" }
 dependencies = [
     "argox-core>=0.1.0",
     "openai-agents>=0.0.7",
+    "opentelemetry-api>=1.20.0",
 ]
 
 [project.optional-dependencies]

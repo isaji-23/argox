@@ -99,7 +99,10 @@ overhead percentage is `(total_ms - phase_timings["agent_exec"]) / total_ms * 10
   (set early from the run's agent name) and `argox.run.success` (set in
   `finally` from the run outcome, so a policy block records `false`); the
   Collector promotes both into queryable columns. The SDK emits them itself —
-  no manual attribute setting in the runner is needed.
+  no manual attribute setting in the runner is needed. `ArgoxOpenAIPlugin` also
+  tags the same span with `gen_ai.request.model` from `Agent.model` (PLUGIN-05),
+  which the Collector's cost enricher needs to compute `run_cost`; if the agent
+  has no resolvable model the attribute is left unset.
 - **Fail-open by default.** Processors registered with `strict=False` log
   errors as span events and pass the value through unchanged. `strict=True`
   aborts the run. `asyncio.CancelledError` always propagates.

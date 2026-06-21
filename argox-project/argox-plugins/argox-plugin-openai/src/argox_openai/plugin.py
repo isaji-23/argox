@@ -7,7 +7,9 @@ The plugin bridges three responsibilities to the SDK:
   and, when the Manager supplies a ``tool_args_runner``, wraps every
   :class:`agents.tool.FunctionTool` in ``agent.tools`` so the registered
   ``ArgoxProcessor.process_tool_args`` chain runs against each invocation before the
-  framework executes the underlying function.
+  framework executes the underlying function. It also tags the active
+  ``argox.agent.run`` span with ``gen_ai.request.model`` from ``Agent.model`` so the
+  Collector can price the run.
 - ``extract_tokens`` walks ``RunResult.raw_responses`` and appends one
   :class:`~argox.core.state.ApiCallRecord` per LLM call observed.
 - ``extract_output`` returns ``RunResult.final_output`` as a plain string.
@@ -28,9 +30,13 @@ from typing import Any
 from agents import Agent
 from agents.lifecycle import AgentHooks, RunContextWrapper
 from agents.tool import FunctionTool
-
 from argox.core.state import AgentRunMetrics, ApiCallRecord, ToolCallRecord
 from argox.interfaces.plugin import ArgoxPlugin, ToolArgsRunner
+from opentelemetry import trace
+
+# Canonical OTel GenAI key the Collector's cost enricher (COL-07) matches against
+# ``pricing.yaml``. Setting it on the run span is what populates ``spans.run_cost``.
+_GEN_AI_REQUEST_MODEL = "gen_ai.request.model"
 
 
 class _ArgoxAgentHooks(AgentHooks):
@@ -99,8 +105,25 @@ class ArgoxOpenAIPlugin(ArgoxPlugin):
         arguments before invoking the original. Non-``FunctionTool`` entries
         (hosted tools, file search, computer use, etc.) are passed through
         unchanged because their execution happens server-side.
+
+        The agent's configured model (``Agent.model``) is also written to
+        ``gen_ai.request.model`` on the active ``argox.agent.run`` span so the
+        Collector can price the run. ``Agent.model`` may be a plain model id
+        string or a ``Model`` instance; the latter is read via its ``model``
+        attribute. When no model is resolvable (the agent relies on the SDK
+        default), the attribute is left unset.
+
+        Note:
+            Azure deployment names often differ from the priced model id. The
+            plugin reports whatever the agent exposes; mapping a deployment name
+            to a ``pricing.yaml`` key (or ``ARGOX_PRICING_TABLE_PATH``) stays the
+            operator's responsibility.
         """
         object.__setattr__(target, "hooks", _ArgoxAgentHooks(metrics))
+
+        model = _resolve_request_model(getattr(target, "model", None))
+        if model:
+            trace.get_current_span().set_attribute(_GEN_AI_REQUEST_MODEL, model)
 
         if tool_args_runner is None:
             return target
@@ -135,6 +158,22 @@ class ArgoxOpenAIPlugin(ArgoxPlugin):
         """Return ``raw_result.final_output`` coerced to a string."""
         out = getattr(raw_result, "final_output", "")
         return str(out) if out is not None else ""
+
+
+def _resolve_request_model(model: Any) -> str | None:
+    """Return the model id string for ``gen_ai.request.model``, or ``None``.
+
+    ``Agent.model`` is ``str | Model | None``. A string is used directly; a
+    ``Model`` instance is read via its ``model`` attribute (the underlying model
+    id); ``None`` or anything without a usable id yields ``None`` so the caller
+    leaves the span attribute unset.
+    """
+    if model is None:
+        return None
+    if isinstance(model, str):
+        return model or None
+    resolved = getattr(model, "model", None)
+    return resolved if isinstance(resolved, str) and resolved else None
 
 
 def _wrap_function_tool(tool: FunctionTool, runner: ToolArgsRunner) -> FunctionTool:
