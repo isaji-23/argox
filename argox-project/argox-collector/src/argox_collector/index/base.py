@@ -47,7 +47,8 @@ class RunRecord:
     ``blob_path``; only the columns needed to list, filter and join runs are
     promoted here. ``trace_id`` lets the Query API join from a span back to
     its originating run, and ``cost_usd`` is left ``None`` at ingest time and
-    backfilled later by the enrichment worker (#92).
+    backfilled from ``model`` and the token totals by the run-cost path
+    (COL-17, #142).
     """
 
     run_id: str
@@ -61,6 +62,9 @@ class RunRecord:
     duration_seconds: Optional[float] = None
     cost_usd: Optional[float] = None
     blob_path: Optional[str] = None
+    # Model used by the run, keyed against the price table to backfill
+    # ``cost_usd`` (COL-17). ``None`` when the client did not report a model.
+    model: Optional[str] = None
 
 
 class TraceIndexError(RuntimeError):
@@ -142,8 +146,31 @@ class TraceIndex(ABC):
         First-write-wins on ``run_id``: an existing row is left untouched
         rather than overwritten, mirroring the immutable run blob. A re-ingest
         is therefore a safe no-op, while a row missing from a partially-failed
-        earlier attempt is still created. The enrichment worker backfills
-        ``cost_usd`` through its own update path, not this method.
+        earlier attempt is still created. The run-cost path backfills
+        ``cost_usd`` through :meth:`set_run_cost`, not this method.
+        """
+
+    @abstractmethod
+    def set_run_cost(self, run_id: str, cost_usd: Optional[float]) -> None:
+        """Backfill the collector-derived ``cost_usd`` for a run (COL-17).
+
+        A deliberate ``UPDATE`` kept separate from :meth:`insert_run` so it
+        does not collide with the first-write-wins immutability of the run
+        record: cost is a collector-derived field, not client content, so the
+        blob and the client-reported columns stay untouched. A ``None`` cost
+        (unknown model) leaves the column NULL. Updating an unknown ``run_id``
+        is a harmless no-op.
+        """
+
+    @abstractmethod
+    def get_run_model_from_trace(self, trace_id: str) -> Optional[str]:
+        """Return a model id from the spans of ``trace_id``, or ``None``.
+
+        The span-side fallback for the run-cost backfill (COL-17): a run that
+        does not report its own ``model`` is priced from the model its spans
+        carry (``gen_ai.request.model``, set by PLUGIN-05; falling back to
+        ``gen_ai.response.model``). Returns ``None`` when no span under the
+        trace records a model.
         """
 
     @abstractmethod

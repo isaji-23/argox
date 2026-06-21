@@ -11,6 +11,7 @@ from fastapi.routing import APIRoute
 
 from argox_collector import __version__
 from argox_collector.audit import AuditLog
+from argox_collector.enrichment.pricing import PricingProvider
 from argox_collector.auth import (
     ApiKeyStore,
     Authenticator,
@@ -109,6 +110,16 @@ def create_app(
     app.state.settings = settings
     app.state.storage = storage if storage is not None else build_storage(settings)
     app.state.index = index if index is not None else build_index(settings)
+    # Run-cost pricing (COL-17): a TTL-cached LiteLLM price map with a bundled
+    # YAML fallback. The remote URL is dropped when remote pricing is disabled
+    # so the provider serves the bundled table without any network access.
+    app.state.pricing = PricingProvider(
+        remote_url=(
+            settings.pricing_remote_url if settings.pricing_remote_enabled else None
+        ),
+        ttl_seconds=settings.pricing_remote_ttl_seconds,
+        fallback_path=settings.pricing_table_path,
+    )
     app.state.audit = (
         audit_log
         if audit_log is not None

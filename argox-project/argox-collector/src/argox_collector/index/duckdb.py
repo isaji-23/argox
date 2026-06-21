@@ -12,6 +12,7 @@ from typing import Any, Optional
 import duckdb
 import structlog
 
+from argox_collector import semconv
 from argox_collector.index.base import (
     RunRecord,
     SpanRecord,
@@ -52,15 +53,25 @@ _INSERT_RUN_SQL = """
     INSERT INTO runs (
         run_id, trace_id, agent_name, agent_version, timestamp,
         success, total_input_tokens, total_output_tokens,
-        duration_seconds, cost_usd, blob_path, ingested_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        duration_seconds, cost_usd, blob_path, model, ingested_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT (run_id) DO NOTHING
 """
 
 _RUN_COLUMNS = (
     "run_id, trace_id, agent_name, agent_version, timestamp, "
     "success, total_input_tokens, total_output_tokens, "
-    "duration_seconds, cost_usd, blob_path"
+    "duration_seconds, cost_usd, blob_path, model"
+)
+
+# Pull the model id from a trace's spans for the run-cost fallback (COL-17).
+# The attribute keys contain dots, so each is a double-quoted JSON path
+# component rather than a nested lookup. Request model wins over response.
+_TRACE_MODEL_SQL = (
+    "SELECT COALESCE("
+    f"  MAX(json_extract_string(attributes, '$.\"{semconv.GEN_AI_REQUEST_MODEL}\"')),"
+    f"  MAX(json_extract_string(attributes, '$.\"{semconv.GEN_AI_RESPONSE_MODEL}\"'))"
+    ") FROM spans WHERE trace_id = ?"
 )
 
 
@@ -170,7 +181,7 @@ class DuckDBTraceIndex(TraceIndex):
 
             # Run summaries (COL-11). The full record lives in the blob store;
             # this table holds the flat, queryable projection. cost_usd is
-            # nullable and backfilled by the enrichment worker (#92).
+            # nullable and backfilled from model + token totals (COL-17).
             self._conn.execute("""
                 CREATE TABLE IF NOT EXISTS runs (
                     run_id VARCHAR PRIMARY KEY,
@@ -184,9 +195,13 @@ class DuckDBTraceIndex(TraceIndex):
                     duration_seconds DOUBLE,
                     cost_usd DOUBLE,
                     blob_path VARCHAR,
+                    model VARCHAR,
                     ingested_at TIMESTAMP
                 )
             """)
+            # Add the model column to runs tables created before COL-17 so the
+            # cost backfill can read it on an upgraded database.
+            self._conn.execute("ALTER TABLE runs ADD COLUMN IF NOT EXISTS model VARCHAR")
             # trace_id is indexed so the Query API can join from a span back
             # to its run record (COL-13).
             self._conn.execute("CREATE INDEX IF NOT EXISTS idx_runs_trace_id ON runs (trace_id)")
@@ -471,10 +486,26 @@ class DuckDBTraceIndex(TraceIndex):
             _finite_or_none(record.duration_seconds),
             _finite_or_none(record.cost_usd),
             record.blob_path,
+            record.model,
             datetime.now(timezone.utc).replace(tzinfo=None),
         )
         with self._lock:
             self._conn.execute(_INSERT_RUN_SQL, row)
+
+    def set_run_cost(self, run_id: str, cost_usd: Optional[float]) -> None:
+        # A standalone UPDATE, not part of insert_run's first-write-wins
+        # INSERT: cost is collector-derived, so backfilling it must not touch
+        # the immutable client-reported columns. _finite_or_none keeps a
+        # NaN/Infinity out of the DOUBLE column and its aggregates.
+        with self._lock:
+            self._conn.execute(
+                "UPDATE runs SET cost_usd = ? WHERE run_id = ?",
+                (_finite_or_none(cost_usd), run_id),
+            )
+
+    def get_run_model_from_trace(self, trace_id: str) -> Optional[str]:
+        rows = self._read(_TRACE_MODEL_SQL, (trace_id,))
+        return rows[0][0] if rows and rows[0][0] else None
 
     def get_run(self, run_id: str) -> Optional[RunRecord]:
         rows = self._read(
@@ -508,6 +539,7 @@ class DuckDBTraceIndex(TraceIndex):
             duration_seconds=row[8],
             cost_usd=row[9],
             blob_path=row[10],
+            model=row[11],
         )
 
     def health_check(self) -> None:

@@ -34,7 +34,26 @@ def client(settings: CollectorSettings) -> TestClient:
     return TestClient(create_app(settings))
 
 
-def _sample_run(run_id: str = "run-1", trace_id: str | None = None) -> dict:
+@pytest.fixture
+def offline_settings(tmp_path: Path) -> CollectorSettings:
+    """Settings with remote pricing disabled, so cost uses the bundled YAML."""
+    return CollectorSettings(
+        storage_local_root=tmp_path / "blobs",
+        index_duckdb_path=tmp_path / "index.duckdb",
+        pricing_remote_enabled=False,
+    )
+
+
+@pytest.fixture
+def offline_client(offline_settings: CollectorSettings) -> TestClient:
+    return TestClient(create_app(offline_settings))
+
+
+def _sample_run(
+    run_id: str = "run-1",
+    trace_id: str | None = None,
+    model: str | None = None,
+) -> dict:
     """Build an ``AgentRunMetrics.to_dict()`` payload, optionally with trace_id."""
     metrics = AgentRunMetrics(
         agent_name="demo-agent",
@@ -51,6 +70,10 @@ def _sample_run(run_id: str = "run-1", trace_id: str | None = None) -> dict:
     payload = metrics.to_dict()
     if trace_id is not None:
         payload["trace_id"] = trace_id
+    if model is not None:
+        # AgentRunMetrics.to_dict() carries no model; the SDK adds it top-level
+        # (extra="allow" preserves it) for the cost backfill to key on.
+        payload["model"] = model
     return payload
 
 
@@ -181,16 +204,25 @@ def test_oversized_batch_rejected(client: TestClient) -> None:
     assert resp.status_code == 413
 
 
-def _ingest_span(client: TestClient, trace_id_hex: str) -> None:
+def _ingest_span(
+    client: TestClient, trace_id_hex: str, model: str | None = None
+) -> None:
+    attributes = [
+        KeyValue(key="argox.agent.name", value=AnyValue(string_value="demo-agent"))
+    ]
+    if model is not None:
+        attributes.append(
+            KeyValue(
+                key="gen_ai.request.model", value=AnyValue(string_value=model)
+            )
+        )
     span = Span(
         trace_id=bytes.fromhex(trace_id_hex),
         span_id=bytes.fromhex("1112131415161718"),
         name="argox.agent.run",
         start_time_unix_nano=1_000_000_000,
         end_time_unix_nano=1_500_000_000,
-        attributes=[
-            KeyValue(key="argox.agent.name", value=AnyValue(string_value="demo-agent"))
-        ],
+        attributes=attributes,
     )
     request = ExportTraceServiceRequest(
         resource_spans=[ResourceSpans(scope_spans=[ScopeSpans(spans=[span])])]
@@ -200,6 +232,62 @@ def _ingest_span(client: TestClient, trace_id_hex: str) -> None:
         "/v1/traces", content=body, headers={"content-type": CONTENT_TYPE_JSON}
     )
     assert resp.status_code == 202
+
+
+def test_cost_backfilled_for_known_model(offline_client: TestClient) -> None:
+    """A run reporting a priced model gets cost_usd filled from token totals."""
+    resp = offline_client.post(
+        "/v1/runs", json=_sample_run("run-cost", model="gpt-4o")
+    )
+    assert resp.status_code == 202
+
+    record = _fetch_run(offline_client, "run-cost")
+    assert record.model == "gpt-4o"
+    # gpt-4o: 1.0 * 0.0025 + 0.5 * 0.01 = 0.0075 (per-1k YAML prices).
+    assert record.cost_usd == pytest.approx(0.0075)
+
+
+def test_cost_unknown_model_leaves_null(offline_client: TestClient) -> None:
+    resp = offline_client.post(
+        "/v1/runs", json=_sample_run("run-unknown", model="mystery-model")
+    )
+    assert resp.status_code == 202
+    record = _fetch_run(offline_client, "run-unknown")
+    assert record.model == "mystery-model"
+    assert record.cost_usd is None
+
+
+def test_cost_no_model_leaves_null(offline_client: TestClient) -> None:
+    resp = offline_client.post("/v1/runs", json=_sample_run("run-nomodel"))
+    assert resp.status_code == 202
+    record = _fetch_run(offline_client, "run-nomodel")
+    assert record.model is None
+    assert record.cost_usd is None
+
+
+def test_cost_backfill_preserves_immutable_blob(offline_client: TestClient) -> None:
+    """The cost UPDATE must not rewrite the immutable run blob."""
+    payload = _sample_run("run-cost-imm", model="gpt-4o")
+    body = json.dumps(payload).encode("utf-8")
+    resp = offline_client.post(
+        "/v1/runs", content=body, headers={"content-type": CONTENT_TYPE_JSON}
+    )
+    assert resp.status_code == 202
+
+    record = _fetch_run(offline_client, "run-cost-imm")
+    assert record.cost_usd == pytest.approx(0.0075)
+    stored = offline_client.app.state.storage.get(record.blob_path)
+    assert stored.data == body  # blob untouched by the cost backfill
+
+
+def test_client_supplied_cost_is_not_overwritten(offline_client: TestClient) -> None:
+    """A cost already reported by the client is kept, not recomputed."""
+    payload = _sample_run("run-precost", model="gpt-4o")
+    payload["cost_usd"] = 1.23
+    resp = offline_client.post("/v1/runs", json=payload)
+    assert resp.status_code == 202
+    record = _fetch_run(offline_client, "run-precost")
+    assert record.cost_usd == pytest.approx(1.23)
 
 
 def test_trace_id_join_span_to_run(client: TestClient) -> None:
@@ -217,3 +305,26 @@ def test_trace_id_join_span_to_run(client: TestClient) -> None:
     assert run is not None
     assert run.run_id == "run-join"
     assert run.blob_path is not None
+
+
+def test_cost_falls_back_to_span_model(offline_client: TestClient) -> None:
+    """A modelless run is priced from its span's gen_ai.request.model (PLUGIN-05)."""
+    _ingest_span(offline_client, TRACE_ID_HEX, model="gpt-4o")
+    resp = offline_client.post(
+        "/v1/runs", json=_sample_run("run-fallback", trace_id=TRACE_ID_HEX)
+    )
+    assert resp.status_code == 202
+
+    record = _fetch_run(offline_client, "run-fallback")
+    assert record.model is None  # run reported none; model came from the span
+    assert record.cost_usd == pytest.approx(0.0075)
+
+
+def test_cost_null_when_no_model_anywhere(offline_client: TestClient) -> None:
+    """No run model and no span model -> cost stays NULL (no crash)."""
+    _ingest_span(offline_client, TRACE_ID_HEX)  # span carries no model
+    resp = offline_client.post(
+        "/v1/runs", json=_sample_run("run-nomodel-join", trace_id=TRACE_ID_HEX)
+    )
+    assert resp.status_code == 202
+    assert _fetch_run(offline_client, "run-nomodel-join").cost_usd is None
