@@ -14,6 +14,7 @@ synchronous and returns ``200 OK`` only once the records are committed.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import re
 from datetime import datetime, timezone
@@ -25,6 +26,8 @@ from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from argox_collector.auth import Scope, require_scope
+from argox_collector.enrichment.cost import enrich_run_cost
+from argox_collector.enrichment.pricing import PricingTable, cached_pricing
 from argox_collector.index import RunRecord, TraceIndex
 from argox_collector.storage import ConditionNotMetError, StorageBackend
 
@@ -71,7 +74,8 @@ class RunRecordIn(BaseModel):
 
     ``trace_id`` is optional and top-level: the SDK exporter (EXP-09) sets it
     so the Query API can join a span back to its run. ``cost_usd`` is left
-    unset at ingest and backfilled by the enrichment worker (#92).
+    unset at ingest and backfilled from ``model`` and the token totals
+    (COL-17).
     """
 
     model_config = ConfigDict(extra="allow")
@@ -86,6 +90,9 @@ class RunRecordIn(BaseModel):
     success: Optional[bool] = None
     duration_seconds: Optional[float] = None
     cost_usd: Optional[float] = None
+    # Model the run used; keyed against the price table to backfill cost_usd
+    # (COL-17). Left None when the client does not report one.
+    model: Optional[str] = None
     tokens: RunTokens = Field(default_factory=RunTokens)
 
     @field_validator("run_id")
@@ -123,6 +130,7 @@ def _to_record(payload: RunRecordIn, blob_path: str) -> RunRecord:
         duration_seconds=payload.duration_seconds,
         cost_usd=payload.cost_usd,
         blob_path=blob_path,
+        model=payload.model or None,
     )
 
 
@@ -131,8 +139,9 @@ def _persist(
     items: list[tuple[RunRecord, bytes]],
     storage: StorageBackend,
     index: TraceIndex,
+    pricing: Optional[PricingTable] = None,
 ) -> None:
-    """Write each run blob and index its summary.
+    """Write each run blob, index its summary, and backfill its cost.
 
     Raises on any failure so the durable path can surface it. The background
     path wraps this in :func:`_persist_safe`, which logs and swallows because
@@ -143,6 +152,13 @@ def _persist(
     keeps the original blob; the index insert still runs so a row missing from
     a partially-failed earlier attempt is recovered (``insert_run`` is itself
     first-write-wins on ``run_id``).
+
+    The cost is priced and written via the separate ``set_run_cost`` UPDATE
+    (COL-17). The model is taken from the run record, falling back to the model
+    its spans carry (joined by ``trace_id``, set by PLUGIN-05), priced against
+    the bundled snapshot price table. A pricing failure must not lose the
+    already-persisted run, so it is logged and swallowed independently of the
+    blob/index writes above.
     """
     for record, blob in items:
         try:
@@ -156,6 +172,44 @@ def _persist(
         except ConditionNotMetError:
             logger.info("run_blob_exists", run_id=record.run_id)
         index.insert_run(record)
+        _backfill_cost(record, index, pricing)
+
+
+def _backfill_cost(
+    record: RunRecord, index: TraceIndex, pricing: Optional[PricingTable]
+) -> None:
+    """Price a run's cost and write it (COL-17), never raising.
+
+    Tries the run's self-reported ``model`` first, then falls back to the model
+    its spans carry via ``trace_id`` (PLUGIN-05). The fallback runs whenever the
+    self-reported model fails to price — absent OR unknown to the table — so a
+    typo'd or unpriced ``model`` does not block a span model that would price.
+    A client-supplied ``cost_usd`` is left as-is.
+    """
+    if pricing is None or record.cost_usd is not None:
+        return
+    try:
+        if record.model:
+            cost = enrich_run_cost(record, pricing)
+            if cost is not None:
+                index.set_run_cost(record.run_id, cost)
+                return
+        # Self-reported model absent or unpriced: fall back to the span model.
+        span_model = _model_from_trace(record, index)
+        if not span_model or span_model == record.model:
+            return
+        cost = enrich_run_cost(dataclasses.replace(record, model=span_model), pricing)
+        if cost is not None:
+            index.set_run_cost(record.run_id, cost)
+    except Exception:  # noqa: BLE001 - cost is best-effort; the run is already stored
+        logger.exception("run_cost_backfill_failed", run_id=record.run_id)
+
+
+def _model_from_trace(record: RunRecord, index: TraceIndex) -> Optional[str]:
+    """Recover the run's model from its spans, or ``None`` (no trace, no span)."""
+    if not record.trace_id:
+        return None
+    return index.get_run_model_from_trace(record.trace_id)
 
 
 def _persist_safe(**kwargs) -> None:
@@ -235,7 +289,10 @@ async def ingest_runs(
 
     storage: StorageBackend = request.app.state.storage
     index: TraceIndex = request.app.state.index
-    persist_kwargs = dict(items=items, storage=storage, index=index)
+    pricing = cached_pricing(request.app.state.settings.pricing_table_path)
+    persist_kwargs = dict(
+        items=items, storage=storage, index=index, pricing=pricing
+    )
 
     durable = request.headers.get(_DURABLE_HEADER, "").strip().lower() == "true"
     if durable:

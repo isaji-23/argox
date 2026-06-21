@@ -42,6 +42,10 @@ class CollectorSettings(BaseSettings):
     index_duckdb_path: Path = Path("./var/argox/index.duckdb")
 
     enrichment_enabled: bool = True
+    # Pricing is a committed snapshot of the LiteLLM map (COL-17); the run-cost
+    # backfill and span enricher both read it via the cached loader. Override
+    # the file at runtime to supply a custom table; regenerate the bundled
+    # snapshot with ``argox-collector refresh-pricing``.
     pricing_table_path: Optional[Path] = None
 
     # Audit log (COL-08): blob key prefix for WORM segments and the per-segment

@@ -5,6 +5,8 @@ Subcommands:
 - ``serve`` (default): start the FastAPI app under uvicorn.
 - ``export-openapi``: write the committed ``openapi.json`` contract, or
   ``--check`` it for drift without writing.
+- ``refresh-pricing``: regenerate the bundled ``pricing.yaml`` from the LiteLLM
+  price map, or ``--check`` it for drift without writing.
 - ``keys create``: mint a new API key and print the raw secret once.
 - ``keys list``: list stored keys (metadata only, never the secret).
 - ``keys revoke``: revoke a key by id.
@@ -27,6 +29,13 @@ from argox_collector.auth import (
     build_api_key_store,
     mint_key,
     parse_scopes,
+)
+from argox_collector.enrichment.pricing import (
+    DEFAULT_PRICING_PATH,
+    LITELLM_PRICING_URL,
+    fetch_remote_pricing,
+    filter_pricing,
+    render_pricing_yaml,
 )
 from argox_collector.openapi_export import (
     DEFAULT_OPENAPI_PATH,
@@ -66,6 +75,38 @@ def _build_parser() -> argparse.ArgumentParser:
         "without writing",
     )
     export.set_defaults(handler=_cmd_export_openapi)
+
+    refresh = sub.add_parser(
+        "refresh-pricing",
+        help="regenerate the bundled pricing.yaml from the LiteLLM price map",
+    )
+    refresh.add_argument(
+        "--url",
+        default=LITELLM_PRICING_URL,
+        help="LiteLLM price-map URL (default: the upstream main branch)",
+    )
+    refresh.add_argument(
+        "--out",
+        type=Path,
+        default=DEFAULT_PRICING_PATH,
+        help="output path (default: the bundled pricing.yaml)",
+    )
+    refresh.add_argument(
+        "--provider",
+        action="append",
+        dest="providers",
+        default=None,
+        metavar="PREFIX",
+        help="keep only models whose id starts with PREFIX (repeatable); "
+        "omit to snapshot the full map",
+    )
+    refresh.add_argument(
+        "--check",
+        action="store_true",
+        help="verify the file matches a fresh snapshot; exit 1 on drift "
+        "without writing",
+    )
+    refresh.set_defaults(handler=_cmd_refresh_pricing)
 
     keys = sub.add_parser("keys", help="manage API keys")
     keys_sub = keys.add_subparsers(dest="keys_command", required=True)
@@ -136,6 +177,38 @@ def _cmd_export_openapi(args: argparse.Namespace) -> int:
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(rendered, encoding="utf-8")
     print(f"Wrote {out}")
+    return 0
+
+
+def _cmd_refresh_pricing(args: argparse.Namespace) -> int:
+    try:
+        table = fetch_remote_pricing(args.url)
+    except (OSError, ValueError) as exc:
+        print(f"error: failed to fetch pricing from {args.url}: {exc}", file=sys.stderr)
+        return 1
+    if not table:
+        print(f"error: no priced models in payload from {args.url}", file=sys.stderr)
+        return 1
+
+    table = filter_pricing(table, tuple(args.providers or ()))
+    rendered = render_pricing_yaml(table)
+    out: Path = args.out
+
+    if args.check:
+        current = out.read_text(encoding="utf-8") if out.exists() else None
+        if current == rendered:
+            print(f"{out} is up to date ({len(table)} models)")
+            return 0
+        print(
+            f"error: {out} is out of date — run 'argox-collector "
+            "refresh-pricing' and commit the result",
+            file=sys.stderr,
+        )
+        return 1
+
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(rendered, encoding="utf-8")
+    print(f"Wrote {out} ({len(table)} models)")
     return 0
 
 

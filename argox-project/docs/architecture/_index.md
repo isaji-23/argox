@@ -14,3 +14,4 @@ decision future contributors should not silently re-open.
 | ADR-0005 | [Collector auth — hashed API keys for machines, OIDC JWTs for humans](ADR-0005-collector-auth-api-keys-and-oidc.md) | accepted |
 | ADR-0006 | [OpenAPI contract as the source of the dashboard's typed TS client](ADR-0006-openapi-contract-and-ts-client.md) | accepted |
 | ADR-0007 | [Run-summary ingest as a parallel path, separate from spans](ADR-0007-run-summary-ingest-route-b.md) | accepted |
+| ADR-0008 | [Run-cost pricing source and model resolution](ADR-0008-run-cost-pricing-source-and-model-resolution.md) | accepted |

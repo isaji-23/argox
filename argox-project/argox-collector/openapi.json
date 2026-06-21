@@ -788,7 +788,7 @@
       },
       "RunRecordIn": {
         "additionalProperties": true,
-        "description": "A single ``AgentRunMetrics``-shaped run record.\n\nMirrors :meth:`argox.core.state.AgentRunMetrics.to_dict`. Only ``run_id``\nis required; everything else defaults so partial records still index. The\nCollector does not scrub content (PII redaction is the SDK's job) and\npreserves unknown fields on the immutable blob via ``extra=\"allow\"``.\n\n``trace_id`` is optional and top-level: the SDK exporter (EXP-09) sets it\nso the Query API can join a span back to its run. ``cost_usd`` is left\nunset at ingest and backfilled by the enrichment worker (#92).",
+        "description": "A single ``AgentRunMetrics``-shaped run record.\n\nMirrors :meth:`argox.core.state.AgentRunMetrics.to_dict`. Only ``run_id``\nis required; everything else defaults so partial records still index. The\nCollector does not scrub content (PII redaction is the SDK's job) and\npreserves unknown fields on the immutable blob via ``extra=\"allow\"``.\n\n``trace_id`` is optional and top-level: the SDK exporter (EXP-09) sets it\nso the Query API can join a span back to its run. ``cost_usd`` is left\nunset at ingest and backfilled from ``model`` and the token totals\n(COL-17).",
         "properties": {
           "agent_name": {
             "default": "",
@@ -821,6 +821,17 @@
               }
             ],
             "title": "Duration Seconds"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
           },
           "run_id": {
             "title": "Run Id",
