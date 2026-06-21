@@ -42,20 +42,11 @@ class CollectorSettings(BaseSettings):
     index_duckdb_path: Path = Path("./var/argox/index.duckdb")
 
     enrichment_enabled: bool = True
+    # Pricing is a committed snapshot of the LiteLLM map (COL-17); the run-cost
+    # backfill and span enricher both read it via the cached loader. Override
+    # the file at runtime to supply a custom table; regenerate the bundled
+    # snapshot with ``argox-collector refresh-pricing``.
     pricing_table_path: Optional[Path] = None
-
-    # Live pricing (COL-17). The run-cost backfill prefers a remote LiteLLM
-    # price map over the bundled YAML so new models are priced without a code
-    # change. The map is fetched at most once per TTL and cached in memory;
-    # any fetch failure falls back to the bundled table. Set the URL to empty
-    # (or flip ``pricing_remote_enabled`` off) to disable the network call,
-    # e.g. in tests or air-gapped deploys.
-    pricing_remote_enabled: bool = True
-    pricing_remote_url: str = (
-        "https://raw.githubusercontent.com/BerriAI/litellm/main/"
-        "model_prices_and_context_window.json"
-    )
-    pricing_remote_ttl_seconds: int = 6 * 60 * 60
 
     # Audit log (COL-08): blob key prefix for WORM segments and the per-segment
     # record cap that triggers rollover to a new segment.

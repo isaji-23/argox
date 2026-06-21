@@ -12,13 +12,20 @@
   missing or unknown model logs `run_cost_unknown_model` and yields `None`
   (column stays NULL) — ingest never raises. The stale "deferred until COL-11"
   header comment is corrected.
-- `argox-collector/src/argox_collector/enrichment/pricing.py`: new
+- `argox-collector/src/argox_collector/enrichment/pricing.py`: prices come from
+  a committed snapshot of the LiteLLM map (`pricing.yaml`), read at runtime via
+  the shared `cached_pricing` loader — no fetch on the ingest path.
   `fetch_remote_pricing(url)` fetches LiteLLM's
   `model_prices_and_context_window.json` and normalises per-token prices to the
-  bundled table's USD-per-1k shape. New `PricingProvider` wraps it with an
-  in-memory TTL cache and a graceful fallback to the bundled YAML on any fetch
-  failure or empty result. Thread-safe (ingest prices from background tasks and
-  the durable threadpool).
+  bundled USD-per-1k shape; `filter_pricing` keeps only providers in use and
+  `render_pricing_yaml` emits a deterministic, sorted YAML. These are
+  refresh-time helpers, not called at ingest.
+- `argox-collector/src/argox_collector/__main__.py`: new `refresh-pricing`
+  subcommand regenerates the bundled `pricing.yaml` from LiteLLM (with
+  `--provider` filters and a `--check` drift mode), mirroring `export-openapi`.
+  The bundled `pricing.yaml` is regenerated to a 325-model LiteLLM snapshot.
+- `.github/workflows/refresh-pricing.yml`: scheduled job that runs
+  `refresh-pricing` and opens a PR when prices drift, so changes are reviewed.
 - `argox-collector/src/argox_collector/index/base.py` and `index/duckdb.py`:
   - `RunRecord` gains a `model` field; the `runs` table gains a `model VARCHAR`
     column with an idempotent `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`
@@ -36,12 +43,13 @@
   as-is. Pricing is only resolved once a model is found, so runs with neither a
   model nor a matching span never trigger a remote fetch. Backfill failures are
   logged and swallowed — the run is already persisted.
-- `argox-collector/src/argox_collector/app.py` and `settings.py`: wire
-  `app.state.pricing` from new settings `pricing_remote_enabled`,
-  `pricing_remote_url` (LiteLLM map), and `pricing_remote_ttl_seconds`
-  (default 6h). Remote can be disabled to serve only the bundled table.
+- `argox-collector/src/argox_collector/routers/runs.py` resolves the price
+  table via `cached_pricing(settings.pricing_table_path)`; the run backfill and
+  the span enricher now share one cached loader (the per-pipeline cache was
+  removed). No `app.state.pricing` / runtime provider.
 - `openapi.json` regenerated for the new `RunRecordIn.model` field.
-- Tests: `test_pricing.py` (remote normalisation, cache TTL, fallback paths);
+- Tests: `test_pricing.py` (remote normalisation, provider filter, YAML
+  round-trip/determinism, `refresh-pricing` write/filter/check/fetch-failure);
   run-cost cases in `test_enrichment.py` and `test_runs_ingest.py` (known model,
   unknown model, no model, immutable-blob preservation, client cost kept,
   span-model fallback by trace_id).
@@ -55,9 +63,11 @@ Runs carry no model of their own today, so the price lookup resolves the model
 from the run record first and falls back to the model the spans carry
 (`gen_ai.request.model`, set by PLUGIN-05) joined by `trace_id`. This makes cost
 priced today via the span fallback while staying ready for an SDK that reports
-`model` directly on `/v1/runs`. Prices come from a live LiteLLM map so new
-models are priced without a code change, with the bundled YAML as a safe
-offline fallback.
+`model` directly on `/v1/runs`. Prices come from a committed LiteLLM snapshot
+rather than a runtime fetch: a governance tool needs a deterministic, auditable,
+version-controlled cost basis, and ingest must not depend on the network. A
+scheduled job regenerates the snapshot so new models are picked up via a
+reviewed PR. See ADR-0008.
 
 ## Notes / follow-ups
 - `runs.model` has no SDK producer yet — runs are priced via the span fallback

@@ -1,21 +1,22 @@
 """Load the model-to-price table used by the cost enricher.
 
-Two sources feed the same :data:`PricingTable` shape: the bundled
-``pricing.yaml`` (loaded by :func:`load_pricing`) and a remote LiteLLM price
-map (fetched by :func:`fetch_remote_pricing`). :class:`PricingProvider` wraps
-both with an in-memory TTL cache and a graceful fallback, so the run-cost
-backfill (COL-17) can prefer live prices without making ingest depend on the
-network being reachable.
+The runtime source of truth is the bundled ``pricing.yaml`` (loaded by
+:func:`load_pricing`, cached by :func:`cached_pricing`). It is a committed
+snapshot of LiteLLM's price map: :func:`fetch_remote_pricing` pulls the live
+LiteLLM JSON and :func:`render_pricing_yaml` serialises it back into the
+``pricing.yaml`` shape, so a scheduled job (``argox-collector refresh-pricing``)
+can regenerate the file and open a PR. This keeps the cost basis deterministic,
+version-controlled and reviewable, with no network dependency on the ingest
+path (see ADR-0008).
 """
 
 from __future__ import annotations
 
 import json
-import threading
-import time
 import urllib.request
+from functools import lru_cache
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Optional
 
 import structlog
 import yaml
@@ -23,7 +24,7 @@ import yaml
 logger = structlog.get_logger(__name__)
 
 # Bundled default table shipped alongside this module.
-_DEFAULT_PRICING_PATH = Path(__file__).with_name("pricing.yaml")
+DEFAULT_PRICING_PATH = Path(__file__).with_name("pricing.yaml")
 
 # Model name -> {"input": usd_per_1k, "output": usd_per_1k}.
 PricingTable = dict[str, dict[str, float]]
@@ -32,9 +33,14 @@ PricingTable = dict[str, dict[str, float]]
 # every fetched cost is scaled by this factor.
 _TOKENS_PER_UNIT = 1000.0
 
-# Network timeout (seconds) for a remote price fetch. Kept short so a slow or
-# unreachable host degrades to the bundled table quickly instead of stalling.
-_FETCH_TIMEOUT_SECONDS = 5.0
+# Default LiteLLM price map used by the refresh job (not fetched at runtime).
+LITELLM_PRICING_URL = (
+    "https://raw.githubusercontent.com/BerriAI/litellm/main/"
+    "model_prices_and_context_window.json"
+)
+
+# Network timeout (seconds) for the refresh-time fetch.
+_FETCH_TIMEOUT_SECONDS = 15.0
 
 
 def load_pricing(path: Optional[Path] = None) -> PricingTable:
@@ -49,7 +55,7 @@ def load_pricing(path: Optional[Path] = None) -> PricingTable:
         per 1,000 tokens. Returns an empty table (and logs a warning) when the
         file is missing or malformed, so enrichment degrades gracefully.
     """
-    source = path or _DEFAULT_PRICING_PATH
+    source = path or DEFAULT_PRICING_PATH
     try:
         raw = yaml.safe_load(source.read_text(encoding="utf-8")) or {}
     except (OSError, yaml.YAMLError) as exc:
@@ -71,6 +77,18 @@ def load_pricing(path: Optional[Path] = None) -> PricingTable:
     return table
 
 
+@lru_cache(maxsize=8)
+def cached_pricing(path: Optional[Path] = None) -> PricingTable:
+    """Return the loaded pricing table, cached per path.
+
+    The bundled YAML is read once and reused across requests; both the span
+    enrichment pipeline and the run-cost backfill share this cache. Call
+    :meth:`cached_pricing.cache_clear` to force a reload (e.g. after the
+    refresh job rewrites the file in a long-lived process).
+    """
+    return load_pricing(path)
+
+
 def fetch_remote_pricing(
     url: str, *, timeout: float = _FETCH_TIMEOUT_SECONDS
 ) -> PricingTable:
@@ -82,6 +100,9 @@ def fetch_remote_pricing(
     bundled table. Entries that carry neither cost (or whose costs are not
     numeric) are skipped rather than priced at zero.
 
+    This is a refresh-time helper for :func:`render_pricing_yaml`, not called on
+    the ingest path.
+
     Args:
         url: Location of the LiteLLM JSON map.
         timeout: Socket timeout in seconds for the fetch.
@@ -90,8 +111,7 @@ def fetch_remote_pricing(
         A model-name (lowercased) to ``{"input", "output"}`` USD-per-1k table.
 
     Raises:
-        OSError, ValueError: On a network failure or unparseable payload, so
-            :class:`PricingProvider` can fall back to the bundled table.
+        OSError, ValueError: On a network failure or unparseable payload.
     """
     with urllib.request.urlopen(url, timeout=timeout) as response:  # noqa: S310
         raw = json.loads(response.read().decode("utf-8"))
@@ -116,68 +136,44 @@ def fetch_remote_pricing(
     return table
 
 
-class PricingProvider:
-    """Resolve the model-price table, preferring a cached remote map.
+def filter_pricing(table: PricingTable, prefixes: tuple[str, ...]) -> PricingTable:
+    """Return only the models whose name starts with one of ``prefixes``.
 
-    The remote map is fetched at most once per ``ttl_seconds`` and held in
-    memory. Any fetch failure (or an empty result) falls back to the bundled
-    YAML table, so cost enrichment degrades gracefully instead of failing
-    ingest. Access is thread-safe: ingest runs the backfill from background
-    tasks and the durable threadpool.
+    Lets the refresh job keep the snapshot small (e.g. the providers in use)
+    instead of committing LiteLLM's full multi-thousand-model map. An empty
+    ``prefixes`` returns the table unchanged.
     """
+    if not prefixes:
+        return table
+    lowered = tuple(p.lower() for p in prefixes)
+    return {
+        name: prices
+        for name, prices in table.items()
+        if name.startswith(lowered)
+    }
 
-    def __init__(
-        self,
-        *,
-        remote_url: Optional[str] = None,
-        ttl_seconds: float = 6 * 60 * 60,
-        fallback_path: Optional[Path] = None,
-        fetcher: Callable[[str], PricingTable] = fetch_remote_pricing,
-        clock: Callable[[], float] = time.monotonic,
-    ) -> None:
-        """Initialise the provider.
 
-        Args:
-            remote_url: LiteLLM map URL. ``None`` or empty disables the remote
-                fetch entirely and the provider serves the bundled table.
-            ttl_seconds: Maximum age of a cached table before it is refreshed.
-            fallback_path: Optional override for the bundled YAML table.
-            fetcher: Injection point for the remote fetch (tests pass a stub).
-            clock: Monotonic clock, injectable for deterministic TTL tests.
-        """
-        self._remote_url = remote_url
-        self._ttl = ttl_seconds
-        self._fallback_path = fallback_path
-        self._fetcher = fetcher
-        self._clock = clock
-        self._lock = threading.Lock()
-        self._cache: Optional[PricingTable] = None
-        self._fetched_at = 0.0
+def render_pricing_yaml(table: PricingTable) -> str:
+    """Serialise a price table into the committed ``pricing.yaml`` shape.
 
-    def get_table(self) -> PricingTable:
-        """Return the current price table, refreshing the cache when stale."""
-        with self._lock:
-            if (
-                self._cache is not None
-                and (self._clock() - self._fetched_at) < self._ttl
-            ):
-                return self._cache
-            self._cache = self._load()
-            self._fetched_at = self._clock()
-            return self._cache
-
-    def _load(self) -> PricingTable:
-        if self._remote_url:
-            try:
-                table = self._fetcher(self._remote_url)
-            except Exception as exc:  # noqa: BLE001 - any failure must fall back
-                logger.warning(
-                    "pricing_remote_fetch_failed",
-                    url=self._remote_url,
-                    error=str(exc),
-                )
-            else:
-                if table:
-                    return table
-                logger.warning("pricing_remote_empty", url=self._remote_url)
-        return load_pricing(self._fallback_path)
+    Output is deterministic (models sorted by name) so a regeneration produces
+    a clean, reviewable diff. Prices are USD per 1,000 tokens, matching
+    :func:`load_pricing`.
+    """
+    header = (
+        "# Per-model LLM pricing used by the cost enricher (COL-07, COL-17).\n"
+        "#\n"
+        "# Prices are USD per 1,000 tokens. Keys are matched case-insensitively\n"
+        "# against the model id (gen_ai.request.model / a run's reported model).\n"
+        "# This file is a committed snapshot of the LiteLLM price map; regenerate\n"
+        "# it with 'argox-collector refresh-pricing'. Override at runtime with\n"
+        "# ARGOX_PRICING_TABLE_PATH; unknown models log a warning and skip.\n"
+    )
+    models = {
+        name: {"input": prices["input"], "output": prices["output"]}
+        for name, prices in sorted(table.items())
+    }
+    body = yaml.safe_dump(
+        {"models": models}, sort_keys=False, default_flow_style=False
+    )
+    return header + body

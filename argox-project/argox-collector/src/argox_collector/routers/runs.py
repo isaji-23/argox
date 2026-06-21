@@ -27,7 +27,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from argox_collector.auth import Scope, require_scope
 from argox_collector.enrichment.cost import enrich_run_cost
-from argox_collector.enrichment.pricing import PricingProvider
+from argox_collector.enrichment.pricing import PricingTable, cached_pricing
 from argox_collector.index import RunRecord, TraceIndex
 from argox_collector.storage import ConditionNotMetError, StorageBackend
 
@@ -139,7 +139,7 @@ def _persist(
     items: list[tuple[RunRecord, bytes]],
     storage: StorageBackend,
     index: TraceIndex,
-    pricing: Optional[PricingProvider] = None,
+    pricing: Optional[PricingTable] = None,
 ) -> None:
     """Write each run blob, index its summary, and backfill its cost.
 
@@ -155,11 +155,10 @@ def _persist(
 
     The cost is priced and written via the separate ``set_run_cost`` UPDATE
     (COL-17). The model is taken from the run record, falling back to the model
-    its spans carry (joined by ``trace_id``, set by PLUGIN-05). The price table
-    is only resolved once a model is found, so runs with neither a model nor a
-    matching span never trigger a remote fetch. A pricing failure must not lose
-    the already-persisted run, so it is logged and swallowed independently of
-    the blob/index writes above.
+    its spans carry (joined by ``trace_id``, set by PLUGIN-05), priced against
+    the bundled snapshot price table. A pricing failure must not lose the
+    already-persisted run, so it is logged and swallowed independently of the
+    blob/index writes above.
     """
     for record, blob in items:
         try:
@@ -177,7 +176,7 @@ def _persist(
 
 
 def _backfill_cost(
-    record: RunRecord, index: TraceIndex, pricing: Optional[PricingProvider]
+    record: RunRecord, index: TraceIndex, pricing: Optional[PricingTable]
 ) -> None:
     """Price a run's cost and write it (COL-17), never raising.
 
@@ -191,7 +190,7 @@ def _backfill_cost(
         if not model:
             return
         priced = record if record.model else dataclasses.replace(record, model=model)
-        cost = enrich_run_cost(priced, pricing.get_table())
+        cost = enrich_run_cost(priced, pricing)
         if cost is not None:
             index.set_run_cost(record.run_id, cost)
     except Exception:  # noqa: BLE001 - cost is best-effort; the run is already stored
@@ -282,9 +281,7 @@ async def ingest_runs(
 
     storage: StorageBackend = request.app.state.storage
     index: TraceIndex = request.app.state.index
-    pricing: Optional[PricingProvider] = getattr(
-        request.app.state, "pricing", None
-    )
+    pricing = cached_pricing(request.app.state.settings.pricing_table_path)
     persist_kwargs = dict(
         items=items, storage=storage, index=index, pricing=pricing
     )
