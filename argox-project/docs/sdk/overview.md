@@ -98,9 +98,10 @@ overhead percentage is `(total_ms - phase_timings["agent_exec"]) / total_ms * 10
   `argox.agent.run` root via OTel GenAI semantic conventions
   (`gen_ai.usage.input_tokens`, etc.). `ArgoxOpenAIPlugin` additionally emits one
   `execute_tool {name}` child span per function-tool call
-  (`gen_ai.operation.name=execute_tool`, `gen_ai.tool.name`; ERROR status +
-  recorded exception on failure), so the dashboard waterfall shows the tool
-  breakdown with no user instrumentation (PLUGIN-06, ADR-0009). Any compatible
+  (`gen_ai.operation.name=execute_tool`, `gen_ai.tool.name`; `ERROR` status +
+  `error.type` — type only, no PII — when the tool raises past the shim), so the
+  dashboard waterfall shows the tool breakdown with no user instrumentation
+  (PLUGIN-06, ADR-0009). Any compatible
   `SpanExporter` can consume them. The root span also carries `argox.agent.name`
   (set early from the run's agent name) and `argox.run.success` (set in
   `finally` from the run outcome, so a policy block records `false`); the

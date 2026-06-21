@@ -14,8 +14,12 @@
   - `_wrap_function_tool(tool, runner)` takes an **optional** runner. The shim
     opens an OTel child span named `execute_tool {tool.name}` around the
     invocation, carrying GenAI semconv attributes `gen_ai.operation.name=execute_tool`
-    and `gen_ai.tool.name`. On a tool exception it calls `record_exception` and
-    sets span status `ERROR`, then re-raises.
+    and `gen_ai.tool.name`. When the invocation *raises past the shim* the span
+    is marked `ERROR` and tagged with `error.type` (the exception class name
+    only — never the message or stack trace, which would re-introduce argument
+    PII), then re-raised. The span is opened with `record_exception=False` /
+    `set_status_on_exception=False` so the context manager does not auto-record
+    the message on the way out.
   - With a runner present the shim still parses args, runs the processor
     redaction chain, re-serialises and delegates (unchanged behaviour). With
     `runner is None` the raw JSON is forwarded byte-for-byte — only the span is
@@ -32,8 +36,11 @@
   run and never invoked), and they now parent via the ambient run-span context.
 - `tests/test_plugin_openai.py`: new `TestToolCallSpans` (in-memory span
   exporter) asserts one child span per call, correct parent/trace under the run
-  span, ERROR status + recorded exception on failure, span emission with no
-  processors registered, and that `agent.tools` is restored after the run.
+  span, `ERROR` + `error.type` with no PII on a raising tool, the same path
+  reached through a real `@function_tool(failure_error_function=None)`, no error
+  marking on success, span emission with no processors registered, and that
+  `agent.tools` is restored after the run. The `span_exporter` fixture attaches a
+  single exporter per module and clears it per test (no cross-test span leak).
   Updated the two tests that assumed conditional wrapping
   (`test_instrument_wraps_function_tools_even_without_runner`,
   `test_no_processors_still_wraps_but_forwards_raw`).
@@ -50,6 +57,14 @@ the original list in its `finally` (see ADR-0009). Companion to CORE-08 (#143,
 root-span outcome attributes) and PLUGIN-05 (#144, `gen_ai.request.model`).
 
 ## Notes / follow-ups
+- Error-span boundary (from PR review): a default `@function_tool` keeps its
+  `failure_error_function`, so the SDK catches the body's exception *inside*
+  `on_invoke_tool` and returns an error string to the model — the shim never
+  sees it and the span stays unmarked (the call is still recorded in
+  `tools_called`). The `ERROR` span fires only when the exception propagates
+  past the shim: `failure_error_function=None`, a re-raising invoker, or a
+  failing argument-processor chain. Documented in the `_wrap_function_tool`
+  docstring and ADR-0009.
 - Blocked-tool spans in the live demo are still emitted by hand because the SDK
   strips blocked tools before the run, so the plugin never sees them.
 - Non-`FunctionTool` entries (hosted/server-side tools) pass through unchanged —

@@ -44,6 +44,9 @@ _GEN_AI_REQUEST_MODEL = "gen_ai.request.model"
 _GEN_AI_OPERATION_NAME = "gen_ai.operation.name"
 _GEN_AI_TOOL_NAME = "gen_ai.tool.name"
 _OPERATION_EXECUTE_TOOL = "execute_tool"
+# OTel semconv key for the failure class; carries the exception *type* only, so
+# the span never picks up a message/stack trace that could echo tool args (PII).
+_ERROR_TYPE = "error.type"
 
 # Tracer used for the per-tool child spans emitted around each invocation.
 _tracer = trace.get_tracer("argox")
@@ -197,8 +200,21 @@ def _wrap_function_tool(
     ``gen_ai.operation.name=execute_tool`` and ``gen_ai.tool.name``. The shim is
     awaited by the SDK runner in the same task as the active ``argox.agent.run``
     span, so ``start_as_current_span`` attaches the tool span as its child with
-    no ContextVar handling. A tool failure sets the span status to ``ERROR`` and
-    records the exception before re-raising.
+    no ContextVar handling.
+
+    Error semantics. The span is marked ``ERROR`` only when the invocation
+    *raises past the shim*. A ``@function_tool`` keeps its default
+    ``failure_error_function``, so the SDK catches the tool body's exception
+    inside ``on_invoke_tool`` and returns an error *string* to the model — the
+    shim never sees it, and the call is still recorded in
+    ``AgentRunMetrics.tools_called`` by the lifecycle hooks. The shim's ERROR
+    path therefore covers tools that propagate (``failure_error_function=None``,
+    custom invokers that re-raise, or a failing argument-processor chain). On
+    such a failure only ``error.type`` (the exception class name) is recorded —
+    not the exception message or stack trace, which routinely echo the tool's
+    arguments and would re-introduce the PII the shim deliberately keeps off the
+    span. ``asyncio.CancelledError`` is not caught, so a cancelled run is not
+    mislabelled ERROR.
 
     When ``runner`` is supplied, the shim also runs the processor chain against
     the parsed arguments before delegating: it parses the SDK's raw JSON input,
@@ -215,7 +231,7 @@ def _wrap_function_tool(
     original_invoke = tool.on_invoke_tool
     wrapped = copy.copy(tool)
 
-    async def _invoke_original(ctx: Any, raw_input: str) -> Any:
+    async def _invoke_original(ctx: Any, tool_name: str, raw_input: str) -> Any:
         if runner is None:
             return await original_invoke(ctx, raw_input)
         if raw_input:
@@ -230,7 +246,6 @@ def _wrap_function_tool(
         else:
             parsed = {}
 
-        tool_name = getattr(ctx, "tool_name", None) or tool.name
         mutated = await runner(tool_name, parsed)
         return await original_invoke(ctx, json.dumps(mutated))
 
@@ -243,12 +258,19 @@ def _wrap_function_tool(
                 _GEN_AI_OPERATION_NAME: _OPERATION_EXECUTE_TOOL,
                 _GEN_AI_TOOL_NAME: tool_name,
             },
+            # The context manager would otherwise call ``record_exception`` and
+            # set the status message from the exception on its way out — both
+            # carry the exception message and stack trace, which routinely echo
+            # the tool's arguments (PII). Handle the failure ourselves below,
+            # recording only ``error.type``.
+            record_exception=False,
+            set_status_on_exception=False,
         ) as span:
             try:
-                return await _invoke_original(ctx, raw_input)
+                return await _invoke_original(ctx, tool_name, raw_input)
             except Exception as exc:
-                span.record_exception(exc)
-                span.set_status(Status(StatusCode.ERROR, str(exc)))
+                span.set_attribute(_ERROR_TYPE, type(exc).__qualname__)
+                span.set_status(Status(StatusCode.ERROR))
                 raise
 
     wrapped.on_invoke_tool = _argox_invoke

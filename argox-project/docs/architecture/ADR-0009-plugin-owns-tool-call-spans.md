@@ -30,7 +30,11 @@ invocation:
 
 - span name `execute_tool {tool.name}`, attributes
   `gen_ai.operation.name=execute_tool` and `gen_ai.tool.name` (GenAI semconv);
-- on a tool exception, `record_exception` + span status `ERROR`, then re-raise;
+- when the invocation raises past the shim, span status `ERROR` + `error.type`
+  (the exception class name only), then re-raise. The span is opened with
+  `record_exception=False` / `set_status_on_exception=False` so the context
+  manager does not auto-write the exception message or stack trace — those
+  routinely echo the tool's arguments (PII);
 - raw tool arguments are never placed on the span (PII);
 - when `runner` is set, the shim runs the redaction chain before delegating;
   when `runner is None`, the raw JSON is forwarded byte-for-byte.
@@ -65,5 +69,12 @@ instrumentation.
   this by hand).
 - **Recording tool arguments/results on the span.** Deliberately omitted for PII;
   if ever added, only the redacted form may be recorded.
+- **Soft-handled tool failures.** A default `@function_tool` keeps its
+  `failure_error_function`, so the SDK catches the body's exception inside
+  `on_invoke_tool` and returns an error string to the model; the shim never sees
+  it, so the span is not marked `ERROR` (the call is still recorded in
+  `tools_called`). Span `ERROR` covers only failures that propagate past the
+  shim (`failure_error_function=None`, a re-raising invoker, or a failing
+  argument-processor chain).
 - **Non-OpenAI plugins.** This decision is implemented in `argox-plugin-openai`
   only; the `ArgoxPlugin.instrument` contract is unchanged.

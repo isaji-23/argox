@@ -628,13 +628,15 @@ class TestProcessorChainReachesTools:
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture
-def span_exporter() -> InMemorySpanExporter:
-    """Install a global SDK TracerProvider (once) and return a fresh exporter.
+@pytest.fixture(scope="module")
+def _module_exporter() -> InMemorySpanExporter:
+    """Attach a single in-memory exporter to the global SDK TracerProvider.
 
-    The plugin emits tool spans through ``trace.get_tracer("argox")``, which
-    resolves to the global provider, so the test installs an SDK provider
-    globally and attaches its own in-memory exporter for assertions.
+    Both the run span (``trace.get_tracer("argox")`` in the Manager) and the
+    tool spans (the plugin's tracer) resolve to the global provider, so the
+    exporter must hang off it. Done once per module — adding a processor per
+    test would accumulate exporters on the shared provider and leak spans across
+    tests (PLUGIN-06 review #4).
     """
     provider = trace.get_tracer_provider()
     if not isinstance(provider, TracerProvider):
@@ -643,6 +645,18 @@ def span_exporter() -> InMemorySpanExporter:
     exporter = InMemorySpanExporter()
     provider.add_span_processor(SimpleSpanProcessor(exporter))
     return exporter
+
+
+@pytest.fixture
+def span_exporter(_module_exporter: InMemorySpanExporter) -> InMemorySpanExporter:
+    """Per-test view of the module exporter, cleared before and after each test.
+
+    Clearing isolates tests without registering a new processor every time, so
+    the global provider keeps exactly one exporter for the whole module.
+    """
+    _module_exporter.clear()
+    yield _module_exporter
+    _module_exporter.clear()
 
 
 def _tool_spans(exporter: InMemorySpanExporter) -> list[Any]:
@@ -702,9 +716,13 @@ class TestToolCallSpans:
         assert tool_span.context.trace_id == run_span.context.trace_id
 
     @pytest.mark.asyncio
-    async def test_failing_tool_records_exception_and_error_status(self, span_exporter):
+    async def test_raising_tool_sets_error_status_and_error_type_only(self, span_exporter):
+        # A custom invoker that propagates (no failure_error_function) hits the
+        # shim's except path. The span gets ERROR + error.type, and crucially
+        # NOT the exception message/stack (which echoes the secret here) — see
+        # review #1 (PII) and #2 (the ERROR path only fires when it raises).
         async def _boom(ctx: Any, raw_input: str) -> str:
-            raise ValueError("tool exploded")
+            raise ValueError("leaked-secret-12345")
 
         failing_tool = FunctionTool(
             name="boom",
@@ -720,7 +738,7 @@ class TestToolCallSpans:
         async def fake_runner(agent: Any, prompt: str):
             tool = next(t for t in agent.tools if t.name == "boom")
             ctx = SimpleNamespace(tool_name=tool.name)
-            with pytest.raises(ValueError, match="tool exploded"):
+            with pytest.raises(ValueError, match="leaked-secret"):
                 await tool.on_invoke_tool(ctx, "{}")
             return _make_run_result("done", _make_usage(1, 1))
 
@@ -732,7 +750,64 @@ class TestToolCallSpans:
 
         tool_span = _tool_spans(span_exporter)[0]
         assert tool_span.status.status_code == StatusCode.ERROR
-        assert any(e.name == "exception" for e in tool_span.events)
+        assert tool_span.attributes["error.type"] == "ValueError"
+        # No recorded exception event, and the secret never lands on the span.
+        assert tool_span.events == ()
+        assert "leaked-secret-12345" not in repr(dict(tool_span.attributes))
+        assert "leaked-secret-12345" not in (tool_span.status.description or "")
+
+    @pytest.mark.asyncio
+    async def test_real_function_tool_raising_propagates_to_error_span(self, span_exporter):
+        # End-to-end through a real @function_tool whose body raises, with the
+        # SDK's default failure handling DISABLED so the exception propagates
+        # past the shim. Proves the ERROR path works through the real SDK
+        # invoker, not only a hand-rolled FunctionTool (review #2).
+        @function_tool(failure_error_function=None)
+        def explode(value: str) -> str:
+            """Always raises."""
+            raise RuntimeError("kaboom")
+
+        async def fake_runner(agent: Any, prompt: str):
+            tool = next(t for t in agent.tools if t.name == "explode")
+            ctx = SimpleNamespace(tool_name=tool.name)
+            with pytest.raises(RuntimeError, match="kaboom"):
+                await tool.on_invoke_tool(ctx, json.dumps({"value": "x"}))
+            return _make_run_result("done", _make_usage(1, 1))
+
+        mgr = ArgoxManager()
+        mgr.register_plugin(ArgoxOpenAIPlugin())
+        agent = _make_agent()
+        object.__setattr__(agent, "tools", [explode])
+        await mgr.run(agent, "hi", "openai", fake_runner)
+
+        tool_span = _tool_spans(span_exporter)[0]
+        assert tool_span.name == "execute_tool explode"
+        assert tool_span.status.status_code == StatusCode.ERROR
+        assert tool_span.attributes["error.type"] == "RuntimeError"
+
+    @pytest.mark.asyncio
+    async def test_successful_tool_span_has_no_error_attributes(self, span_exporter):
+        # Sanity counterpart: a normal call leaves the span unmarked. A default
+        # @function_tool that soft-handles its own failure (returns an error
+        # string instead of raising) takes this same path — the shim never sees
+        # an exception, so no ERROR (boundary noted in review #2).
+        recording_tool = _make_recording_function_tool("record", [])
+
+        async def fake_runner(agent: Any, prompt: str):
+            tool = next(t for t in agent.tools if t.name == "record")
+            ctx = SimpleNamespace(tool_name=tool.name)
+            await tool.on_invoke_tool(ctx, '{"text":"hi"}')
+            return _make_run_result("done", _make_usage(1, 1))
+
+        mgr = ArgoxManager()
+        mgr.register_plugin(ArgoxOpenAIPlugin())
+        agent = _make_agent()
+        object.__setattr__(agent, "tools", [recording_tool])
+        await mgr.run(agent, "hi", "openai", fake_runner)
+
+        tool_span = _tool_spans(span_exporter)[0]
+        assert tool_span.status.status_code != StatusCode.ERROR
+        assert "error.type" not in tool_span.attributes
 
     @pytest.mark.asyncio
     async def test_span_emitted_without_any_processors(self, span_exporter):
