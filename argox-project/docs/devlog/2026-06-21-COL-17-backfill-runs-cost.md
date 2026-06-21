@@ -1,7 +1,7 @@
 # [COL-17] Backfill runs.cost_usd from model and token totals
 
 - **Date:** 2026-06-21
-- **PR:** pending  ·  **Branch:** feat/COL-17-backfill-runs-cost
+- **PR:** #151  ·  **Branch:** feat/COL-17-backfill-runs-cost
 - **Status:** in-review
 
 ## What changed
