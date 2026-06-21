@@ -35,3 +35,14 @@ attribute setting. Companion to CORE-08 (#143), which made the SDK emit
   `pricing.yaml` key (or `ARGOX_PRICING_TABLE_PATH`) stays the operator's
   responsibility. Documented in the `instrument` docstring.
 - Run-summary export to `/v1/runs` is #106 (EXP-09).
+- Follow-up (low priority, from PR #150 review): `instrument` writes
+  `gen_ai.request.model` via the ambient `trace.get_current_span()`. Correct in
+  the normal flow (the Manager calls `instrument` inside the run span), but if
+  ever invoked outside an active span the write fails silently — the same class
+  of bug this ticket fixes. Preferred fix is not to pass the span into the
+  plugin (that would change the `ArgoxPlugin.instrument` contract for every
+  plugin); instead invert the responsibility like CORE-08: the plugin only
+  *extracts* the model (into `metrics`/return value) and the Manager — which
+  already holds `span` in scope — writes the attribute, centralizing all
+  `argox.agent.run` span writes. Fits when the plugin contract is next touched
+  or more GenAI attributes (`gen_ai.response.model`, etc.) are promoted.
