@@ -209,7 +209,13 @@ audit log (COL-08) records governance events as append-only JSONL segments
 (`audit-log/{YYYY}/{MM}/{seq_start}-{seq_end}.jsonl`) linked into a SHA-256
 hash chain: `POST /api/v1/audit` appends, `GET /api/v1/audit/verify` walks the
 chain and reports the first broken link, and the log exposes no delete
-operation (AI Act Art. 12 retention). Every Collector endpoint except the
+operation (AI Act Art. 12 retention). It is a single **unified chain** (COL-14):
+every record carries a hashed `kind` discriminator (`run` | `span_batch` |
+`event`), and a run record persisted by `/v1/runs` is appended with
+`kind="run"` and the digest of its immutable blob right after the blob write,
+so the Art. 12/13 content it carries (prompt, output, tokens, violations) is
+tamper-evident. `verify` reports the broken record's `kind`, `target`
+(`run_id` / `trace_id`) and zero-based offset. Every Collector endpoint except the
 health probes is now authenticated (COL-09): SDK clients send a scoped,
 revocable API key as `Authorization: Bearer argox_…` (ingest needs the
 `ingest` scope, `RemotePolicyClient` polling needs `policy-read`), while

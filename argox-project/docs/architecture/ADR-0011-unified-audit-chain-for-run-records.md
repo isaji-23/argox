@@ -1,0 +1,59 @@
+# ADR-0011: One unified audit chain for run records and span batches
+
+- **Status:** accepted
+- **Date:** 2026-06-22
+- **Ticket:** COL-14
+
+## Context
+
+The WORM audit log (ADR-0004) hash-chains governance events for AI Act Art. 12
+retention. With Route B (ADR-0007), the content that Art. 12 (record-keeping)
+and Art. 13 (transparency) actually require evidence for — prompt, final
+output, per-tool detail, per-LLM-call tokens, policy-violation reasons — lives
+in run records persisted by COL-11, not in the existing chain. Leaving them out
+means DOC-01 cannot honestly claim coverage.
+
+COL-14 had to choose between two shapes:
+
+1. **Unified chain.** Run records and span batches share one `audit.jsonl`
+   chain with a `kind` discriminator. One chain, one verification endpoint.
+2. **Parallel chains.** Separate `runs_audit.jsonl` and `spans_audit.jsonl`
+   with independent `prev_hash` linkage; the verifier walks both.
+
+## Decision
+
+Use a **single unified chain**. Every `AuditRecord` carries a `kind` field
+(`run` | `span_batch` | `event`) that is hashed with the rest of the record, so
+the discriminator is itself tamper-evident. This matches Art. 12's intent of
+"one tamper-evident record of the system's behaviour".
+
+Data flow: run ingest `_persist` appends a `kind="run"` entry **after** the
+immutable blob write (post-ack, so a failed write never enters the chain),
+`target=run_id`, `payload_digest` = digest of the stored blob bytes. The append
+is skipped on re-ingest (the blob already exists, so the run is already chained)
+and any audit failure is logged, never re-raised — an already-persisted run
+must not become a 503 or crash the background task; the chain still surfaces the
+resulting gap at `verify` time.
+
+`verify` (and `GET /api/v1/audit/verify`) report the first broken record's
+`kind`, `target` (`run_id` / `trace_id`) and zero-based `offset`, so an auditor
+can page straight to it.
+
+## Triggers for the next refactor
+
+- When span-batch ingest needs to be auto-chained (today only the manual
+  endpoint mints `span_batch`): wire an append into the OTLP ingest path,
+  mirroring the run path.
+- When retention rules must diverge per kind (e.g. runs kept longer than
+  spans): revisit whether a single lifecycle policy on one chain still holds,
+  or whether parallel chains become justified.
+- If regulators require external timestamping (RFC 3161), that is a new chain
+  property, not a re-chaining.
+
+## What stays out of scope
+
+- No retroactive backfill of runs ingested before COL-14. Pre-COL-14 entries
+  without a `kind` default to `event` on read and will flag under `verify`
+  (acceptable: there is no production audit data predating this).
+- No external timestamping authority — deferred to a separate ticket.
+- The SDK still does not write to the audit log; it remains Collector-side.
