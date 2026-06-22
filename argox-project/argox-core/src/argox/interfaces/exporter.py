@@ -47,7 +47,8 @@ class ExporterBase(ABC):
         ``metrics`` is fully populated.
         Args:
             metrics: Complete metrics for the run. Read-only —
-                     the exporter must not modify this object.
+                     the exporter must not modify this object, except for
+                     appending diagnostic messages to `metrics.exporter_errors`.
         Note:
             Implementations should be fault-tolerant: if the destination
             is unavailable (network down, quota exceeded…), it is recommended

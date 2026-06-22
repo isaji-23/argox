@@ -21,7 +21,7 @@ def metrics() -> AgentRunMetrics:
 
 @pytest.fixture
 def mock_sleep():
-    with patch("time.sleep") as mock:
+    with patch("time.sleep") as mock, patch("random.uniform", return_value=0.0):
         yield mock
 
 
@@ -174,8 +174,103 @@ def test_exporter_unexpected_exception_never_propagates(metrics, mock_sleep):
         except Exception as exc:
             pytest.fail(f"Exporter raised exception: {exc}")
 
-        # 1 initial + 1 retry = 2 attempts total
-        assert mock_post.call_count == 2
+        # Unexpected exceptions abort immediately without retry
+        assert mock_post.call_count == 1
         assert len(metrics.exporter_errors) == 1
-        assert "HttpRunExporter: Failed to export after 2 attempts." in metrics.exporter_errors[0]
-        assert "RuntimeError" in metrics.exporter_errors[0]
+        assert "HttpRunExporter: UnexpectedError: RuntimeError (Critical memory corruption)" in metrics.exporter_errors[0]
+
+
+def test_exporter_http_api_key_warning(caplog):
+    import logging
+    with caplog.at_level(logging.WARNING):
+        # http endpoint with api_key should trigger warning
+        HttpRunExporter(endpoint="http://localhost:8000", api_key="secret-key")
+
+    assert any(
+        "API key is provided but the endpoint" in record.message
+        and "does not use HTTPS" in record.message
+        for record in caplog.records
+    )
+
+    caplog.clear()
+    with caplog.at_level(logging.WARNING):
+        # https endpoint with api_key should NOT trigger warning
+        HttpRunExporter(endpoint="https://localhost:8000", api_key="secret-key")
+
+    assert not any(
+        "API key is provided but the endpoint" in record.message
+        for record in caplog.records
+    )
+
+
+def test_exporter_to_dict_failure_shielding(metrics):
+    exporter = HttpRunExporter(endpoint="http://localhost:8000")
+
+    with patch.object(metrics, "to_dict", side_effect=ValueError("Serialization error")):
+        try:
+            exporter.export(metrics)
+        except Exception as exc:
+            pytest.fail(f"Exporter raised exception on serialization failure: {exc}")
+
+    assert len(metrics.exporter_errors) == 1
+    assert "SerializationError" in metrics.exporter_errors[0]
+
+
+def test_exporter_429_retry_with_retry_after(metrics, mock_sleep):
+    exporter = HttpRunExporter(endpoint="http://localhost:8000", max_retries=2)
+
+    with patch.object(exporter._client, "post") as mock_post:
+        resp_429 = MagicMock(spec=httpx.Response)
+        resp_429.status_code = 429
+        resp_429.headers = {"Retry-After": "5.0"}
+
+        resp_202 = MagicMock(spec=httpx.Response)
+        resp_202.status_code = 202
+
+        # 429 then success
+        mock_post.side_effect = [resp_429, resp_202]
+
+        exporter.export(metrics)
+
+        # 1st attempt: returns 429. Sleeps 5.0s (from Retry-After).
+        # 2nd attempt: backoff sleeps 0.5s, then returns 202.
+        assert mock_post.call_count == 2
+        assert mock_sleep.call_count == 2
+        mock_sleep.assert_any_call(5.0)
+        mock_sleep.assert_any_call(0.5)
+        assert len(metrics.exporter_errors) == 0
+
+
+def test_exporter_429_retry_with_retry_after_capped(metrics, mock_sleep):
+    exporter = HttpRunExporter(endpoint="http://localhost:8000", max_retries=1)
+
+    with patch.object(exporter._client, "post") as mock_post:
+        resp_429 = MagicMock(spec=httpx.Response)
+        resp_429.status_code = 429
+        resp_429.headers = {"Retry-After": "30.0"}  # Exceeds 10.0s cap
+
+        resp_202 = MagicMock(spec=httpx.Response)
+        resp_202.status_code = 202
+
+        mock_post.side_effect = [resp_429, resp_202]
+
+        exporter.export(metrics)
+
+        # Retry-After should be capped at 10.0
+        assert mock_sleep.call_count == 2
+        mock_sleep.assert_any_call(10.0)
+        mock_sleep.assert_any_call(0.5)
+
+
+def test_exporter_close_and_context_manager():
+    exporter = HttpRunExporter(endpoint="http://localhost:8000")
+    with patch.object(exporter._client, "close") as mock_close:
+        exporter.close()
+        mock_close.assert_called_once()
+
+    # Test context manager
+    exporter_ctx = HttpRunExporter(endpoint="http://localhost:8000")
+    with patch.object(exporter_ctx._client, "close") as mock_close_ctx:
+        with exporter_ctx:
+            pass
+        mock_close_ctx.assert_called_once()
