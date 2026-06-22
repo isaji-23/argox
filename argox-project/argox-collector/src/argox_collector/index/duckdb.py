@@ -12,7 +12,13 @@ from typing import Any, Optional
 import duckdb
 import structlog
 
-from argox_collector.index.base import SpanRecord, TraceIndex, TraceIndexError
+from argox_collector import semconv
+from argox_collector.index.base import (
+    RunRecord,
+    SpanRecord,
+    TraceIndex,
+    TraceIndexError,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -41,6 +47,38 @@ _INSERT_SQL = """
         run_success = COALESCE(excluded.run_success, spans.run_success),
         attributes = COALESCE(excluded.attributes, spans.attributes)
 """
+
+
+_INSERT_RUN_SQL = """
+    INSERT INTO runs (
+        run_id, trace_id, agent_name, agent_version, timestamp,
+        success, total_input_tokens, total_output_tokens,
+        duration_seconds, cost_usd, blob_path, model, ingested_at, audited
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, FALSE)
+    ON CONFLICT (run_id) DO NOTHING
+"""
+
+_RUN_COLUMNS = (
+    "run_id, trace_id, agent_name, agent_version, timestamp, "
+    "success, total_input_tokens, total_output_tokens, "
+    "duration_seconds, cost_usd, blob_path, model"
+)
+
+# Pull the model id from a trace's spans for the run-cost fallback (COL-17).
+# The attribute keys contain dots, so each is a double-quoted JSON path
+# component rather than a nested lookup. Request model wins over response.
+#
+# Limitation: MAX() picks the lexicographically largest model, not "the" model.
+# For a single-model run (the common case) that is the only model, so it is
+# correct. For a genuinely multi-model run there is no single right answer here
+# — pricing the run's token totals at one model's rate is approximate; exact
+# per-call cost would need per-span pricing summed over the trace (see ADR-0008).
+_TRACE_MODEL_SQL = (
+    "SELECT COALESCE("
+    f"  MAX(json_extract_string(attributes, '$.\"{semconv.GEN_AI_REQUEST_MODEL}\"')),"
+    f"  MAX(json_extract_string(attributes, '$.\"{semconv.GEN_AI_RESPONSE_MODEL}\"'))"
+    ") FROM spans WHERE trace_id = ?"
+)
 
 
 def _to_naive_utc(dt: Optional[datetime]) -> Optional[datetime]:
@@ -146,6 +184,53 @@ class DuckDBTraceIndex(TraceIndex):
             # Create indexes for common query patterns
             self._conn.execute("CREATE INDEX IF NOT EXISTS idx_spans_start_time ON spans (start_time)")
             self._conn.execute("CREATE INDEX IF NOT EXISTS idx_spans_agent_name ON spans (agent_name)")
+
+            # Run summaries (COL-11). The full record lives in the blob store;
+            # this table holds the flat, queryable projection. cost_usd is
+            # nullable and backfilled from model + token totals (COL-17).
+            self._conn.execute("""
+                CREATE TABLE IF NOT EXISTS runs (
+                    run_id VARCHAR PRIMARY KEY,
+                    trace_id VARCHAR,
+                    agent_name VARCHAR,
+                    agent_version VARCHAR,
+                    timestamp VARCHAR,
+                    success BOOLEAN,
+                    total_input_tokens BIGINT,
+                    total_output_tokens BIGINT,
+                    duration_seconds DOUBLE,
+                    cost_usd DOUBLE,
+                    blob_path VARCHAR,
+                    model VARCHAR,
+                    ingested_at TIMESTAMP,
+                    audited BOOLEAN
+                )
+            """)
+            # Add the model column to runs tables created before COL-17 so the
+            # cost backfill can read it on an upgraded database.
+            self._conn.execute("ALTER TABLE runs ADD COLUMN IF NOT EXISTS model VARCHAR")
+            # Track whether a run has entered the WORM chain (COL-14). Tri-state
+            # on purpose: ``insert_run`` writes FALSE for every COL-14-era run
+            # (awaiting/failed chaining), TRUE once chained. The column is added
+            # WITHOUT a default, so pre-COL-14 rows stay NULL — "out of scope,
+            # never attempted" — and the reconcile sweep (``audited = FALSE``)
+            # skips them, honouring the no-retroactive-backfill non-goal.
+            self._conn.execute(
+                "ALTER TABLE runs ADD COLUMN IF NOT EXISTS audited BOOLEAN"
+            )
+            # Likewise add ingested_at for runs tables created before it was
+            # promoted, so the COL-13 list index and ordering bind on an
+            # upgraded database.
+            self._conn.execute("ALTER TABLE runs ADD COLUMN IF NOT EXISTS ingested_at TIMESTAMP")
+            # trace_id is indexed so the Query API can join from a span back
+            # to its run record (COL-13).
+            self._conn.execute("CREATE INDEX IF NOT EXISTS idx_runs_trace_id ON runs (trace_id)")
+            # The run list sorts/paginates on ingest time, so that column is
+            # indexed to keep the list query within the P95 SLO on large
+            # datasets (COL-13). agent_name is deliberately not indexed: it is
+            # low-cardinality (few agents), so a secondary index buys little on
+            # read while adding write and startup cost.
+            self._conn.execute("CREATE INDEX IF NOT EXISTS idx_runs_ingested_at ON runs (ingested_at)")
 
     def insert_span(self, record: SpanRecord) -> None:
         self.insert_spans([record])
@@ -508,6 +593,141 @@ class DuckDBTraceIndex(TraceIndex):
             "successful_runs": successful,
             "success_rate": (successful / total) if total else None,
         }
+
+    def insert_run(self, record: RunRecord) -> None:
+        row = (
+            record.run_id,
+            record.trace_id,
+            record.agent_name,
+            record.agent_version,
+            record.timestamp,
+            record.success,
+            int(record.total_input_tokens or 0),
+            int(record.total_output_tokens or 0),
+            _finite_or_none(record.duration_seconds),
+            _finite_or_none(record.cost_usd),
+            record.blob_path,
+            record.model,
+            datetime.now(timezone.utc).replace(tzinfo=None),
+        )
+        with self._lock:
+            self._conn.execute(_INSERT_RUN_SQL, row)
+
+    def set_run_cost(self, run_id: str, cost_usd: Optional[float]) -> None:
+        # A standalone UPDATE, not part of insert_run's first-write-wins
+        # INSERT: cost is collector-derived, so backfilling it must not touch
+        # the immutable client-reported columns. _finite_or_none keeps a
+        # NaN/Infinity out of the DOUBLE column and its aggregates.
+        with self._lock:
+            self._conn.execute(
+                "UPDATE runs SET cost_usd = ? WHERE run_id = ?",
+                (_finite_or_none(cost_usd), run_id),
+            )
+
+    def is_run_audited(self, run_id: str) -> bool:
+        rows = self._read("SELECT audited FROM runs WHERE run_id = ?", (run_id,))
+        if not rows:
+            return False
+        # Tri-state: only an explicit FALSE means "COL-14 run still to chain".
+        # TRUE (already chained) and NULL (pre-COL-14, out of scope) both report
+        # audited so neither the re-ingest retry nor the sweep touches them.
+        return rows[0][0] is not False
+
+    def list_unaudited_runs(self, *, limit: int) -> list[RunRecord]:
+        rows = self._read(
+            f"SELECT {_RUN_COLUMNS} FROM runs WHERE audited = FALSE "
+            "ORDER BY ingested_at NULLS FIRST, run_id LIMIT ?",
+            (limit,),
+        )
+        return [self._row_to_run(row) for row in rows]
+
+    def mark_run_audited(self, run_id: str) -> None:
+        # Standalone UPDATE like set_run_cost: ``audited`` is a collector-side
+        # bookkeeping flag, not client content, so it never touches the
+        # first-write-wins immutable columns. Marking an unknown run is a no-op.
+        with self._lock:
+            self._conn.execute(
+                "UPDATE runs SET audited = TRUE WHERE run_id = ?", (run_id,)
+            )
+
+    def get_run_model_from_trace(self, trace_id: str) -> Optional[str]:
+        rows = self._read(_TRACE_MODEL_SQL, (trace_id,))
+        return rows[0][0] if rows and rows[0][0] else None
+
+    def list_runs(
+        self,
+        *,
+        skip: int = 0,
+        limit: int = 50,
+        agent_name: Optional[str] = None,
+        success: Optional[bool] = None,
+        start: Optional[datetime] = None,
+        end: Optional[datetime] = None,
+    ) -> tuple[list[RunRecord], int]:
+        # Build the WHERE clause from the supplied filters only, so an absent
+        # filter neither narrows the result nor changes the query plan.
+        clauses: list[str] = []
+        params: list[Any] = []
+        if agent_name is not None:
+            clauses.append("agent_name = ?")
+            params.append(agent_name)
+        if success is not None:
+            clauses.append("success = ?")
+            params.append(success)
+        if start is not None:
+            clauses.append("ingested_at >= ?")
+            params.append(_to_naive_utc(start))
+        if end is not None:
+            # Half-open interval: the upper bound is exclusive so adjacent
+            # windows do not double-count a run on the boundary.
+            clauses.append("ingested_at < ?")
+            params.append(_to_naive_utc(end))
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+
+        rows = self._read(
+            f"SELECT {_RUN_COLUMNS} FROM runs{where} "
+            "ORDER BY ingested_at DESC NULLS LAST, run_id LIMIT ? OFFSET ?",
+            (*params, limit, skip),
+        )
+        total = self._read(
+            f"SELECT COUNT(*) FROM runs{where}", tuple(params)
+        )[0][0]
+        return [self._row_to_run(row) for row in rows], total
+
+    def get_run(self, run_id: str) -> Optional[RunRecord]:
+        rows = self._read(
+            f"SELECT {_RUN_COLUMNS} FROM runs WHERE run_id = ?", (run_id,)
+        )
+        return self._row_to_run(rows[0]) if rows else None
+
+    def get_run_by_trace_id(self, trace_id: str) -> Optional[RunRecord]:
+        # Order by the collector-assigned ingest time, not the client-supplied
+        # ``timestamp`` (a free-form VARCHAR whose lexicographic order need not
+        # match chronology), so a re-used trace_id resolves to the run ingested
+        # most recently.
+        rows = self._read(
+            f"SELECT {_RUN_COLUMNS} FROM runs WHERE trace_id = ? "
+            "ORDER BY ingested_at DESC NULLS LAST LIMIT 1",
+            (trace_id,),
+        )
+        return self._row_to_run(rows[0]) if rows else None
+
+    @staticmethod
+    def _row_to_run(row: tuple) -> RunRecord:
+        return RunRecord(
+            run_id=row[0],
+            trace_id=row[1],
+            agent_name=row[2],
+            agent_version=row[3],
+            timestamp=row[4],
+            success=row[5],
+            total_input_tokens=row[6] or 0,
+            total_output_tokens=row[7] or 0,
+            duration_seconds=row[8],
+            cost_usd=row[9],
+            blob_path=row[10],
+            model=row[11],
+        )
 
     def health_check(self) -> None:
         try:

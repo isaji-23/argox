@@ -5,11 +5,11 @@ from __future__ import annotations
 from pathlib import Path
 
 from argox_collector.enrichment import pii
-from argox_collector.enrichment.cost import enrich_cost
+from argox_collector.enrichment.cost import enrich_cost, enrich_run_cost
 from argox_collector.enrichment.normalize import normalize
 from argox_collector.enrichment.pipeline import enrich
 from argox_collector.enrichment.pricing import load_pricing
-from argox_collector.index.base import SpanRecord
+from argox_collector.index.base import RunRecord, SpanRecord
 from argox_collector.settings import CollectorSettings
 
 
@@ -55,6 +55,34 @@ def test_cost_is_idempotent_when_already_set() -> None:
         },
     )
     assert enrich_cost(record, pricing).run_cost == 0.42
+
+
+def test_run_cost_computed_for_known_model() -> None:
+    pricing = load_pricing()
+    record = RunRecord(
+        run_id="r", model="gpt-4o",
+        total_input_tokens=1000, total_output_tokens=500,
+    )
+    # 1.0 * 0.0025 + 0.5 * 0.01 = 0.0075
+    assert enrich_run_cost(record, pricing) == 0.0075
+
+
+def test_run_cost_unknown_model_returns_none() -> None:
+    pricing = load_pricing()
+    record = RunRecord(run_id="r", model="mystery-model", total_input_tokens=1000)
+    assert enrich_run_cost(record, pricing) is None
+
+
+def test_run_cost_no_model_returns_none() -> None:
+    pricing = load_pricing()
+    record = RunRecord(run_id="r", total_input_tokens=1000, total_output_tokens=500)
+    assert enrich_run_cost(record, pricing) is None
+
+
+def test_run_cost_idempotent_when_already_set() -> None:
+    pricing = load_pricing()
+    record = RunRecord(run_id="r", model="gpt-4o", cost_usd=0.42)
+    assert enrich_run_cost(record, pricing) == 0.42
 
 
 def test_pii_scan_tags_email() -> None:
