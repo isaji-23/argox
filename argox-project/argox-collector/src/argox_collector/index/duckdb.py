@@ -550,14 +550,14 @@ class DuckDBTraceIndex(TraceIndex):
         return decoded
 
     def get_metrics_cost(self, *, window_hours: int = 24) -> dict:
-        # Cost sums over ALL spans, not just roots
+        # Cost is aggregated from the runs table for consistency across totals and timelines
         cutoff = _window_cutoff(window_hours)
         query = """
             SELECT
-                SUM(run_cost) FILTER (WHERE isfinite(run_cost)),
+                SUM(cost_usd) FILTER (WHERE isfinite(cost_usd)),
                 COUNT(DISTINCT trace_id)
-            FROM spans
-            WHERE start_time >= ?
+            FROM runs
+            WHERE ingested_at >= ?
         """
         row = self._read(query, (cutoff,))[0]
 
@@ -611,26 +611,71 @@ class DuckDBTraceIndex(TraceIndex):
 
     def get_metrics_latency(self, *, window_hours: int = 24) -> dict:
         cutoff = _window_cutoff(window_hours)
-        query_stats = """
+        query = """
+            WITH stats AS (
+                SELECT
+                    MIN(duration_ms) FILTER (WHERE isfinite(duration_ms)) AS min_val,
+                    MAX(duration_ms) FILTER (WHERE isfinite(duration_ms)) AS max_val,
+                    AVG(duration_ms) FILTER (WHERE isfinite(duration_ms)) AS avg_val,
+                    QUANTILE_CONT(duration_ms, 0.50) FILTER (WHERE isfinite(duration_ms)) AS p50_val,
+                    QUANTILE_CONT(duration_ms, 0.95) FILTER (WHERE isfinite(duration_ms)) AS p95_val,
+                    QUANTILE_CONT(duration_ms, 0.99) FILTER (WHERE isfinite(duration_ms)) AS p99_val,
+                    COUNT(*) FILTER (WHERE isfinite(duration_ms)) AS trace_count
+                FROM spans
+                WHERE start_time >= ? AND parent_span_id IS NULL
+            ),
+            bins AS (
+                SELECT
+                    CAST(
+                        CASE
+                            WHEN stats.max_val = stats.min_val THEN 0
+                            ELSE LEAST(14, FLOOR(15 * (duration_ms - stats.min_val) / (stats.max_val - stats.min_val)))
+                        END AS INTEGER
+                    ) AS bin_idx,
+                    COUNT(*) AS bin_count
+                FROM spans, stats
+                WHERE start_time >= ? AND parent_span_id IS NULL AND isfinite(duration_ms)
+                GROUP BY 1
+            )
             SELECT
-                AVG(duration_ms) FILTER (WHERE isfinite(duration_ms)),
-                QUANTILE_CONT(duration_ms, 0.50) FILTER (WHERE isfinite(duration_ms)),
-                QUANTILE_CONT(duration_ms, 0.95) FILTER (WHERE isfinite(duration_ms)),
-                QUANTILE_CONT(duration_ms, 0.99) FILTER (WHERE isfinite(duration_ms)),
-                COUNT(*) FILTER (WHERE isfinite(duration_ms)),
-                MIN(duration_ms) FILTER (WHERE isfinite(duration_ms)),
-                MAX(duration_ms) FILTER (WHERE isfinite(duration_ms))
-            FROM spans
-            WHERE start_time >= ? AND parent_span_id IS NULL
+                stats.min_val,
+                stats.max_val,
+                stats.avg_val,
+                stats.p50_val,
+                stats.p95_val,
+                stats.p99_val,
+                stats.trace_count,
+                bins.bin_idx,
+                bins.bin_count
+            FROM stats
+            LEFT JOIN bins ON TRUE
+            ORDER BY bins.bin_idx
         """
-        row = self._read(query_stats, (cutoff,))[0]
-        avg_val = row[0] if row[0] is not None else 0.0
-        p50_val = row[1] if row[1] is not None else 0.0
-        p95_val = row[2] if row[2] is not None else 0.0
-        p99_val = row[3] if row[3] is not None else 0.0
-        trace_count = row[4] or 0
-        min_val = row[5]
-        max_val = row[6]
+        rows = self._read(query, (cutoff, cutoff))
+
+        if not rows or rows[0][6] == 0:
+            return {
+                "window_hours": window_hours,
+                "avg_latency_ms": 0.0,
+                "p95_latency_ms": 0.0,
+                "trace_count": 0,
+                "percentiles": {"p50": 0.0, "p95": 0.0, "p99": 0.0},
+                "histogram": [],
+            }
+
+        first = rows[0]
+        min_val = first[0]
+        max_val = first[1]
+        avg_val = first[2] or 0.0
+        p50_val = first[3] or 0.0
+        p95_val = first[4] or 0.0
+        p99_val = first[5] or 0.0
+        trace_count = first[6] or 0
+
+        bin_counts = {}
+        for r in rows:
+            if r[7] is not None:
+                bin_counts[r[7]] = r[8] or 0
 
         percentiles = {
             "p50": p50_val,
@@ -639,33 +684,21 @@ class DuckDBTraceIndex(TraceIndex):
         }
 
         histogram = []
-        if trace_count > 0 and min_val is not None and max_val is not None:
-            if max_val == min_val or max_val - min_val < 1e-5:
-                histogram = [{
-                    "bin_min": min_val,
-                    "bin_max": max_val + 1000.0,
-                    "count": trace_count,
-                }]
-            else:
-                N = 15
-                w = (max_val - min_val) / N
-                query_bins = """
-                    SELECT
-                        CAST(LEAST(? - 1, FLOOR((duration_ms - ?) / ?)) AS INTEGER) AS bin_idx,
-                        COUNT(*)
-                    FROM spans
-                    WHERE start_time >= ? AND parent_span_id IS NULL AND isfinite(duration_ms)
-                    GROUP BY 1
-                    ORDER BY 1
-                """
-                rows_bins = self._read(query_bins, (N, min_val, w, cutoff))
-                bin_counts = {r[0]: r[1] for r in rows_bins}
-                for i in range(N):
-                    histogram.append({
-                        "bin_min": min_val + i * w,
-                        "bin_max": min_val + (i + 1) * w,
-                        "count": bin_counts.get(i, 0),
-                    })
+        if max_val == min_val or max_val - min_val < 1e-5:
+            histogram = [{
+                "bin_min": min_val,
+                "bin_max": max_val + 1000.0,
+                "count": trace_count,
+            }]
+        else:
+            N = 15
+            w = (max_val - min_val) / N
+            for i in range(N):
+                histogram.append({
+                    "bin_min": min_val + i * w,
+                    "bin_max": min_val + (i + 1) * w,
+                    "count": bin_counts.get(i, 0),
+                })
 
         return {
             "window_hours": window_hours,

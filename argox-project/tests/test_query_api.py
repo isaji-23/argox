@@ -78,6 +78,43 @@ def _spans() -> list[SpanRecord]:
 def index(tmp_path: Path) -> DuckDBTraceIndex:
     idx = DuckDBTraceIndex(tmp_path / "test.duckdb")
     idx.insert_spans(_spans())
+    # Insert runs matching the spans for get_metrics_cost
+    idx.insert_run(RunRecord(
+        run_id="run_t1",
+        trace_id="t1",
+        agent_name="agent-a",
+        agent_version="1.0",
+        timestamp="2026-06-22T19:00:00Z",
+        success=True,
+        cost_usd=0.07,
+        model="gpt-4o",
+    ))
+    idx.insert_run(RunRecord(
+        run_id="run_t2",
+        trace_id="t2",
+        agent_name="agent-b",
+        agent_version="2.0",
+        timestamp="2026-06-22T18:30:00Z",
+        success=False,
+        cost_usd=0.10,
+        model="unknown",
+    ))
+    idx.insert_run(RunRecord(
+        run_id="run_t3",
+        trace_id="t3",
+        agent_name="agent-old",
+        timestamp="2026-06-19T19:00:00Z",
+        success=True,
+        cost_usd=9.99,
+        model="unknown",
+    ))
+    # Override ingested_at of run_t3 so it is outside the 24h window (3 days ago)
+    three_days_ago = NOW - timedelta(days=3)
+    naive = three_days_ago.astimezone(timezone.utc).replace(tzinfo=None)
+    with idx._lock:
+        idx._conn.execute(
+            "UPDATE runs SET ingested_at = ? WHERE run_id = ?", (naive, "run_t3")
+        )
     return idx
 
 
@@ -345,6 +382,13 @@ def test_index_metrics_with_populated_data(index: DuckDBTraceIndex) -> None:
     assert len(success["top_blocked_tools"]) == 1
     assert success["top_blocked_tools"][0]["tool_name"] == "web_search"
     assert success["top_blocked_tools"][0]["blocked_count"] == 1
+
+    # Assert wide window (> 72 hours) triggers day bucket size query correctly
+    cost_wide = index.get_metrics_cost(window_hours=168)
+    assert len(cost_wide["timeline"]) >= 2
+
+    success_wide = index.get_metrics_success(window_hours=168)
+    assert len(success_wide["timeline"]) > 0
 
 
 # ---------------------------------------------------------------------------

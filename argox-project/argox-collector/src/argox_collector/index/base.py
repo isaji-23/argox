@@ -173,7 +173,8 @@ class TraceIndex(ABC):
 
         Only root spans with a reported ``run_success`` enter the rate;
         spans that never reported an outcome are excluded rather than
-        counted as failures.
+        counted as failures. top_blocked_tools is aggregated over ALL spans
+        (typically child tool calls) where the policy decision was block.
 
         Returns a dict with:
           - window_hours (int)

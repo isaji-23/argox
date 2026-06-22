@@ -156,7 +156,7 @@ export function MetricsScreen({ timeRange }: MetricsScreenProps) {
       minute: '2-digit',
     }),
     bucket: pt.bucket,
-    rate: pt.success_rate !== null ? parseFloat((pt.success_rate * 100).toFixed(1)) : 0,
+    rate: pt.success_rate !== null ? parseFloat((pt.success_rate * 100).toFixed(1)) : null,
     total: pt.total_runs,
   }));
 
@@ -210,13 +210,17 @@ export function MetricsScreen({ timeRange }: MetricsScreenProps) {
           />
           <div className="mt-4 flex items-baseline gap-2">
             <span className="text-3xl font-bold tracking-tight text-text-primary">
-              {latencyData.percentiles.p50 >= 1000
+              {latencyData.trace_count === 0
+                ? 'N/A'
+                : latencyData.percentiles.p50 >= 1000
                 ? (latencyData.percentiles.p50 / 1000).toFixed(2) + 's'
                 : Math.round(latencyData.percentiles.p50) + 'ms'}
             </span>
           </div>
           <div className="mt-1.5 text-xs text-text-muted">
-            P95: {latencyData.p95_latency_ms >= 1000
+            P95: {latencyData.trace_count === 0
+              ? 'N/A'
+              : latencyData.p95_latency_ms >= 1000
               ? (latencyData.p95_latency_ms / 1000).toFixed(2) + 's'
               : Math.round(latencyData.p95_latency_ms) + 'ms'}
           </div>
@@ -321,6 +325,7 @@ export function MetricsScreen({ timeRange }: MetricsScreenProps) {
                     stroke="var(--allow)"
                     fill="url(#successGrad)"
                     strokeWidth={2}
+                    connectNulls
                   />
                 </AreaChart>
               </ResponsiveContainer>
