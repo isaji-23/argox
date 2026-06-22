@@ -274,6 +274,73 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List runs
+         * @description List run summaries, newest first, with optional filters.
+         *
+         *     Rows are lightweight (no ``prompt``/``final_output``); ``from``/``to``
+         *     bound the collector ingest time as a half-open ``[from, to)`` interval.
+         */
+        get: operations["list_runs"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/runs/by-trace/{trace_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get run detail by trace id
+         * @description Return the run record joined from a span's ``trace_id``.
+         *
+         *     Returns 404 when no run was exported for the trace (the SDK's
+         *     ``HttpRunExporter`` was not wired), so a span without a run is
+         *     distinguishable from a missing trace.
+         */
+        get: operations["get_run_by_trace"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/runs/{run_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get run detail
+         * @description Return the full run record for ``run_id`` (byte-equivalent blob).
+         */
+        get: operations["get_run"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/traces": {
         parameters: {
             query?: never;
@@ -501,6 +568,11 @@ export interface components {
         AuditAppendRequest: {
             /** Action */
             action: string;
+            /**
+             * Kind
+             * @default event
+             */
+            kind: string;
             /** Payload */
             payload?: unknown | null;
             /** Payload Digest */
@@ -519,6 +591,8 @@ export interface components {
             actor: string;
             /** Hash */
             hash: string;
+            /** Kind */
+            kind?: string | null;
             /** Payload Digest */
             payload_digest: string;
             /** Prev Hash */
@@ -556,10 +630,22 @@ export interface components {
         /**
          * AuditVerifyResponse
          * @description Result of walking the chain.
+         *
+         *     On a break, ``broken_kind`` and ``broken_target`` identify which kind of
+         *     record failed and its ``run_id`` (kind ``run``) or ``trace_id`` (kind
+         *     ``span_batch``); ``broken_offset`` is the zero-based position usable as the
+         *     list endpoint's ``offset``. All are ``None`` when the chain is intact or
+         *     when the broken record is too malformed to read.
          */
         AuditVerifyResponse: {
+            /** Broken Kind */
+            broken_kind?: string | null;
+            /** Broken Offset */
+            broken_offset?: number | null;
             /** Broken Seq */
             broken_seq?: number | null;
+            /** Broken Target */
+            broken_target?: string | null;
             /** Ok */
             ok: boolean;
             /** Reason */
@@ -743,6 +829,59 @@ export interface components {
             threshold: unknown;
         };
         /**
+         * RunDetail
+         * @description Full run record returned by the run-detail endpoints (COL-13).
+         *
+         *     The promoted columns are typed for the generated client; the original
+         *     ``AgentRunMetrics`` payload carries more (prompt, final output, per-tool
+         *     detail, per-call tokens, policy violations), so ``extra="allow"`` keeps
+         *     them on the response. The handler returns the stored blob bytes verbatim
+         *     when present, falling back to this projection of the index row otherwise.
+         */
+        RunDetail: {
+            /** Agent Name */
+            agent_name?: string | null;
+            /** Agent Version */
+            agent_version?: string | null;
+            /** Cost Usd */
+            cost_usd?: number | null;
+            /** Duration Seconds */
+            duration_seconds?: number | null;
+            /** Model */
+            model?: string | null;
+            /** Run Id */
+            run_id: string;
+            /** Success */
+            success?: boolean | null;
+            /** Timestamp */
+            timestamp?: string | null;
+            /**
+             * Tokens
+             * @default {}
+             */
+            tokens: {
+                [key: string]: unknown;
+            };
+            /** Trace Id */
+            trace_id?: string | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * RunListResponse
+         * @description Paginated payload returned by ``GET /api/v1/runs``.
+         */
+        RunListResponse: {
+            /** Items */
+            items: components["schemas"]["RunSummary"][];
+            /** Page */
+            page: number;
+            /** Page Size */
+            page_size: number;
+            /** Total */
+            total: number;
+        };
+        /**
          * RunRecordIn
          * @description A single ``AgentRunMetrics``-shaped run record.
          *
@@ -753,7 +892,8 @@ export interface components {
          *
          *     ``trace_id`` is optional and top-level: the SDK exporter (EXP-09) sets it
          *     so the Query API can join a span back to its run. ``cost_usd`` is left
-         *     unset at ingest and backfilled by the enrichment worker (#92).
+         *     unset at ingest and backfilled from ``model`` and the token totals
+         *     (COL-17).
          */
         RunRecordIn: {
             /**
@@ -770,6 +910,8 @@ export interface components {
             cost_usd?: number | null;
             /** Duration Seconds */
             duration_seconds?: number | null;
+            /** Model */
+            model?: string | null;
             /** Run Id */
             run_id: string;
             /** Success */
@@ -781,6 +923,45 @@ export interface components {
             trace_id?: string | null;
         } & {
             [key: string]: unknown;
+        };
+        /**
+         * RunSummary
+         * @description Lightweight, per-run row for the dashboard list view (COL-13).
+         *
+         *     The flat index projection only: ``prompt`` and ``final_output`` live on
+         *     the blob and are deliberately excluded so a list response stays bounded
+         *     regardless of run size. ``blob_path`` is an internal storage key and is
+         *     not exposed.
+         */
+        RunSummary: {
+            /** Agent Name */
+            agent_name?: string | null;
+            /** Agent Version */
+            agent_version?: string | null;
+            /** Cost Usd */
+            cost_usd?: number | null;
+            /** Duration Seconds */
+            duration_seconds?: number | null;
+            /** Model */
+            model?: string | null;
+            /** Run Id */
+            run_id: string;
+            /** Success */
+            success?: boolean | null;
+            /** Timestamp */
+            timestamp?: string | null;
+            /**
+             * Total Input Tokens
+             * @default 0
+             */
+            total_input_tokens: number;
+            /**
+             * Total Output Tokens
+             * @default 0
+             */
+            total_output_tokens: number;
+            /** Trace Id */
+            trace_id?: string | null;
         };
         /**
          * RunTokens
@@ -896,12 +1077,16 @@ export interface components {
             agent_name?: string | null;
             /** Agent Version */
             agent_version?: string | null;
+            /** Decision */
+            decision: string;
             /** End Time */
             end_time?: string | null;
             /** Span Count */
             span_count: number;
             /** Start Time */
             start_time?: string | null;
+            /** Status */
+            status: string;
             /** Total Cost */
             total_cost?: number | null;
             /** Total Duration Ms */
@@ -1419,11 +1604,128 @@ export interface operations {
             };
         };
     };
+    list_runs: {
+        parameters: {
+            query?: {
+                agent?: string | null;
+                success?: boolean | null;
+                from?: string | null;
+                to?: string | null;
+                page?: number;
+                page_size?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_run_by_trace: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                trace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunDetail"];
+                };
+            };
+            /** @description Run not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_run: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunDetail"];
+                };
+            };
+            /** @description Run not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_traces: {
         parameters: {
             query?: {
                 skip?: number;
                 limit?: number;
+                trace_id?: string | null;
+                agent_name?: string | null;
+                status?: string | null;
+                decision?: string | null;
+                sort?: string | null;
             };
             header?: never;
             path?: never;
