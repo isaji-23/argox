@@ -2,6 +2,7 @@ import pytest
 import time
 import sys
 import copy
+import asyncio
 from unittest.mock import MagicMock
 
 # Mocking Azure SDK because it might not be installed
@@ -271,3 +272,55 @@ def test_instrument_deepcopies_definitions(plugin, metrics):
     # Check that definitions are deep-copied and not sharing same reference
     assert wrapped_tool.definitions is not mock_tool.definitions
     assert wrapped_tool.definitions == mock_tool.definitions
+
+
+@pytest.mark.asyncio
+async def test_instrument_sync_tool_with_active_loop(plugin, metrics):
+    def sample_tool(location: str):
+        return f"Result for {location}"
+        
+    mock_agent = MagicMock()
+    mock_tool = MockFunctionTool(name="sample_tool", functions=[sample_tool])
+    mock_agent.tools = [mock_tool]
+    
+    # Tool args runner
+    async def tool_args_runner(name, args):
+        args["location"] = "Madrid"
+        return args
+        
+    # Instrument while the event loop is active
+    plugin.instrument(mock_agent, metrics, tool_args_runner)
+    wrapped_func = mock_agent.tools[0]._functions["sample_tool"]
+    
+    # Case 1: Call sync wrapped tool from inside the running loop thread
+    # This should trigger the executor path (_run_async runs inside ThreadPoolExecutor)
+    result_sync = wrapped_func("Paris")
+    assert result_sync == "Result for Madrid"
+    
+    # Case 2: Call sync wrapped tool from a background thread
+    # This should trigger the run_coroutine_threadsafe path
+    result_thread = await asyncio.to_thread(wrapped_func, "Paris")
+    assert result_thread == "Result for Madrid"
+
+
+def test_instrument_var_keyword_arguments(plugin, metrics):
+    def sample_tool(location: str, **kwargs):
+        return f"Weather in {location} is {kwargs.get('temp', 20)}C"
+        
+    mock_agent = MagicMock()
+    mock_tool = MockFunctionTool(name="sample_tool", functions=[sample_tool])
+    mock_agent.tools = [mock_tool]
+    
+    async def tool_args_runner(name, args):
+        assert "location" in args
+        assert "temp" in args
+        args["location"] = "Madrid"
+        args["temp"] = 35.0
+        return args
+        
+    plugin.instrument(mock_agent, metrics, tool_args_runner)
+    wrapped_func = mock_agent.tools[0]._functions["sample_tool"]
+    
+    # Pass location and temp (extra keyword argument matching **kwargs)
+    result = wrapped_func("Paris", temp=15.0)
+    assert result == "Weather in Madrid is 35.0C"

@@ -19,7 +19,9 @@ Phase 0 — Investigation Results:
 from __future__ import annotations
 
 import asyncio
+import atexit
 import copy
+import concurrent.futures
 import functools
 import inspect
 import logging
@@ -34,6 +36,67 @@ from argox.interfaces.plugin import ArgoxPlugin, ToolArgsRunner
 
 logger = logging.getLogger(__name__)
 _tracer = trace.get_tracer("argox")
+
+# Shared thread pool executor for executing coroutines under running event loops
+_SHARED_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=10)
+atexit.register(lambda: _SHARED_EXECUTOR.shutdown(wait=False))
+
+
+def _run_async(coro, loop_at_instrument: Any) -> Any:
+    """Helper to run a coroutine synchronously without deadlock or loop issues."""
+    try:
+        current_loop = asyncio.get_running_loop()
+    except RuntimeError:
+        current_loop = None
+
+    if current_loop is not None:
+        # We are inside a running loop. Run in a separate thread to avoid deadlock.
+        return _SHARED_EXECUTOR.submit(asyncio.run, coro).result()
+    else:
+        # We are not in a thread with a running loop.
+        if loop_at_instrument and loop_at_instrument.is_running():
+            return asyncio.run_coroutine_threadsafe(coro, loop_at_instrument).result()
+        else:
+            return asyncio.run(coro)
+
+
+def _get_flat_arguments(bound: inspect.BoundArguments) -> dict:
+    """Flatten bound arguments by promoting **kwargs to the root level.
+
+    Ensures the runner receives a flat dict of arguments, matching the JSON-like
+    format processors expect.
+    """
+    flat = {}
+    for key, value in bound.arguments.items():
+        param = bound.signature.parameters.get(key)
+        if param and param.kind == inspect.Parameter.VAR_KEYWORD:
+            if isinstance(value, dict):
+                flat.update(value)
+        else:
+            flat[key] = value
+    return flat
+
+
+def _update_bound_arguments(sig: inspect.Signature, bound: inspect.BoundArguments, processed_args: dict) -> None:
+    """Update bound arguments from the runner's dictionary output.
+
+    Handles function signatures correctly, putting extra parameters into **kwargs
+    if present, and preventing silent discarding or signature mismatches.
+    """
+    var_keyword_name = None
+    for param in sig.parameters.values():
+        if param.kind == inspect.Parameter.VAR_KEYWORD:
+            var_keyword_name = param.name
+            break
+
+    if var_keyword_name is not None:
+        bound.arguments[var_keyword_name] = {}
+
+    for key, value in processed_args.items():
+        if key in sig.parameters and key != var_keyword_name:
+            bound.arguments[key] = value
+        elif var_keyword_name is not None:
+            bound.arguments[var_keyword_name][key] = value
 
 
 class ArgoxAzureFoundryPlugin(ArgoxPlugin):
@@ -56,9 +119,9 @@ class ArgoxAzureFoundryPlugin(ArgoxPlugin):
         start/end times and results, and to run the tool-args processors.
         """
         try:
-            self._loop = asyncio.get_running_loop()
+            loop_at_instrument = asyncio.get_running_loop()
         except RuntimeError:
-            self._loop = None
+            loop_at_instrument = None
 
         model = getattr(target, "model", None)
         if model:
@@ -81,7 +144,7 @@ class ArgoxAzureFoundryPlugin(ArgoxPlugin):
         new_tools = []
         for tool in target.tools:
             if isinstance(tool, (FunctionTool, AsyncFunctionTool)):
-                new_tools.append(self._wrap_function_tool(tool, metrics, tool_args_runner))
+                new_tools.append(self._wrap_function_tool(tool, metrics, tool_args_runner, loop_at_instrument))
             else:
                 new_tools.append(tool)
         
@@ -158,7 +221,8 @@ class ArgoxAzureFoundryPlugin(ArgoxPlugin):
         self, 
         tool: Any, 
         metrics: AgentRunMetrics, 
-        runner: ToolArgsRunner | None
+        runner: ToolArgsRunner | None,
+        loop_at_instrument: Any
     ) -> Any:
         """Wrap an azure.ai.projects.models.FunctionTool to intercept calls."""
         try:
@@ -184,38 +248,18 @@ class ArgoxAzureFoundryPlugin(ArgoxPlugin):
             if is_async:
                 wrapped_functions[name] = self._make_async_wrapper(name, func, metrics, runner)
             else:
-                wrapped_functions[name] = self._make_sync_wrapper(name, func, metrics, runner)
+                wrapped_functions[name] = self._make_sync_wrapper(name, func, metrics, runner, loop_at_instrument)
 
         wrapped_tool._functions = wrapped_functions
         return wrapped_tool
-
-    def _run_async(self, coro):
-        """Helper to run a coroutine synchronously without deadlock or loop issues."""
-        try:
-            current_loop = asyncio.get_running_loop()
-        except RuntimeError:
-            current_loop = None
-
-        if current_loop is not None:
-            # We are inside a running loop. Run in a separate thread to avoid deadlock.
-            if not hasattr(self, "_executor"):
-                import concurrent.futures
-                self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=10)
-            return self._executor.submit(asyncio.run, coro).result()
-        else:
-            # We are not in a thread with a running loop.
-            main_loop = getattr(self, "_loop", None)
-            if main_loop and main_loop.is_running():
-                return asyncio.run_coroutine_threadsafe(coro, main_loop).result()
-            else:
-                return asyncio.run(coro)
 
     def _make_sync_wrapper(
         self, 
         name: str, 
         func: Callable, 
         metrics: AgentRunMetrics, 
-        runner: ToolArgsRunner | None
+        runner: ToolArgsRunner | None,
+        loop_at_instrument: Any
     ) -> Callable:
         """Create a sync wrapper for a sync tool function."""
         @functools.wraps(func)
@@ -239,11 +283,12 @@ class ArgoxAzureFoundryPlugin(ArgoxPlugin):
                     bound.apply_defaults()
 
                     if runner:
-                        processed_args = self._run_async(runner(name, bound.arguments))
-                        bound.arguments.update(processed_args)
+                        flat_args = _get_flat_arguments(bound)
+                        processed_args = _run_async(runner(name, flat_args), loop_at_instrument)
+                        _update_bound_arguments(sig, bound, processed_args)
                     
                     if asyncio.iscoroutinefunction(func):
-                        result = self._run_async(func(*bound.args, **bound.kwargs))
+                        result = _run_async(func(*bound.args, **bound.kwargs), loop_at_instrument)
                     else:
                         result = func(*bound.args, **bound.kwargs)
                     
@@ -288,8 +333,9 @@ class ArgoxAzureFoundryPlugin(ArgoxPlugin):
                     bound.apply_defaults()
 
                     if runner:
-                        processed_args = await runner(name, bound.arguments)
-                        bound.arguments.update(processed_args)
+                        flat_args = _get_flat_arguments(bound)
+                        processed_args = await runner(name, flat_args)
+                        _update_bound_arguments(sig, bound, processed_args)
                     
                     result = await func(*bound.args, **bound.kwargs)
                     

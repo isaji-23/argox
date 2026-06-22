@@ -19,6 +19,11 @@
   - Wired `gen_ai.request.model` extraction into active run spans for accurate pricing tracking (conforming to PLUGIN-05).
   - Masked exception message leaking in spans and metrics to protect PII.
   - Fixed demo script tool wrapping and message content extraction bugs.
+- Addressed PR re-review feedback (2026-06-22):
+  - Removed mutable state (`self._loop`, `self._executor`) from the plugin instance to prevent race conditions during concurrent runs. Loop references are now captured per-run via closure parameters.
+  - Switched to a module-level `_SHARED_EXECUTOR` that is cleanly shutdown on exit using `atexit`.
+  - Added tests covering active event loop execution branches (both run_coroutine_threadsafe and background thread pool paths).
+  - Flattened bound arguments before passing to the runner and rebuilt them cleanly inside the wrapper supporting function signatures with `**kwargs` catch-all parameters.
 
 ## Why
 Azure AI Foundry Agent Service (formerly part of Azure OpenAI Assistants) is a key enterprise framework. Providing a native plugin allows Argox to govern and monitor agents built on Microsoft's AI stack with zero changes to the agent's core logic.
