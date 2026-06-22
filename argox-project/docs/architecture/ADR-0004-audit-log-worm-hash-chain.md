@@ -51,6 +51,15 @@ chain, persisted as JSONL segments through the existing `StorageBackend`.
 
 ## Triggers for the next refactor
 
+- High-volume appends make the full-segment rewrite costly. Since COL-14 (#109)
+  every ingested run is appended, so a single durable batch can append up to
+  `_MAX_BATCH_RECORDS` (1000) entries one at a time. Because each append
+  rewrites the whole active segment, filling a segment of N costs ~N²/2
+  line-writes and N `put`s. The near-term mitigation keeps the same backend: a
+  batch `append_many` that chains the entries in memory and flushes one `put`
+  per segment instead of one per entry — tracked in #159 (COL-18). This is
+  distinct from and cheaper than the native-append trigger below; it does not
+  need a new backend capability.
 - A storage backend gains native append or server-enforced immutability
   (e.g. Azure immutable blobs / legal hold): drop the full-segment rewrite and
   lean on the backend guarantee.

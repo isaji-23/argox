@@ -45,6 +45,17 @@ memory ahead of the synchronous validation.
 
 - When durability becomes the default expectation (e.g. a managed deployment SLA)
   rather than an opt-in header.
+- When the single-writer index lock becomes the throughput ceiling under many
+  concurrent producers on one Collector. This is contention, not the divergent
+  index of horizontal scale-out (that is ADR-0011 / #123, multi-replica only): a
+  single instance stays consistent. The run-write path currently takes O(N) lock
+  acquisitions per batch (`insert_run` + `set_run_cost` + the `audited` flag are
+  each per-row; only spans batch via `insert_spans`). Near-term mitigation is a
+  batch `insert_runs` collapsing a batch to O(1) acquisitions per stage —
+  tracked in #160 (COL-19), pairing with the batched audit append (#159). The
+  ladder beyond that: measure first (the 202 path already keeps writes off the
+  caller's hot path) → batch audit + index writes → an in-process queue with
+  coalescing → only then the durable queue and shared index below.
 - When background-task loss under crash/restart is unacceptable and a durable
   queue (or write-ahead log) replaces `BackgroundTasks`.
 - When a partial-success response (per-span rejection counts) is required by a
