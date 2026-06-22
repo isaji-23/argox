@@ -180,8 +180,9 @@ def test_index_list_traces_prefers_root_span_agent(tmp_path: Path) -> None:
 
 
 def test_index_get_trace_orders_spans_and_roundtrips(index: DuckDBTraceIndex) -> None:
-    spans, truncated = index.get_trace("t1")
+    spans, truncated, duration_ms = index.get_trace("t1")
     assert truncated is False
+    assert duration_ms == 60_000.0
     assert [s.span_id for s in spans] == ["s1", "s2"]
     assert spans[0].attributes == {"model": "gpt-4o"}
     assert spans[0].start_time.tzinfo is not None
@@ -189,12 +190,13 @@ def test_index_get_trace_orders_spans_and_roundtrips(index: DuckDBTraceIndex) ->
 
 
 def test_index_get_trace_unknown_returns_empty(index: DuckDBTraceIndex) -> None:
-    assert index.get_trace("missing") == ([], False)
+    assert index.get_trace("missing") == ([], False, None)
 
 
 def test_index_get_trace_caps_span_count(index: DuckDBTraceIndex) -> None:
-    spans, truncated = index.get_trace("t1", max_spans=1)
+    spans, truncated, duration_ms = index.get_trace("t1", max_spans=1)
     assert truncated is True
+    assert duration_ms == 60_000.0
     assert [s.span_id for s in spans] == ["s1"]
 
 
@@ -206,7 +208,7 @@ def test_index_get_trace_survives_corrupt_attributes(index: DuckDBTraceIndex) ->
         index._conn.execute(
             "UPDATE spans SET attributes = '[1, 2]' WHERE span_id = 's1'"
         )
-    spans, _ = index.get_trace("t1")
+    spans, _, _ = index.get_trace("t1")
     assert [s.span_id for s in spans] == ["s1", "s2"]
     assert spans[0].attributes == {}
 
@@ -327,6 +329,7 @@ def test_get_trace_endpoint(client: TestClient) -> None:
     data = response.json()
     assert data["trace_id"] == "t1"
     assert data["truncated"] is False
+    assert data["duration_ms"] == 60_000.0
     assert [span["span_id"] for span in data["spans"]] == ["s1", "s2"]
     assert data["spans"][0]["attributes"] == {"model": "gpt-4o"}
     assert data["spans"][1]["parent_span_id"] == "s1"

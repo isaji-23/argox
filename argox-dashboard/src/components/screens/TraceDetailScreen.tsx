@@ -18,6 +18,7 @@ export function TraceDetailScreen({ traceId, onBack }: TraceDetailScreenProps) {
   const [error, setError] = useState<string | null>(null);
   const [spans, setSpans] = useState<SpanDetail[]>([]);
   const [truncated, setTruncated] = useState(false);
+  const [durationMs, setDurationMs] = useState<number | null>(null);
   const [selectedSpanId, setSelectedSpanId] = useState<string | null>(null);
 
   const fetchTrace = useCallback(async () => {
@@ -31,6 +32,7 @@ export function TraceDetailScreen({ traceId, onBack }: TraceDetailScreenProps) {
       const data = await api.getTrace(traceId);
       setSpans(data.spans);
       setTruncated(data.truncated);
+      setDurationMs(data.duration_ms);
       if (data.spans.length > 0) {
         setSelectedSpanId(data.spans[0].span_id);
       }
@@ -47,20 +49,24 @@ export function TraceDetailScreen({ traceId, onBack }: TraceDetailScreenProps) {
 
   const traceSummary = useMemo(() => {
     if (spans.length === 0) return null;
-    const start = new Date(spans[0].start_time).getTime();
-    const endTimes = spans
-      .map(s => s.end_time ? new Date(s.end_time).getTime() : null)
-      .filter((t): t is number => t !== null && !isNaN(t));
-    const end = endTimes.length > 0 ? Math.max(...endTimes) : start;
+    let finalDurationMs = durationMs;
+    if (finalDurationMs === null || finalDurationMs === undefined) {
+      const start = new Date(spans[0].start_time).getTime();
+      const endTimes = spans
+        .map(s => s.end_time ? new Date(s.end_time).getTime() : null)
+        .filter((t): t is number => t !== null && !isNaN(t));
+      const end = endTimes.length > 0 ? Math.max(...endTimes) : start;
+      finalDurationMs = end - start;
+    }
     return {
       id: traceId,
       name: spans[0].name || 'Trace',
-      durationMs: end - start,
+      durationMs: finalDurationMs,
       agent: spans[0].agent_name || 'unknown',
       model: spans.find(s => s.attributes.model)?.attributes.model || 'unknown',
       startedHuman: new Date(spans[0].start_time).toLocaleString(),
     };
-  }, [spans, traceId]);
+  }, [spans, traceId, durationMs]);
 
   const waterfallSpans = useMemo(() => {
     if (spans.length === 0) return [];

@@ -1373,6 +1373,17 @@
       "TraceDetailResponse": {
         "description": "Full span waterfall returned by ``GET /api/v1/traces/{trace_id}``.\n\n``truncated`` is True when the trace exceeded the index's per-trace span\nceiling and ``spans`` was cut to keep the response bounded.",
         "properties": {
+          "duration_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration Ms"
+          },
           "spans": {
             "items": {
               "$ref": "#/components/schemas/SpanDetail"
@@ -2561,7 +2572,7 @@
             "schema": {
               "anyOf": [
                 {
-                  "pattern": "^(start_time|duration|cost|spans):(asc|desc)$",
+                  "pattern": "^(cost|duration|spans|start_time):(asc|desc)$",
                   "type": "string"
                 },
                 {

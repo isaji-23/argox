@@ -6,6 +6,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Mapping, Optional
+ALLOWED_SORT_FIELDS = {"start_time", "duration", "cost", "spans"}
 
 
 @dataclass(frozen=True)
@@ -121,15 +122,16 @@ class TraceIndex(ABC):
         """
 
     @abstractmethod
-    def get_trace(self, trace_id: str) -> tuple[list[SpanRecord], bool]:
+    def get_trace(self, trace_id: str) -> tuple[list[SpanRecord], bool, Optional[float]]:
         """Return the spans of ``trace_id`` ordered by start time.
 
         Returns:
-            A ``(spans, truncated)`` tuple. ``truncated`` is True when the
-            trace holds more spans than the backend's per-trace ceiling and
-            the list was cut, so responses stay bounded for pathological
-            traces. An unknown trace id returns ``([], False)``; callers
-            decide whether that maps to a 404.
+          A ``(spans, truncated, duration_ms)`` tuple. ``truncated`` is True when the
+          trace holds more spans than the backend's per-trace ceiling and
+          the list was cut, so responses stay bounded for pathological
+          traces. ``duration_ms`` is the true wall-clock duration of the trace.
+          An unknown trace id returns ``([], False, None)``; callers
+          decide whether that maps to a 404.
         """
 
     @abstractmethod

@@ -160,7 +160,7 @@ def test_duckdb_index_nan_attributes_do_not_drop_row(index: DuckDBTraceIndex):
 
     index.insert_spans([record])
 
-    spans, _ = index.get_trace("t-nan")
+    spans, _, _ = index.get_trace("t-nan")
     assert len(spans) == 1
     assert spans[0].attributes["kept"] == "yes"
     assert spans[0].attributes["score"] == "nan"
@@ -181,10 +181,10 @@ def test_duckdb_index_unserializable_attributes_do_not_drop_batch(
 
     index.insert_spans([bad, good])
 
-    spans, _ = index.get_trace("t-bad-attrs")
+    spans, _, _ = index.get_trace("t-bad-attrs")
     assert len(spans) == 1
     assert spans[0].attributes["blob"] == str(b"\x00\x01")
-    good_spans, _ = index.get_trace("t-good")
+    good_spans, _, _ = index.get_trace("t-good")
     assert len(good_spans) == 1
 
 
@@ -198,7 +198,7 @@ def test_duckdb_index_non_finite_doubles_stored_as_null(index: DuckDBTraceIndex)
 
     index.insert_span(record)
 
-    spans, _ = index.get_trace("t-inf")
+    spans, _, _ = index.get_trace("t-inf")
     assert spans[0].duration_ms is None
     assert spans[0].run_cost is None
 

@@ -461,7 +461,7 @@ class DuckDBTraceIndex(TraceIndex):
 
     def get_trace(
         self, trace_id: str, *, max_spans: int = _MAX_TRACE_SPANS
-    ) -> tuple[list[SpanRecord], bool]:
+    ) -> tuple[list[SpanRecord], bool, Optional[float]]:
         # LIMIT max_spans + 1 detects truncation without a second count
         # query; the extra row is dropped before returning.
         query = """
@@ -495,7 +495,29 @@ class DuckDBTraceIndex(TraceIndex):
             )
             for row in rows[:max_spans]
         ]
-        return spans, truncated
+
+        duration_ms = None
+        if spans:
+            if truncated:
+                # Compute total duration over all spans of the trace (since it's truncated)
+                bound_row = self._read(
+                    "SELECT MIN(start_time), MAX(end_time) FROM spans WHERE trace_id = ?",
+                    (trace_id,),
+                )
+                if bound_row and bound_row[0][0] is not None and bound_row[0][1] is not None:
+                    start_dt = bound_row[0][0]
+                    end_dt = bound_row[0][1]
+                    duration_ms = (end_dt - start_dt).total_seconds() * 1000.0
+            else:
+                # Compute duration over the fetched rows
+                valid_starts = [row[4] for row in rows if row[4] is not None]
+                valid_ends = [row[5] for row in rows if row[5] is not None]
+                if valid_starts and valid_ends:
+                    start_dt = min(valid_starts)
+                    end_dt = max(valid_ends)
+                    duration_ms = (end_dt - start_dt).total_seconds() * 1000.0
+
+        return spans, truncated, duration_ms
 
     @staticmethod
     def _escape_like_wildcards(s: str) -> str:

@@ -1044,6 +1044,8 @@ export interface components {
          *     ceiling and ``spans`` was cut to keep the response bounded.
          */
         TraceDetailResponse: {
+            /** Duration Ms */
+            duration_ms?: number | null;
             /** Spans */
             spans: components["schemas"]["SpanDetail"][];
             /** Trace Id */

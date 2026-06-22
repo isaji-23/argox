@@ -39,6 +39,7 @@ export interface TraceDetailResponse {
   trace_id: string;
   spans: SpanDetail[];
   truncated: boolean;
+  duration_ms: number | null;
 }
 
 export class APIError extends Error {
