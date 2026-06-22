@@ -10,6 +10,7 @@ for the decisions behind these changes and
 |---|---|---|---|---|
 | 2026-06-22 | COL-14 | Chain run records into the WORM audit log | #158 | in-review |
 | 2026-06-22 | COL-13 | Query API extension for run records | #157 | in-review |
+| 2026-06-22 | EXP-09 | Implement HttpRunExporter (ExporterBase to Collector /v1/runs) | #106 | in-review |
 | 2026-06-21 | CORE-09 | Instrument a per-run agent copy to stop concurrent-run races | #154 | in-review |
 | 2026-06-21 | PLUGIN-06 | Auto-emit a child span per tool call | #152 | in-review |
 | 2026-06-21 | COL-17 | Backfill runs.cost_usd from model and token totals | #151 | in-review |
