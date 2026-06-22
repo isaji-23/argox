@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 import json
 from pathlib import Path
 
-from argox_collector.index.base import SpanRecord, TraceIndexError
+from argox_collector.index.base import SpanRecord, TraceIndexError, RunRecord
 from argox_collector.index.duckdb import DuckDBTraceIndex
 from argox_collector.index.factory import build_index
 from argox_collector.settings import CollectorSettings
@@ -221,6 +221,24 @@ def test_duckdb_index_metrics_ignore_non_finite_rows(index: DuckDBTraceIndex):
             "INSERT INTO spans (trace_id, span_id, start_time, duration_ms, run_cost)"
             " VALUES ('t2', 's1', ?, 'nan'::DOUBLE, 'nan'::DOUBLE)",
             (now.replace(tzinfo=None),),
+        )
+
+    # Insert runs for get_metrics_cost
+    index.insert_run(RunRecord(
+        run_id="run_t1",
+        trace_id="t1",
+        agent_name="agent-a",
+        agent_version="1.0",
+        timestamp=now.isoformat(),
+        success=True,
+        cost_usd=0.5,
+        model="gpt-4o",
+    ))
+    with index._lock:
+        index._conn.execute(
+            "INSERT INTO runs (run_id, trace_id, agent_name, agent_version, timestamp, success, cost_usd)"
+            " VALUES ('run_t2', 't2', 'agent-a', '1.0', ?, TRUE, 'nan'::DOUBLE)",
+            (now.replace(tzinfo=None).isoformat(),),
         )
 
     cost = index.get_metrics_cost(window_hours=24)

@@ -484,6 +484,13 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** AgentSpendPoint */
+        AgentSpendPoint: {
+            /** Agent Name */
+            agent_name: string;
+            /** Spend */
+            spend: number;
+        };
         /**
          * ApiKeyCreate
          * @description Request body for ``POST /api/v1/keys``.
@@ -653,17 +660,40 @@ export interface components {
             /** Total Entries */
             total_entries: number;
         };
+        /** BlockedToolPoint */
+        BlockedToolPoint: {
+            /** Blocked Count */
+            blocked_count: number;
+            /** Tool Name */
+            tool_name: string;
+        };
         /**
          * CostMetricsResponse
          * @description Aggregated cost over a trailing window.
          */
         CostMetricsResponse: {
+            /** Timeline */
+            timeline: components["schemas"]["CostTimeSeriesPoint"][];
+            /** Top Agents */
+            top_agents: components["schemas"]["AgentSpendPoint"][];
             /** Total Cost */
             total_cost: number;
             /** Trace Count */
             trace_count: number;
             /** Window Hours */
             window_hours: number;
+        };
+        /** CostTimeSeriesPoint */
+        CostTimeSeriesPoint: {
+            /**
+             * Bucket
+             * Format: date-time
+             */
+            bucket: string;
+            /** Cost */
+            cost: number;
+            /** Model */
+            model: string;
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -682,6 +712,15 @@ export interface components {
             /** Version */
             version: string;
         };
+        /** LatencyHistogramBin */
+        LatencyHistogramBin: {
+            /** Bin Max */
+            bin_max: number;
+            /** Bin Min */
+            bin_min: number;
+            /** Count */
+            count: number;
+        };
         /**
          * LatencyMetricsResponse
          * @description Aggregated root-span latency over a trailing window.
@@ -689,12 +728,24 @@ export interface components {
         LatencyMetricsResponse: {
             /** Avg Latency Ms */
             avg_latency_ms: number;
+            /** Histogram */
+            histogram: components["schemas"]["LatencyHistogramBin"][];
             /** P95 Latency Ms */
             p95_latency_ms: number;
+            percentiles: components["schemas"]["LatencyPercentiles"];
             /** Trace Count */
             trace_count: number;
             /** Window Hours */
             window_hours: number;
+        };
+        /** LatencyPercentiles */
+        LatencyPercentiles: {
+            /** P50 */
+            p50: number;
+            /** P95 */
+            p95: number;
+            /** P99 */
+            p99: number;
         };
         /**
          * PolicyCreate
@@ -1031,10 +1082,28 @@ export interface components {
             success_rate?: number | null;
             /** Successful Runs */
             successful_runs: number;
+            /** Timeline */
+            timeline: components["schemas"]["SuccessTimeSeriesPoint"][];
+            /** Top Blocked Tools */
+            top_blocked_tools: components["schemas"]["BlockedToolPoint"][];
             /** Total Runs */
             total_runs: number;
             /** Window Hours */
             window_hours: number;
+        };
+        /** SuccessTimeSeriesPoint */
+        SuccessTimeSeriesPoint: {
+            /**
+             * Bucket
+             * Format: date-time
+             */
+            bucket: string;
+            /** Success Rate */
+            success_rate?: number | null;
+            /** Successful Runs */
+            successful_runs: number;
+            /** Total Runs */
+            total_runs: number;
         };
         /**
          * TraceDetailResponse

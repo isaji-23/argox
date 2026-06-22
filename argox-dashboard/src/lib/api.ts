@@ -84,5 +84,84 @@ export const api = {
       throw new APIError(msg, res.status);
     }
     return res.json();
+  },
+
+  async getCostMetrics(windowHours: number = 24): Promise<CostMetricsResponse> {
+    const res = await fetch(`${API_BASE}/metrics/cost?window_hours=${windowHours}`);
+    if (!res.ok) throw new APIError('Failed to fetch cost metrics', res.status);
+    return res.json();
+  },
+
+  async getLatencyMetrics(windowHours: number = 24): Promise<LatencyMetricsResponse> {
+    const res = await fetch(`${API_BASE}/metrics/latency?window_hours=${windowHours}`);
+    if (!res.ok) throw new APIError('Failed to fetch latency metrics', res.status);
+    return res.json();
+  },
+
+  async getSuccessMetrics(windowHours: number = 24): Promise<SuccessMetricsResponse> {
+    const res = await fetch(`${API_BASE}/metrics/success?window_hours=${windowHours}`);
+    if (!res.ok) throw new APIError('Failed to fetch success metrics', res.status);
+    return res.json();
   }
 };
+
+export interface CostTimeSeriesPoint {
+  bucket: string;
+  model: string;
+  cost: number;
+}
+
+export interface AgentSpendPoint {
+  agent_name: string;
+  spend: number;
+}
+
+export interface CostMetricsResponse {
+  window_hours: number;
+  total_cost: number;
+  trace_count: number;
+  timeline: CostTimeSeriesPoint[];
+  top_agents: AgentSpendPoint[];
+}
+
+export interface LatencyHistogramBin {
+  bin_min: number;
+  bin_max: number;
+  count: number;
+}
+
+export interface LatencyPercentiles {
+  p50: number;
+  p95: number;
+  p99: number;
+}
+
+export interface LatencyMetricsResponse {
+  window_hours: number;
+  avg_latency_ms: number;
+  p95_latency_ms: number;
+  trace_count: number;
+  percentiles: LatencyPercentiles;
+  histogram: LatencyHistogramBin[];
+}
+
+export interface SuccessTimeSeriesPoint {
+  bucket: string;
+  total_runs: number;
+  successful_runs: number;
+  success_rate: number | null;
+}
+
+export interface BlockedToolPoint {
+  tool_name: string;
+  blocked_count: number;
+}
+
+export interface SuccessMetricsResponse {
+  window_hours: number;
+  total_runs: number;
+  successful_runs: number;
+  success_rate: number | null;
+  timeline: SuccessTimeSeriesPoint[];
+  top_blocked_tools: BlockedToolPoint[];
+}

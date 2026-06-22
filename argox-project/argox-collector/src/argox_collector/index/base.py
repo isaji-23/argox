@@ -142,6 +142,13 @@ class TraceIndex(ABC):
         made the LLM call, usually a child). ``trace_count`` is the number
         of traces with at least one span in the window — a different
         denominator from the latency/success metrics, which count root spans.
+
+        Returns a dict with:
+          - window_hours (int)
+          - total_cost (float)
+          - trace_count (int)
+          - timeline (list of dict with keys: bucket, model, cost)
+          - top_agents (list of dict with keys: agent_name, spend)
         """
 
     @abstractmethod
@@ -150,6 +157,14 @@ class TraceIndex(ABC):
 
         Only root spans count: a trace's latency is its root span duration,
         and aggregating child spans would double-count nested work.
+
+        Returns a dict with:
+          - window_hours (int)
+          - avg_latency_ms (float)
+          - p95_latency_ms (float)
+          - trace_count (int)
+          - percentiles (dict with keys: p50, p95, p99)
+          - histogram (list of dict with keys: bin_min, bin_max, count)
         """
 
     @abstractmethod
@@ -158,7 +173,16 @@ class TraceIndex(ABC):
 
         Only root spans with a reported ``run_success`` enter the rate;
         spans that never reported an outcome are excluded rather than
-        counted as failures.
+        counted as failures. top_blocked_tools is aggregated over ALL spans
+        (typically child tool calls) where the policy decision was block.
+
+        Returns a dict with:
+          - window_hours (int)
+          - total_runs (int)
+          - successful_runs (int)
+          - success_rate (float or None)
+          - timeline (list of dict with keys: bucket, total_runs, successful_runs, success_rate)
+          - top_blocked_tools (list of dict with keys: tool_name, blocked_count)
         """
 
     @abstractmethod
