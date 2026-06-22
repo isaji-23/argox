@@ -81,7 +81,13 @@ def _fetch_span(client: TestClient):
 
 def test_endpoint_is_registered(settings: CollectorSettings) -> None:
     app = create_app(settings)
-    paths = {route.path for route in app.routes}
+    paths = set()
+    for route in app.routes:
+        if hasattr(route, "path"):
+            paths.add(route.path)
+        elif type(route).__name__ == "_IncludedRouter":
+            for subroute in route.original_router.routes:
+                paths.add(subroute.path)
     assert "/v1/traces" in paths
 
 

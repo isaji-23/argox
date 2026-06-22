@@ -323,10 +323,34 @@ class DuckDBTraceIndex(TraceIndex):
         finally:
             cursor.close()
 
-    def list_traces(self, *, skip: int = 0, limit: int = 50) -> tuple[list[dict], int]:
-        # The agent columns prefer the root span and fall back to any span,
-        # so partially-ingested traces (root not yet arrived) still get a name.
-        query = """
+    def list_traces(
+        self,
+        *,
+        skip: int = 0,
+        limit: int = 50,
+        trace_id: Optional[str] = None,
+        agent_name: Optional[str] = None,
+        status: Optional[str] = None,
+        decision: Optional[str] = None,
+        sort: Optional[str] = None,
+        window_hours: Optional[int] = None,
+    ) -> tuple[list[dict], int]:
+        # Pre-filter by trace_id and window_hours on the raw spans table if possible to speed up aggregation.
+        spans_where_parts = []
+        base_params = []
+        if trace_id:
+            spans_where_parts.append(r"trace_id LIKE ? ESCAPE '\'")
+            base_params.append(f"{self._escape_like_wildcards(trace_id)}%")
+        if window_hours is not None:
+            spans_where_parts.append("start_time >= ?")
+            base_params.append(_window_cutoff(window_hours))
+
+        spans_where = ""
+        if spans_where_parts:
+            spans_where = " WHERE " + " AND ".join(spans_where_parts)
+
+        # Base query to aggregate traces.
+        base_query = f"""
             SELECT
                 trace_id,
                 MIN(start_time) AS trace_start,
@@ -341,14 +365,82 @@ class DuckDBTraceIndex(TraceIndex):
                     MAX(agent_version) FILTER (WHERE parent_span_id IS NULL),
                     MAX(agent_version)
                 ) AS agent_version,
-                COUNT(*) AS span_count
+                COUNT(*) AS span_count,
+                CASE 
+                    WHEN COUNT(*) FILTER (WHERE run_success = FALSE) > 0 THEN 'error'
+                    ELSE 'ok'
+                END AS status,
+                COALESCE(
+                    MAX(policy_decision) FILTER (WHERE policy_decision = 'block'),
+                    MAX(policy_decision) FILTER (WHERE policy_decision = 'warn'),
+                    'allow'
+                ) AS decision
             FROM spans
+            {spans_where}
             GROUP BY trace_id
-            ORDER BY trace_start DESC NULLS LAST, trace_id
-            LIMIT ? OFFSET ?
         """
-        rows = self._read(query, (limit, skip))
-        total = self._read("SELECT COUNT(DISTINCT trace_id) FROM spans", ())[0][0]
+
+        # Construct the filters clause dynamically once (Finding 5)
+        filters = []
+        filter_params = []
+        if agent_name:
+            filters.append("agent_name = ?")
+            filter_params.append(agent_name)
+        if status:
+            filters.append("status = ?")
+            filter_params.append(status)
+        if decision:
+            filters.append("decision = ?")
+            filter_params.append(decision)
+
+        filter_clause = ""
+        if filters:
+            filter_clause = " AND " + " AND ".join(filters)
+
+        # Wrap in a subquery to allow filtering on aggregated columns.
+        # We use COUNT(*) OVER () AS _total_count to calculate the total matching count
+        # in a single query execution pass, avoiding double aggregation.
+        query = f"SELECT *, COUNT(*) OVER () AS _total_count FROM ({base_query}) AS t WHERE 1=1{filter_clause}"
+        params = base_params + filter_params
+
+        # Sorting
+        # Keep this mapping synchronized with the route validation in the collector api.
+        # Router uses: pattern="^(start_time|duration|cost|spans):(asc|desc)$"
+        sort_map = {
+            "start_time": "trace_start",
+            "duration": "total_duration_ms",
+            "cost": "total_cost",
+            "spans": "span_count",
+        }
+        
+        if sort:
+            if ":" in sort:
+                parts = sort.split(":", 1)
+                field, direction = parts[0], parts[1]
+            else:
+                field, direction = "start_time", "desc"
+            sql_field = sort_map.get(field, "trace_start")
+            sql_dir = "ASC" if direction.lower() == "asc" else "DESC"
+            query += f" ORDER BY {sql_field} {sql_dir} NULLS LAST, trace_id"
+        else:
+            query += " ORDER BY trace_start DESC NULLS LAST, trace_id"
+
+        query += " LIMIT ? OFFSET ?"
+        
+        rows = self._read(query, tuple(params + [limit, skip]))
+        
+        # If rows are returned, we extract total from the window column in the first row.
+        # If no rows are returned and skip > 0, we fallback to a lightweight count query
+        # to find the total count past the offset.
+        if rows:
+            total = rows[0][-1]
+        else:
+            if skip == 0:
+                total = 0
+            else:
+                count_query = f"SELECT COUNT(*) FROM ({base_query}) AS t WHERE 1=1{filter_clause}"
+                count_params = base_params + filter_params
+                total = self._read(count_query, tuple(count_params))[0][0]
 
         summaries = [
             {
@@ -360,6 +452,8 @@ class DuckDBTraceIndex(TraceIndex):
                 "agent_name": row[5],
                 "agent_version": row[6],
                 "span_count": row[7],
+                "status": row[8],
+                "decision": row[9],
             }
             for row in rows
         ]
@@ -367,7 +461,7 @@ class DuckDBTraceIndex(TraceIndex):
 
     def get_trace(
         self, trace_id: str, *, max_spans: int = _MAX_TRACE_SPANS
-    ) -> tuple[list[SpanRecord], bool]:
+    ) -> tuple[list[SpanRecord], bool, Optional[float]]:
         # LIMIT max_spans + 1 detects truncation without a second count
         # query; the extra row is dropped before returning.
         query = """
@@ -401,7 +495,34 @@ class DuckDBTraceIndex(TraceIndex):
             )
             for row in rows[:max_spans]
         ]
-        return spans, truncated
+
+        duration_ms = None
+        if spans:
+            if truncated:
+                # Compute total duration over all spans of the trace (since it's truncated)
+                bound_row = self._read(
+                    "SELECT MIN(start_time), MAX(end_time) FROM spans WHERE trace_id = ?",
+                    (trace_id,),
+                )
+                if bound_row and bound_row[0][0] is not None and bound_row[0][1] is not None:
+                    start_dt = bound_row[0][0]
+                    end_dt = bound_row[0][1]
+                    duration_ms = (end_dt - start_dt).total_seconds() * 1000.0
+            else:
+                # Compute duration over the fetched rows
+                valid_starts = [row[4] for row in rows if row[4] is not None]
+                valid_ends = [row[5] for row in rows if row[5] is not None]
+                if valid_starts and valid_ends:
+                    start_dt = min(valid_starts)
+                    end_dt = max(valid_ends)
+                    duration_ms = (end_dt - start_dt).total_seconds() * 1000.0
+
+        return spans, truncated, duration_ms
+
+    @staticmethod
+    def _escape_like_wildcards(s: str) -> str:
+        """Escape SQL LIKE wildcards '%' and '_' and the escape char '\\'."""
+        return s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
     @staticmethod
     def _decode_attributes(raw: Optional[str], trace_id: str, span_id: str) -> dict:

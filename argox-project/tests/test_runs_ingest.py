@@ -283,7 +283,7 @@ def test_trace_id_join_span_to_run(client: TestClient) -> None:
 
     index = client.app.state.index
     # The span landed under this trace_id ...
-    spans, _ = index.get_trace(TRACE_ID_HEX)
+    spans, _, _ = index.get_trace(TRACE_ID_HEX)
     assert spans and spans[0].trace_id == TRACE_ID_HEX
     # ... and the join recovers the matching run record.
     run = index.get_run_by_trace_id(TRACE_ID_HEX)

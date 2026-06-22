@@ -6,6 +6,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Mapping, Optional
+ALLOWED_SORT_FIELDS = {"start_time", "duration", "cost", "spans"}
 
 
 @dataclass(frozen=True)
@@ -88,28 +89,49 @@ class TraceIndex(ABC):
         """Batch add multiple span records to the index."""
 
     @abstractmethod
-    def list_traces(self, *, skip: int = 0, limit: int = 50) -> tuple[list[dict], int]:
+    def list_traces(
+        self,
+        *,
+        skip: int = 0,
+        limit: int = 50,
+        trace_id: Optional[str] = None,
+        agent_name: Optional[str] = None,
+        status: Optional[str] = None,
+        decision: Optional[str] = None,
+        sort: Optional[str] = None,
+        window_hours: Optional[int] = None,
+    ) -> tuple[list[dict], int]:
         """Return paginated trace summaries plus the total trace count.
 
         Each summary aggregates the spans sharing a ``trace_id`` (start/end
         time, total cost, span count, root agent). Summaries are sorted by
-        trace start time, newest first.
+        trace start time, newest first, unless ``sort`` is specified.
+
+        Args:
+            skip: Number of traces to skip.
+            limit: Maximum number of traces to return.
+            trace_id: Filter by trace_id prefix.
+            agent_name: Filter by exact agent name.
+            status: Filter by trace status ('ok' or 'error').
+            decision: Filter by policy decision ('allow', 'block', or 'warn').
+            sort: Sorting criteria in 'field:dir' format (e.g. 'cost:desc').
 
         Returns:
             A ``(summaries, total)`` tuple where ``total`` is the number of
-            distinct traces in the index regardless of pagination.
+            distinct traces in the index matching the filters.
         """
 
     @abstractmethod
-    def get_trace(self, trace_id: str) -> tuple[list[SpanRecord], bool]:
+    def get_trace(self, trace_id: str) -> tuple[list[SpanRecord], bool, Optional[float]]:
         """Return the spans of ``trace_id`` ordered by start time.
 
         Returns:
-            A ``(spans, truncated)`` tuple. ``truncated`` is True when the
-            trace holds more spans than the backend's per-trace ceiling and
-            the list was cut, so responses stay bounded for pathological
-            traces. An unknown trace id returns ``([], False)``; callers
-            decide whether that maps to a 404.
+          A ``(spans, truncated, duration_ms)`` tuple. ``truncated`` is True when the
+          trace holds more spans than the backend's per-trace ceiling and
+          the list was cut, so responses stay bounded for pathological
+          traces. ``duration_ms`` is the true wall-clock duration of the trace.
+          An unknown trace id returns ``([], False, None)``; callers
+          decide whether that maps to a 404.
         """
 
     @abstractmethod

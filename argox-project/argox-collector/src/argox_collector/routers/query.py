@@ -17,7 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, ConfigDict
 
 from argox_collector.auth import Scope, require_scope
-from argox_collector.index import RunRecord, TraceIndex
+from argox_collector.index import ALLOWED_SORT_FIELDS, RunRecord, TraceIndex
 from argox_collector.storage import (
     BlobNotFoundError,
     StorageBackend,
@@ -35,6 +35,7 @@ router = APIRouter(
 _MAX_PAGE_SIZE = 1000
 # Trailing-window upper bound: 30 days.
 _MAX_WINDOW_HOURS = 720
+_SORT_PATTERN = f"^({'|'.join(sorted(ALLOWED_SORT_FIELDS))}):(asc|desc)$"
 
 
 class TraceSummary(BaseModel):
@@ -48,6 +49,8 @@ class TraceSummary(BaseModel):
     agent_name: Optional[str] = None
     agent_version: Optional[str] = None
     span_count: int
+    status: str
+    decision: str
 
 
 class TraceListResponse(BaseModel):
@@ -86,6 +89,7 @@ class TraceDetailResponse(BaseModel):
     trace_id: str
     spans: list[SpanDetail]
     truncated: bool = False
+    duration_ms: Optional[float] = None
 
 
 class CostMetricsResponse(BaseModel):
@@ -188,9 +192,24 @@ def list_traces(
     request: Request,
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=_MAX_PAGE_SIZE),
+    trace_id: Optional[str] = Query(None, min_length=1),
+    agent_name: Optional[str] = Query(None),
+    status: Optional[str] = Query(None, pattern="^(ok|error)$"),
+    decision: Optional[str] = Query(None, pattern="^(allow|block|warn)$"),
+    sort: Optional[str] = Query(None, pattern=_SORT_PATTERN),
+    window_hours: Optional[int] = Query(None, ge=1, le=_MAX_WINDOW_HOURS),
 ) -> TraceListResponse:
     """List trace summaries, newest first."""
-    summaries, total = _index(request).list_traces(skip=skip, limit=limit)
+    summaries, total = _index(request).list_traces(
+        skip=skip,
+        limit=limit,
+        trace_id=trace_id,
+        agent_name=agent_name,
+        status=status,
+        decision=decision,
+        sort=sort,
+        window_hours=window_hours,
+    )
     return TraceListResponse(
         items=[TraceSummary(**summary) for summary in summaries],
         total=total,
@@ -206,12 +225,13 @@ def list_traces(
 )
 def get_trace(request: Request, trace_id: str) -> TraceDetailResponse:
     """Return the full span waterfall of one trace."""
-    spans, truncated = _index(request).get_trace(trace_id)
+    spans, truncated, duration_ms = _index(request).get_trace(trace_id)
     if not spans:
         raise HTTPException(status_code=404, detail="trace not found")
     return TraceDetailResponse(
         trace_id=trace_id,
         truncated=truncated,
+        duration_ms=duration_ms,
         spans=[
             SpanDetail(
                 span_id=span.span_id,

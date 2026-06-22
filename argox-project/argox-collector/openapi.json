@@ -1373,6 +1373,17 @@
       "TraceDetailResponse": {
         "description": "Full span waterfall returned by ``GET /api/v1/traces/{trace_id}``.\n\n``truncated`` is True when the trace exceeded the index's per-trace span\nceiling and ``spans`` was cut to keep the response bounded.",
         "properties": {
+          "duration_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration Ms"
+          },
           "spans": {
             "items": {
               "$ref": "#/components/schemas/SpanDetail"
@@ -1454,6 +1465,10 @@
             ],
             "title": "Agent Version"
           },
+          "decision": {
+            "title": "Decision",
+            "type": "string"
+          },
           "end_time": {
             "anyOf": [
               {
@@ -1481,6 +1496,10 @@
               }
             ],
             "title": "Start Time"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
           },
           "total_cost": {
             "anyOf": [
@@ -1511,7 +1530,9 @@
         },
         "required": [
           "trace_id",
-          "span_count"
+          "span_count",
+          "status",
+          "decision"
         ],
         "title": "TraceSummary",
         "type": "object"
@@ -2475,6 +2496,108 @@
               "minimum": 1,
               "title": "Limit",
               "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "trace_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Trace Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "agent_name",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Agent Name"
+            }
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "pattern": "^(ok|error)$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "in": "query",
+            "name": "decision",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "pattern": "^(allow|block|warn)$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Decision"
+            }
+          },
+          {
+            "in": "query",
+            "name": "sort",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "pattern": "^(cost|duration|spans|start_time):(asc|desc)$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Sort"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_hours",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 720,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Window Hours"
             }
           }
         ],

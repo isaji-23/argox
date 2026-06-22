@@ -1,8 +1,8 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect } from 'react';
 import { cn } from '../../lib/utils';
 import { Icon } from '../shared/Icon';
 import { Button } from '../ui/Button';
-import { Badge, StatusDot } from '../ui/Badge';
+import { StatusDot } from '../ui/Badge';
 import { DecisionBadge } from '../shared/DecisionBadge';
 import { Panel } from '../ui/Panel';
 import { ErrorState } from '../ui/States';
@@ -10,39 +10,28 @@ import { SearchInput } from '../ui/SearchInput';
 import { Select } from '../ui/Select';
 import { DataTable } from '../ui/DataTable';
 import type { Column } from '../ui/DataTable';
-import { buildTraces, AGENTS, TIME_RANGES } from '../../data/mockData';
-
-interface Trace {
-  id: string;
-  name: string;
-  agent: string;
-  env: string;
-  model: string;
-  startedHuman: string;
-  durationMs: number;
-  status: string;
-  decision: 'allow' | 'block' | 'warn';
-  spanCount: number;
-}
+import { api, type TraceSummary } from '../../lib/api';
+import { AGENTS, TIME_RANGES } from '../../data/mockData';
 
 interface TracesScreenProps {
   timeRange: string;
   agent: string;
-  onOpenTrace: (trace: Trace) => void;
+  onOpenTrace: (trace: { id: string }) => void;
 }
 
 export function TracesScreen({ timeRange, agent, onOpenTrace }: TracesScreenProps) {
-  const allTraces = useMemo(() => buildTraces() as Trace[], []);
+  const [traces, setTraces] = useState<TraceSummary[]>([]);
+  const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
-  const [sort, setSort] = useState<{ key: keyof Trace; dir: 'asc' | 'desc' }>({ key: 'startedHuman', dir: 'desc' });
+  const [sort, setSort] = useState<{ key: string; dir: 'asc' | 'desc' }>({ key: 'start_time', dir: 'desc' });
   const [query, setQuery] = useState('');
   const [debouncedQuery, setDebouncedQuery] = useState('');
   const [filterStatus, setFilterStatus] = useState('all');
   const [filterDecision, setFilterDecision] = useState('all');
   const [filterAgent, setFilterAgent] = useState(agent);
-  const [errorMode, setErrorMode] = useState(false);
-  const pageSize = 9;
+  const [error, setError] = useState<string | null>(null);
+  const pageSize = 10;
 
   useEffect(() => {
     setFilterAgent(agent);
@@ -56,120 +45,138 @@ export function TracesScreen({ timeRange, agent, onOpenTrace }: TracesScreenProp
     return () => clearTimeout(handler);
   }, [query]);
 
-  useEffect(() => {
+  const fetchTraces = async () => {
     setLoading(true);
-    const timeout = setTimeout(() => setLoading(false), 480);
-    return () => clearTimeout(timeout);
-  }, [page, sort, debouncedQuery, filterStatus, filterDecision, filterAgent, errorMode]);
+    setError(null);
 
-  const filteredTraces = useMemo(() => {
-    let results = allTraces.filter((t) =>
-      (filterStatus === 'all' || t.status === filterStatus) &&
-      (filterDecision === 'all' || t.decision === filterDecision) &&
-      (filterAgent === 'all' || t.agent === filterAgent) &&
-      (debouncedQuery === '' || 
-       t.name.toLowerCase().includes(debouncedQuery.toLowerCase()) || 
-       t.id.includes(debouncedQuery) || 
-       t.agent.includes(debouncedQuery)));
+    // Map frontend sort keys to backend fields
+    const sortMap: Record<string, string> = {
+      start_time: 'start_time',
+      total_duration_ms: 'duration',
+      total_cost: 'cost',
+      span_count: 'spans'
+    };
+    const backendSort = sortMap[sort.key] ? `${sortMap[sort.key]}:${sort.dir}` : undefined;
 
-    const dir = sort.dir === 'asc' ? 1 : -1;
-    results = [...results].sort((a, b) => {
-      const av = a[sort.key];
-      const bv = b[sort.key];
-      
-      if (typeof av === 'string' && typeof bv === 'string') {
-        return av.localeCompare(bv) * dir;
-      }
-      
-      if (typeof av === 'number' && typeof bv === 'number') {
-        return (av - bv) * dir;
-      }
-      
-      return 0;
-    });
-    return results;
-  }, [allTraces, filterStatus, filterDecision, filterAgent, debouncedQuery, sort]);
+    try {
+      const rangeMap: Record<string, number> = {
+        '1h': 1,
+        '24h': 24,
+        '7d': 168,
+        '30d': 720,
+      };
+      const windowHours = rangeMap[timeRange] || 24;
+
+      const data = await api.listTraces({
+        skip: (page - 1) * pageSize,
+        limit: pageSize,
+        trace_id: debouncedQuery || undefined,
+        agent_name: filterAgent,
+        status: filterStatus,
+        decision: filterDecision,
+        sort: backendSort,
+        window_hours: windowHours,
+      });
+      setTraces(data.items);
+      setTotal(data.total);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unknown error');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchTraces();
+  }, [page, debouncedQuery, filterStatus, filterDecision, filterAgent, sort, timeRange]);
 
   useEffect(() => {
     setPage(1);
-  }, [debouncedQuery, filterStatus, filterDecision, filterAgent]);
+  }, [debouncedQuery, filterStatus, filterDecision, filterAgent, sort, timeRange]);
 
-  const pageRows = filteredTraces.slice((page - 1) * pageSize, page * pageSize);
-  const blockedTotal = allTraces.filter((t) => t.decision === 'block').length;
+  const fmtMs = (ms: number) => ms >= 1000 ? (ms / 1000).toFixed(2) + 's' : Math.round(ms) + 'ms';
+  const fmtDate = (iso: string) => {
+    const d = new Date(iso);
+    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  };
 
-  const fmtMs = (ms: number) => ms >= 1000 ? (ms / 1000).toFixed(2) + 's' : ms + 'ms';
-
-  const columns: Column<Trace>[] = [
+  const columns: Column<TraceSummary>[] = [
     {
-      key: 'name',
+      key: 'trace_id',
       label: 'Trace',
       width: '1.5fr',
-      sortable: true,
+      sortable: false,
       render: (r) => (
         <div className="flex items-center gap-2.5 min-w-0">
-          <StatusDot status={r.status} />
+          <StatusDot status={r.status || 'ok'} />
           <div className="min-w-0">
             <div className={cn(
               "font-mono text-sm font-semibold truncate",
               r.decision === 'block' ? "text-block-bright" : "text-text-primary"
             )}>
-              {r.name}
+              {(r.trace_id || '').slice(0, 8)}...
             </div>
             <div className="font-mono text-2xs text-text-faint truncate uppercase">
-              {r.id.slice(0, 12)}
+              {r.trace_id}
             </div>
           </div>
         </div>
       )
     },
     {
-      key: 'agent',
+      key: 'agent_name',
       label: 'Agent',
       width: '1fr',
-      sortable: true,
+      sortable: false,
       render: (r) => (
         <span className="inline-flex items-center gap-1.5 text-sm text-text-secondary font-mono">
           <Icon name="bolt" size={12} className="text-text-faint" />
-          {r.agent}
+          {r.agent_name || 'unknown'}
         </span>
       )
     },
     {
-      key: 'env',
-      label: 'Env',
-      width: '0.7fr',
-      render: (r) => <Badge tone="neutral" mono>{r.env}</Badge>
-    },
-    {
-      key: 'startedHuman',
+      key: 'start_time',
       label: 'Started',
       width: '0.9fr',
       sortable: true,
       render: (r) => (
-        <span className="text-xs text-text-muted font-mono">{r.startedHuman}</span>
+        <span className="text-xs text-text-muted font-mono">{r.start_time ? fmtDate(r.start_time) : '-'}</span>
       )
     },
     {
-      key: 'durationMs',
+      key: 'total_duration_ms',
       label: 'Duration',
       width: '0.8fr',
       align: 'right',
       sortable: true,
       render: (r) => (
         <span className="text-sm font-mono text-text-secondary tabular-nums">
-          {fmtMs(r.durationMs)}
+          {fmtMs(r.total_duration_ms || 0)}
         </span>
       )
     },
     {
-      key: 'spanCount',
+      key: 'span_count',
       label: 'Spans',
       width: '0.55fr',
       align: 'right',
       sortable: true,
       render: (r) => (
         <span className="text-sm font-mono text-text-muted tabular-nums">
-          {r.spanCount}
+          {r.span_count}
+        </span>
+      )
+    },
+    {
+      key: 'total_cost',
+      label: 'Cost',
+      width: '0.7fr',
+      align: 'right',
+      sortable: true,
+      render: (r) => (
+        <span className="text-sm font-mono text-text-secondary tabular-nums">
+          ${r.total_cost?.toFixed(4) || '0.0000'}
         </span>
       )
     },
@@ -178,8 +185,8 @@ export function TracesScreen({ timeRange, agent, onOpenTrace }: TracesScreenProp
       label: 'Policy',
       width: '0.85fr',
       align: 'right',
-      sortable: true,
-      render: (r) => <DecisionBadge decision={r.decision} size="sm" />
+      sortable: false,
+      render: (r) => <DecisionBadge decision={r.decision || 'allow'} size="sm" />
     },
   ];
 
@@ -189,20 +196,13 @@ export function TracesScreen({ timeRange, agent, onOpenTrace }: TracesScreenProp
         <div>
           <h1 className="m-0 text-xl font-semibold tracking-tight">Traces</h1>
           <p className="m-0 mt-0.5 text-sm text-text-muted">
-            {allTraces.length.toLocaleString()} traces · <span className="text-block-bright font-medium">{blockedTotal} with policy blocks</span> · {TIME_RANGES.find((t) => t.value === timeRange)?.label.toLowerCase()}
+            {total.toLocaleString()} traces · {TIME_RANGES.find((t) => t.value === timeRange)?.label.toLowerCase()}
           </p>
         </div>
         <div className="flex gap-2">
-          <Button
-            variant="ghost"
-            size="sm"
-            icon="warn"
-            onClick={() => setErrorMode(!errorMode)}
-            active={errorMode}
-          >
-            {errorMode ? 'Clear error' : 'Simulate error'}
+          <Button variant="secondary" size="sm" icon="refresh" onClick={fetchTraces} className={loading ? "opacity-50 pointer-events-none" : ""}>
+            {loading ? 'Refreshing...' : 'Refresh'}
           </Button>
-          <Button variant="secondary" size="sm" icon="refresh">Refresh</Button>
         </div>
       </div>
 
@@ -211,7 +211,7 @@ export function TracesScreen({ timeRange, agent, onOpenTrace }: TracesScreenProp
         <SearchInput
           value={query}
           onChange={setQuery}
-          placeholder="Search name, trace_id, agent…"
+          placeholder="Search trace_id…"
           width={280}
         />
         <div className="w-px h-[22px] bg-border mx-1" />
@@ -269,27 +269,27 @@ export function TracesScreen({ timeRange, agent, onOpenTrace }: TracesScreenProp
         )}
       </div>
 
-      {errorMode ? (
+      {error ? (
         <Panel className="border-block-border">
           <ErrorState
             title="Failed to query traces"
-            body="collector.query: connection refused (otlp:4317)"
-            onRetry={() => setErrorMode(false)}
+            body={error}
+            onRetry={fetchTraces}
           />
         </Panel>
       ) : (
         <DataTable
           columns={columns}
-          rows={pageRows}
+          rows={traces}
           loading={loading}
           page={page}
           pageSize={pageSize}
-          total={filteredTraces.length}
+          total={total}
           onPage={setPage}
           sort={sort}
-          onSort={(key) => setSort((s) => ({ key: key as keyof Trace, dir: s.key === key && s.dir === 'desc' ? 'asc' : 'desc' }))}
-          onRowClick={(r) => onOpenTrace(r)}
-          rowKey={(r) => r.id}
+          onSort={(key) => setSort((s) => ({ key, dir: s.key === key && s.dir === 'desc' ? 'asc' : 'desc' }))}
+          onRowClick={(r) => onOpenTrace({ id: r.trace_id })}
+          rowKey={(r) => r.trace_id}
           rowAccent={(r) => r.decision === 'block'}
         />
       )}

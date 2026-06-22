@@ -7,6 +7,7 @@ from argox_collector.index.base import (
     SpanRecord,
     TraceIndex,
     TraceIndexError,
+    ALLOWED_SORT_FIELDS,
 )
 from argox_collector.index.duckdb import DuckDBTraceIndex
 from argox_collector.index.factory import build_index
@@ -18,4 +19,5 @@ __all__ = [
     "TraceIndexError",
     "DuckDBTraceIndex",
     "build_index",
+    "ALLOWED_SORT_FIELDS",
 ]
