@@ -318,24 +318,57 @@ def _run_fallback_json(record: RunRecord) -> bytes:
     return json.dumps(payload).encode("utf-8")
 
 
+# Stop a browser from MIME-sniffing a run blob (raw client content) into an
+# executable type; the body is always served as application/json.
+_DETAIL_HEADERS = {"X-Content-Type-Options": "nosniff"}
+
+
+def _merge_run_blob(blob: bytes, record: RunRecord) -> Optional[bytes]:
+    """Overlay collector-derived fields onto the immutable client blob.
+
+    The blob is the client's original submission, which leaves ``cost_usd``
+    unset at ingest; COL-17 backfills it into the index, not the blob. Returning
+    the blob verbatim would therefore show a stale ``null`` cost in the detail
+    view while the list view (read from the index) shows the backfilled value.
+    The index ``cost_usd`` is overlaid so both agree.
+
+    Returns ``None`` when the blob is not a JSON object (corrupt or hand-edited)
+    so the caller can fall back to the index row rather than serving non-JSON
+    bytes under an ``application/json`` content type.
+    """
+    try:
+        payload = json.loads(blob)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    payload["cost_usd"] = record.cost_usd
+    return json.dumps(payload).encode("utf-8")
+
+
 def _run_detail_response(storage: StorageBackend, record: RunRecord) -> Response:
     """Return the run's full record, blob first with the index row as fallback.
 
-    The stored blob is returned byte-for-byte (the immutable JSON written at
-    ingest by COL-11), so the response is exactly what the client submitted.
-    A missing or unreadable blob degrades to a projection of the index row
-    rather than failing the request.
+    The stored blob (the immutable JSON written at ingest by COL-11) carries the
+    content the index omits — prompt, final output, per-call tokens, policy
+    violations — but its ``cost_usd`` is overlaid from the index so the detail
+    view never disagrees with the list view (see :func:`_merge_run_blob`). A
+    missing, unreadable or non-JSON blob degrades to a projection of the index
+    row rather than failing the request or serving corrupt bytes as JSON.
     """
-    blob: Optional[bytes] = None
+    content: Optional[bytes] = None
     if record.blob_path:
         try:
-            blob = storage.get(record.blob_path).data
+            content = _merge_run_blob(storage.get(record.blob_path).data, record)
         except BlobNotFoundError:
             logger.info("run_blob_missing", run_id=record.run_id)
         except StorageError:
             logger.warning("run_blob_read_failed", run_id=record.run_id)
-    content = blob if blob is not None else _run_fallback_json(record)
-    return Response(content=content, media_type="application/json")
+    if content is None:
+        content = _run_fallback_json(record)
+    return Response(
+        content=content, media_type="application/json", headers=_DETAIL_HEADERS
+    )
 
 
 @router.get("/runs", response_model=RunListResponse, summary="List runs")
@@ -353,6 +386,12 @@ def list_runs(
     Rows are lightweight (no ``prompt``/``final_output``); ``from``/``to``
     bound the collector ingest time as a half-open ``[from, to)`` interval.
     """
+    # An inverted range would silently return an empty page; reject it so the
+    # caller learns the bounds are wrong rather than reading it as "no runs".
+    if from_ is not None and to is not None and from_ > to:
+        raise HTTPException(
+            status_code=422, detail="'from' must not be after 'to'"
+        )
     runs, total = _index(request).list_runs(
         skip=(page - 1) * page_size,
         limit=page_size,

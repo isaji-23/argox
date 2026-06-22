@@ -194,13 +194,47 @@ def test_list_runs_endpoint_validates_pagination(client: TestClient) -> None:
     assert client.get("/api/v1/runs", params={"page_size": 1001}).status_code == 422
 
 
-def test_get_run_endpoint_returns_blob_bytes(client: TestClient) -> None:
+def test_list_runs_endpoint_rejects_inverted_window(client: TestClient) -> None:
+    response = client.get(
+        "/api/v1/runs",
+        params={"from": NOW.isoformat(), "to": (NOW - timedelta(hours=1)).isoformat()},
+    )
+    assert response.status_code == 422
+
+
+def test_get_run_endpoint_returns_blob_content(client: TestClient) -> None:
     response = client.get("/api/v1/runs/r1")
     assert response.status_code == 200
-    # Byte-equivalent to the blob written at ingest.
-    assert response.content == json.dumps(
-        {"run_id": "r1", "prompt": "hi", "final_output": "yo"}
-    ).encode()
+    data = response.json()
+    # Blob content (prompt/final_output) is preserved...
+    assert data["prompt"] == "hi"
+    assert data["final_output"] == "yo"
+    # ...and the collector-derived cost_usd is overlaid from the index so the
+    # detail view matches the list view (the blob itself has no cost_usd).
+    assert data["cost_usd"] == pytest.approx(0.05)
+    assert response.headers["x-content-type-options"] == "nosniff"
+
+
+def test_get_run_endpoint_detail_cost_matches_list(client: TestClient) -> None:
+    # The list (index) and detail (blob) must report the same cost for a run.
+    listed = next(
+        item
+        for item in client.get("/api/v1/runs").json()["items"]
+        if item["run_id"] == "r1"
+    )
+    detail = client.get("/api/v1/runs/r1").json()
+    assert detail["cost_usd"] == listed["cost_usd"]
+
+
+def test_get_run_endpoint_falls_back_on_corrupt_blob(client: TestClient) -> None:
+    # A blob that is valid bytes but not a JSON object must not be served as
+    # JSON; the detail degrades to the index-row projection.
+    client.app.state.storage.put(
+        "runs/2026-06-22/r1.json", b"not json", content_type="application/json"
+    )
+    data = client.get("/api/v1/runs/r1").json()
+    assert data["run_id"] == "r1"
+    assert data["tokens"] == {"input": 100, "output": 20}
 
 
 def test_get_run_endpoint_falls_back_to_index_row(client: TestClient) -> None:

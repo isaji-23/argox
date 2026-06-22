@@ -215,11 +215,12 @@ class DuckDBTraceIndex(TraceIndex):
             # trace_id is indexed so the Query API can join from a span back
             # to its run record (COL-13).
             self._conn.execute("CREATE INDEX IF NOT EXISTS idx_runs_trace_id ON runs (trace_id)")
-            # The run list sorts/paginates on ingest time and filters on
-            # agent_name; both are indexed so the list query stays within the
-            # P95 SLO on large datasets (COL-13).
+            # The run list sorts/paginates on ingest time, so that column is
+            # indexed to keep the list query within the P95 SLO on large
+            # datasets (COL-13). agent_name is deliberately not indexed: it is
+            # low-cardinality (few agents), so a secondary index buys little on
+            # read while adding write and startup cost.
             self._conn.execute("CREATE INDEX IF NOT EXISTS idx_runs_ingested_at ON runs (ingested_at)")
-            self._conn.execute("CREATE INDEX IF NOT EXISTS idx_runs_agent_name ON runs (agent_name)")
 
     def insert_span(self, record: SpanRecord) -> None:
         self.insert_spans([record])
