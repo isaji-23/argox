@@ -174,6 +174,33 @@ class TraceIndex(ABC):
         """
 
     @abstractmethod
+    def list_runs(
+        self,
+        *,
+        skip: int = 0,
+        limit: int = 50,
+        agent_name: Optional[str] = None,
+        success: Optional[bool] = None,
+        start: Optional[datetime] = None,
+        end: Optional[datetime] = None,
+    ) -> tuple[list[RunRecord], int]:
+        """Return paginated run summaries plus the total matching count (COL-13).
+
+        Rows are the flat index projection only — the ``prompt`` and
+        ``final_output`` payloads live in the blob and are never read here, so
+        the list stays lightweight regardless of run size. Runs are sorted by
+        collector ingest time, newest first; ``start``/``end`` filter the same
+        ingest-time column (a half-open ``[start, end)`` interval) rather than
+        the free-form client ``timestamp``, which need not be chronological.
+        ``agent_name`` and ``success`` are exact-match filters; a ``None``
+        filter is simply not applied.
+
+        Returns:
+            A ``(runs, total)`` tuple where ``total`` is the number of runs
+            matching the filters regardless of pagination.
+        """
+
+    @abstractmethod
     def get_run(self, run_id: str) -> Optional[RunRecord]:
         """Return the run summary for ``run_id``, or ``None`` if unknown."""
 
