@@ -3,6 +3,7 @@ import { Sidebar } from './components/layout/Sidebar';
 import { Header } from './components/layout/Header';
 import { TracesScreen } from './components/screens/TracesScreen';
 import { TraceDetailScreen } from './components/screens/TraceDetailScreen';
+import { MetricsScreen } from './components/screens/MetricsScreen';
 import { AGENTS } from './data/mockData';
 
 type Route = 'metrics' | 'traces' | 'trace' | 'policies' | 'system';
@@ -58,7 +59,7 @@ function App() {
   const renderScreen = () => {
     switch (route) {
       case 'metrics':
-        return <div className="p-6 text-text-muted">Metrics Screen (Coming soon)</div>;
+        return <MetricsScreen timeRange={timeRange} />;
       case 'traces':
         return (
           <TracesScreen

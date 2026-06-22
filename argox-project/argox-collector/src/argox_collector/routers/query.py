@@ -92,12 +92,37 @@ class TraceDetailResponse(BaseModel):
     duration_ms: Optional[float] = None
 
 
+class CostTimeSeriesPoint(BaseModel):
+    bucket: datetime
+    model: str
+    cost: float
+
+
+class AgentSpendPoint(BaseModel):
+    agent_name: str
+    spend: float
+
+
 class CostMetricsResponse(BaseModel):
     """Aggregated cost over a trailing window."""
 
     window_hours: int
     total_cost: float
     trace_count: int
+    timeline: list[CostTimeSeriesPoint]
+    top_agents: list[AgentSpendPoint]
+
+
+class LatencyHistogramBin(BaseModel):
+    bin_min: float
+    bin_max: float
+    count: int
+
+
+class LatencyPercentiles(BaseModel):
+    p50: float
+    p95: float
+    p99: float
 
 
 class LatencyMetricsResponse(BaseModel):
@@ -107,6 +132,20 @@ class LatencyMetricsResponse(BaseModel):
     avg_latency_ms: float
     p95_latency_ms: float
     trace_count: int
+    percentiles: LatencyPercentiles
+    histogram: list[LatencyHistogramBin]
+
+
+class SuccessTimeSeriesPoint(BaseModel):
+    bucket: datetime
+    total_runs: int
+    successful_runs: int
+    success_rate: Optional[float] = None
+
+
+class BlockedToolPoint(BaseModel):
+    tool_name: str
+    blocked_count: int
 
 
 class SuccessMetricsResponse(BaseModel):
@@ -120,6 +159,8 @@ class SuccessMetricsResponse(BaseModel):
     total_runs: int
     successful_runs: int
     success_rate: Optional[float] = None
+    timeline: list[SuccessTimeSeriesPoint]
+    top_blocked_tools: list[BlockedToolPoint]
 
 
 class RunSummary(BaseModel):

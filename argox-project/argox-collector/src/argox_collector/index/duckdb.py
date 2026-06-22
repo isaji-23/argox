@@ -550,16 +550,8 @@ class DuckDBTraceIndex(TraceIndex):
         return decoded
 
     def get_metrics_cost(self, *, window_hours: int = 24) -> dict:
-        # Cost sums over ALL spans, not just roots: run_cost is attached to
-        # whichever span made the LLM call (usually a child), and enrichment
-        # never duplicates one call's cost onto both a root and its child.
-        # trace_count here means "traces with at least one span in window" —
-        # a different denominator from the latency/success metrics, which
-        # count root spans (see get_metrics_latency).
-        # The isfinite filter shields the aggregate from non-finite values
-        # written before write-side sanitisation existed: one NaN row would
-        # otherwise turn total_cost into NaN, which the JSON response layer
-        # cannot encode.
+        # Cost sums over ALL spans, not just roots
+        cutoff = _window_cutoff(window_hours)
         query = """
             SELECT
                 SUM(run_cost) FILTER (WHERE isfinite(run_cost)),
@@ -567,42 +559,125 @@ class DuckDBTraceIndex(TraceIndex):
             FROM spans
             WHERE start_time >= ?
         """
-        row = self._read(query, (_window_cutoff(window_hours),))[0]
+        row = self._read(query, (cutoff,))[0]
+
+        # Stacked cost over time by model: aggregated from runs table
+        bucket_unit = "hour" if window_hours <= 72 else "day"
+        query_timeline = """
+            SELECT
+                date_trunc(?, ingested_at) AS bucket,
+                COALESCE(model, 'unknown') AS model,
+                SUM(cost_usd) FILTER (WHERE isfinite(cost_usd)) AS cost
+            FROM runs
+            WHERE ingested_at >= ?
+            GROUP BY 1, 2
+            ORDER BY 1 ASC, 2 ASC
+        """
+        rows_timeline = self._read(query_timeline, (bucket_unit, cutoff))
+        timeline = []
+        for r in rows_timeline:
+            timeline.append({
+                "bucket": r[0],
+                "model": r[1],
+                "cost": r[2] if r[2] is not None else 0.0,
+            })
+
+        # Top agents by spend: aggregated from runs table
+        query_agents = """
+            SELECT
+                COALESCE(agent_name, 'unknown') AS agent_name,
+                SUM(cost_usd) FILTER (WHERE isfinite(cost_usd)) AS spend
+            FROM runs
+            WHERE ingested_at >= ?
+            GROUP BY 1
+            ORDER BY 2 DESC
+            LIMIT 10
+        """
+        rows_agents = self._read(query_agents, (cutoff,))
+        top_agents = []
+        for r in rows_agents:
+            top_agents.append({
+                "agent_name": r[0],
+                "spend": r[1] if r[1] is not None else 0.0,
+            })
+
         return {
             "window_hours": window_hours,
             "total_cost": row[0] if row[0] is not None else 0.0,
             "trace_count": row[1] or 0,
+            "timeline": timeline,
+            "top_agents": top_agents,
         }
 
     def get_metrics_latency(self, *, window_hours: int = 24) -> dict:
-        # Root spans only: a trace's latency is its root span duration, and
-        # summing or averaging child spans would double-count nested work.
-        # quantile_cont keeps the p95 deterministic (approx_quantile is not).
-        # trace_count is therefore "root spans in window", not the cost
-        # metric's "traces with any span in window".
-        # isfinite also excludes NULLs (isfinite(NULL) is NULL), so the three
-        # aggregates stay consistent with each other and immune to non-finite
-        # rows written before write-side sanitisation existed.
-        query = """
+        cutoff = _window_cutoff(window_hours)
+        query_stats = """
             SELECT
                 AVG(duration_ms) FILTER (WHERE isfinite(duration_ms)),
+                QUANTILE_CONT(duration_ms, 0.50) FILTER (WHERE isfinite(duration_ms)),
                 QUANTILE_CONT(duration_ms, 0.95) FILTER (WHERE isfinite(duration_ms)),
-                COUNT(*) FILTER (WHERE isfinite(duration_ms))
+                QUANTILE_CONT(duration_ms, 0.99) FILTER (WHERE isfinite(duration_ms)),
+                COUNT(*) FILTER (WHERE isfinite(duration_ms)),
+                MIN(duration_ms) FILTER (WHERE isfinite(duration_ms)),
+                MAX(duration_ms) FILTER (WHERE isfinite(duration_ms))
             FROM spans
             WHERE start_time >= ? AND parent_span_id IS NULL
         """
-        row = self._read(query, (_window_cutoff(window_hours),))[0]
+        row = self._read(query_stats, (cutoff,))[0]
+        avg_val = row[0] if row[0] is not None else 0.0
+        p50_val = row[1] if row[1] is not None else 0.0
+        p95_val = row[2] if row[2] is not None else 0.0
+        p99_val = row[3] if row[3] is not None else 0.0
+        trace_count = row[4] or 0
+        min_val = row[5]
+        max_val = row[6]
+
+        percentiles = {
+            "p50": p50_val,
+            "p95": p95_val,
+            "p99": p99_val,
+        }
+
+        histogram = []
+        if trace_count > 0 and min_val is not None and max_val is not None:
+            if max_val == min_val or max_val - min_val < 1e-5:
+                histogram = [{
+                    "bin_min": min_val,
+                    "bin_max": max_val + 1000.0,
+                    "count": trace_count,
+                }]
+            else:
+                N = 15
+                w = (max_val - min_val) / N
+                query_bins = """
+                    SELECT
+                        CAST(LEAST(? - 1, FLOOR((duration_ms - ?) / ?)) AS INTEGER) AS bin_idx,
+                        COUNT(*)
+                    FROM spans
+                    WHERE start_time >= ? AND parent_span_id IS NULL AND isfinite(duration_ms)
+                    GROUP BY 1
+                    ORDER BY 1
+                """
+                rows_bins = self._read(query_bins, (N, min_val, w, cutoff))
+                bin_counts = {r[0]: r[1] for r in rows_bins}
+                for i in range(N):
+                    histogram.append({
+                        "bin_min": min_val + i * w,
+                        "bin_max": min_val + (i + 1) * w,
+                        "count": bin_counts.get(i, 0),
+                    })
+
         return {
             "window_hours": window_hours,
-            "avg_latency_ms": row[0] if row[0] is not None else 0.0,
-            "p95_latency_ms": row[1] if row[1] is not None else 0.0,
-            "trace_count": row[2] or 0,
+            "avg_latency_ms": avg_val,
+            "p95_latency_ms": p95_val,
+            "trace_count": trace_count,
+            "percentiles": percentiles,
+            "histogram": histogram,
         }
 
     def get_metrics_success(self, *, window_hours: int = 24) -> dict:
-        # Only root spans carry a meaningful run outcome; spans that never
-        # reported run_success are excluded from the rate instead of being
-        # counted as failures.
+        cutoff = _window_cutoff(window_hours)
         query = """
             SELECT
                 COUNT(*) FILTER (WHERE run_success IS NOT NULL),
@@ -610,14 +685,61 @@ class DuckDBTraceIndex(TraceIndex):
             FROM spans
             WHERE start_time >= ? AND parent_span_id IS NULL
         """
-        row = self._read(query, (_window_cutoff(window_hours),))[0]
+        row = self._read(query, (cutoff,))[0]
         total = row[0] or 0
         successful = row[1] or 0
+        success_rate = (successful / total) if total else None
+
+        # Success ratio over time timeline: aggregated by bucket from spans
+        bucket_unit = "hour" if window_hours <= 72 else "day"
+        query_timeline = """
+            SELECT
+                date_trunc(?, start_time) AS bucket,
+                COUNT(*) FILTER (WHERE run_success IS NOT NULL) AS total_runs,
+                COUNT(*) FILTER (WHERE run_success = TRUE) AS successful_runs
+            FROM spans
+            WHERE start_time >= ? AND parent_span_id IS NULL
+            GROUP BY 1
+            ORDER BY 1 ASC
+        """
+        rows_timeline = self._read(query_timeline, (bucket_unit, cutoff))
+        timeline = []
+        for r in rows_timeline:
+            t = r[1] or 0
+            s = r[2] or 0
+            timeline.append({
+                "bucket": r[0],
+                "total_runs": t,
+                "successful_runs": s,
+                "success_rate": (s / t) if t > 0 else None,
+            })
+
+        # Top blocked tools: policy_decision = 'block'
+        query_blocked = """
+            SELECT
+                name AS tool_name,
+                COUNT(*) AS blocked_count
+            FROM spans
+            WHERE start_time >= ? AND policy_decision = 'block'
+            GROUP BY 1
+            ORDER BY 2 DESC
+            LIMIT 10
+        """
+        rows_blocked = self._read(query_blocked, (cutoff,))
+        top_blocked_tools = []
+        for r in rows_blocked:
+            top_blocked_tools.append({
+                "tool_name": r[0],
+                "blocked_count": r[1],
+            })
+
         return {
             "window_hours": window_hours,
             "total_runs": total,
             "successful_runs": successful,
-            "success_rate": (successful / total) if total else None,
+            "success_rate": success_rate,
+            "timeline": timeline,
+            "top_blocked_tools": top_blocked_tools,
         }
 
     def insert_run(self, record: RunRecord) -> None:

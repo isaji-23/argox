@@ -8,6 +8,7 @@ for the decisions behind these changes and
 
 | Date | Ticket | Title | PR | Status |
 |---|---|---|---|---|
+| 2026-06-22 | DASH-03 | Metrics dashboard (cost, latency, success ratio) | #90 | in-review |
 | 2026-06-22 | COL-14 | Chain run records into the WORM audit log | #158 | in-review |
 | 2026-06-22 | COL-13 | Query API extension for run records | #157 | in-review |
 | 2026-06-21 | CORE-09 | Instrument a per-run agent copy to stop concurrent-run races | #154 | in-review |

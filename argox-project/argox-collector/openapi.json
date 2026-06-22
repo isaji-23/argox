@@ -1,6 +1,24 @@
 {
   "components": {
     "schemas": {
+      "AgentSpendPoint": {
+        "properties": {
+          "agent_name": {
+            "title": "Agent Name",
+            "type": "string"
+          },
+          "spend": {
+            "title": "Spend",
+            "type": "number"
+          }
+        },
+        "required": [
+          "agent_name",
+          "spend"
+        ],
+        "title": "AgentSpendPoint",
+        "type": "object"
+      },
       "ApiKeyCreate": {
         "description": "Request body for ``POST /api/v1/keys``.",
         "properties": {
@@ -433,9 +451,41 @@
         "title": "AuditVerifyResponse",
         "type": "object"
       },
+      "BlockedToolPoint": {
+        "properties": {
+          "blocked_count": {
+            "title": "Blocked Count",
+            "type": "integer"
+          },
+          "tool_name": {
+            "title": "Tool Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tool_name",
+          "blocked_count"
+        ],
+        "title": "BlockedToolPoint",
+        "type": "object"
+      },
       "CostMetricsResponse": {
         "description": "Aggregated cost over a trailing window.",
         "properties": {
+          "timeline": {
+            "items": {
+              "$ref": "#/components/schemas/CostTimeSeriesPoint"
+            },
+            "title": "Timeline",
+            "type": "array"
+          },
+          "top_agents": {
+            "items": {
+              "$ref": "#/components/schemas/AgentSpendPoint"
+            },
+            "title": "Top Agents",
+            "type": "array"
+          },
           "total_cost": {
             "title": "Total Cost",
             "type": "number"
@@ -452,9 +502,35 @@
         "required": [
           "window_hours",
           "total_cost",
-          "trace_count"
+          "trace_count",
+          "timeline",
+          "top_agents"
         ],
         "title": "CostMetricsResponse",
+        "type": "object"
+      },
+      "CostTimeSeriesPoint": {
+        "properties": {
+          "bucket": {
+            "format": "date-time",
+            "title": "Bucket",
+            "type": "string"
+          },
+          "cost": {
+            "title": "Cost",
+            "type": "number"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          }
+        },
+        "required": [
+          "bucket",
+          "model",
+          "cost"
+        ],
+        "title": "CostTimeSeriesPoint",
         "type": "object"
       },
       "HTTPValidationError": {
@@ -494,6 +570,29 @@
         "title": "HealthResponse",
         "type": "object"
       },
+      "LatencyHistogramBin": {
+        "properties": {
+          "bin_max": {
+            "title": "Bin Max",
+            "type": "number"
+          },
+          "bin_min": {
+            "title": "Bin Min",
+            "type": "number"
+          },
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "bin_min",
+          "bin_max",
+          "count"
+        ],
+        "title": "LatencyHistogramBin",
+        "type": "object"
+      },
       "LatencyMetricsResponse": {
         "description": "Aggregated root-span latency over a trailing window.",
         "properties": {
@@ -501,9 +600,19 @@
             "title": "Avg Latency Ms",
             "type": "number"
           },
+          "histogram": {
+            "items": {
+              "$ref": "#/components/schemas/LatencyHistogramBin"
+            },
+            "title": "Histogram",
+            "type": "array"
+          },
           "p95_latency_ms": {
             "title": "P95 Latency Ms",
             "type": "number"
+          },
+          "percentiles": {
+            "$ref": "#/components/schemas/LatencyPercentiles"
           },
           "trace_count": {
             "title": "Trace Count",
@@ -518,9 +627,34 @@
           "window_hours",
           "avg_latency_ms",
           "p95_latency_ms",
-          "trace_count"
+          "trace_count",
+          "percentiles",
+          "histogram"
         ],
         "title": "LatencyMetricsResponse",
+        "type": "object"
+      },
+      "LatencyPercentiles": {
+        "properties": {
+          "p50": {
+            "title": "P50",
+            "type": "number"
+          },
+          "p95": {
+            "title": "P95",
+            "type": "number"
+          },
+          "p99": {
+            "title": "P99",
+            "type": "number"
+          }
+        },
+        "required": [
+          "p50",
+          "p95",
+          "p99"
+        ],
+        "title": "LatencyPercentiles",
         "type": "object"
       },
       "PolicyCreate": {
@@ -1353,6 +1487,20 @@
             "title": "Successful Runs",
             "type": "integer"
           },
+          "timeline": {
+            "items": {
+              "$ref": "#/components/schemas/SuccessTimeSeriesPoint"
+            },
+            "title": "Timeline",
+            "type": "array"
+          },
+          "top_blocked_tools": {
+            "items": {
+              "$ref": "#/components/schemas/BlockedToolPoint"
+            },
+            "title": "Top Blocked Tools",
+            "type": "array"
+          },
           "total_runs": {
             "title": "Total Runs",
             "type": "integer"
@@ -1365,9 +1513,46 @@
         "required": [
           "window_hours",
           "total_runs",
-          "successful_runs"
+          "successful_runs",
+          "timeline",
+          "top_blocked_tools"
         ],
         "title": "SuccessMetricsResponse",
+        "type": "object"
+      },
+      "SuccessTimeSeriesPoint": {
+        "properties": {
+          "bucket": {
+            "format": "date-time",
+            "title": "Bucket",
+            "type": "string"
+          },
+          "success_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Success Rate"
+          },
+          "successful_runs": {
+            "title": "Successful Runs",
+            "type": "integer"
+          },
+          "total_runs": {
+            "title": "Total Runs",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "bucket",
+          "total_runs",
+          "successful_runs"
+        ],
+        "title": "SuccessTimeSeriesPoint",
         "type": "object"
       },
       "TraceDetailResponse": {

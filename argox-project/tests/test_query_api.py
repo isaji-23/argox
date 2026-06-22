@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 from argox_collector.app import create_app
-from argox_collector.index.base import SpanRecord
+from argox_collector.index.base import RunRecord, SpanRecord
 from argox_collector.index.duckdb import DuckDBTraceIndex
 from argox_collector.settings import CollectorSettings
 from fastapi.testclient import TestClient
@@ -259,14 +259,92 @@ def test_index_metrics_success_rate(index: DuckDBTraceIndex) -> None:
 def test_index_metrics_on_empty_index(tmp_path: Path) -> None:
     idx = DuckDBTraceIndex(tmp_path / "empty.duckdb")
     assert idx.get_metrics_cost() == {
-        "window_hours": 24, "total_cost": 0.0, "trace_count": 0,
+        "window_hours": 24,
+        "total_cost": 0.0,
+        "trace_count": 0,
+        "timeline": [],
+        "top_agents": [],
     }
     latency = idx.get_metrics_latency()
     assert latency["avg_latency_ms"] == 0.0
     assert latency["p95_latency_ms"] == 0.0
+    assert latency["percentiles"] == {"p50": 0.0, "p95": 0.0, "p99": 0.0}
+    assert latency["histogram"] == []
+
     success = idx.get_metrics_success()
     assert success["total_runs"] == 0
+    assert success["successful_runs"] == 0
     assert success["success_rate"] is None
+    assert success["timeline"] == []
+    assert success["top_blocked_tools"] == []
+
+
+def test_index_metrics_with_populated_data(index: DuckDBTraceIndex) -> None:
+    # Insert some runs into the database to check timeline & agent spend
+    index.insert_run(RunRecord(
+        run_id="run1",
+        trace_id="t1",
+        agent_name="agent-a",
+        agent_version="1.0",
+        timestamp="2026-06-22T19:00:00Z",
+        success=True,
+        total_input_tokens=100,
+        total_output_tokens=50,
+        duration_seconds=1.5,
+        cost_usd=0.05,
+        blob_path="runs/r1.json",
+        model="gpt-4o",
+    ))
+    index.insert_run(RunRecord(
+        run_id="run2",
+        trace_id="t2",
+        agent_name="agent-b",
+        agent_version="1.0",
+        timestamp="2026-06-22T19:05:00Z",
+        success=False,
+        total_input_tokens=200,
+        total_output_tokens=100,
+        duration_seconds=2.5,
+        cost_usd=0.10,
+        blob_path="runs/r2.json",
+        model="claude-3-5-sonnet",
+    ))
+
+    # We also have spans. t1 has root span duration 60s, t2 has root span duration 30s.
+    # Let's insert a blocked span to verify tool blocking
+    index.insert_spans([
+        SpanRecord(
+            trace_id="t4",
+            span_id="s5",
+            name="web_search",
+            start_time=NOW - timedelta(minutes=1),
+            end_time=NOW,
+            duration_ms=500.0,
+            agent_name="agent-a",
+            agent_version="1.0",
+            policy_decision="block",
+        )
+    ])
+
+    cost = index.get_metrics_cost(window_hours=24)
+    assert len(cost["timeline"]) >= 2
+    assert any(pt["model"] == "gpt-4o" for pt in cost["timeline"])
+    assert any(pt["model"] == "claude-3-5-sonnet" for pt in cost["timeline"])
+    assert len(cost["top_agents"]) == 2
+    assert cost["top_agents"][0]["agent_name"] == "agent-b"
+    assert cost["top_agents"][1]["agent_name"] == "agent-a"
+
+    latency = index.get_metrics_latency(window_hours=24)
+    assert latency["percentiles"]["p50"] > 0
+    assert latency["percentiles"]["p95"] > 0
+    assert latency["percentiles"]["p99"] > 0
+    assert len(latency["histogram"]) > 0
+
+    success = index.get_metrics_success(window_hours=24)
+    assert len(success["timeline"]) > 0
+    assert len(success["top_blocked_tools"]) == 1
+    assert success["top_blocked_tools"][0]["tool_name"] == "web_search"
+    assert success["top_blocked_tools"][0]["blocked_count"] == 1
 
 
 # ---------------------------------------------------------------------------
