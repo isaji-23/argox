@@ -217,6 +217,28 @@ def test_startup_reconcile_heals_unaudited_run(settings: CollectorSettings) -> N
         assert c2.get("/api/v1/audit/verify").json()["ok"] is True
 
 
+def test_reconcile_skips_pre_col14_runs(client: TestClient) -> None:
+    """A run that predates COL-14 (audited NULL) is out of scope: the sweep must
+    not retroactively backfill it into the chain (honours the ADR non-goal)."""
+    from argox_collector.routers.runs import reconcile_run_audit
+
+    storage = client.app.state.storage
+    index = client.app.state.index
+    audit = client.app.state.audit
+
+    # Mimic a row migrated from before COL-14: blob exists, flag is NULL.
+    storage.put("runs/legacy/run-old.json", b'{"run_id": "run-old"}')
+    index._conn.execute(
+        "INSERT INTO runs (run_id, blob_path, audited) VALUES (?, ?, NULL)",
+        ("run-old", "runs/legacy/run-old.json"),
+    )
+
+    appended = reconcile_run_audit(storage=storage, index=index, audit=audit)
+    assert appended == 0
+    assert index.is_run_audited("run-old") is True  # treated as out of scope
+    assert audit.count() == 0  # nothing was chained
+
+
 def test_durable_audit_failure_does_not_503(client: TestClient) -> None:
     """A non-AuditLogError audit failure must not fail a durable run that is
     already committed to blob + index (point 3)."""

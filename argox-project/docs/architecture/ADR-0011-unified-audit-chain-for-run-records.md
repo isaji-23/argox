@@ -44,10 +44,19 @@ are assigned at append time, not derived from runs), so a run whose only append
 failed on an otherwise-successful request would stay absent — the client saw
 success and never re-ingests, so the retry path cannot reach it. A startup
 **reconciliation sweep** (`reconcile_run_audit`) closes that residual: it reads
-every `audited=false` run's immutable blob, appends it to the chain and marks it
-audited, bounded per run-list page. Together the `audited` flag (retry on
+every `audited = FALSE` run's immutable blob, appends it to the chain and marks
+it audited, bounded per run-list page. Together the `audited` flag (retry on
 re-ingest) and the sweep (heal on restart) guarantee a persisted run eventually
 enters the chain.
+
+The flag is deliberately **tri-state**, not a boolean: a COL-14-era run is
+written `FALSE` (awaiting/failed chaining) and flipped `TRUE` once chained,
+while the `audited` column is added to existing databases *without* a default,
+so every run that predates COL-14 stays `NULL`. The sweep and the re-ingest
+retry both act only on an explicit `FALSE`, so pre-COL-14 history is never
+retroactively backfilled (a boolean defaulting `FALSE` would have swept the
+entire back-catalogue on first startup) — and the first-startup cost stays
+near-zero because genuine append failures are rare.
 
 `verify` (and `GET /api/v1/audit/verify`) report the first broken record's
 `kind`, `target` (`run_id` / `trace_id`) and zero-based `offset`, so an auditor
@@ -69,8 +78,11 @@ can page straight to it.
 
 ## What stays out of scope
 
-- No retroactive backfill of runs ingested before COL-14. Pre-COL-14 audit
-  entries that carry no `kind` are hashed *without* a `kind` field
+- No retroactive backfill of runs ingested before COL-14. The reconcile sweep
+  enforces this via the tri-state `audited` flag above: pre-COL-14 run rows are
+  `NULL` and excluded from the sweep, so they are never chained after the fact.
+- No retroactive re-hashing of audit entries written before COL-14. Such
+  entries carry no `kind` and are hashed *without* a `kind` field
   (`signing_dict` omits it when `kind is None`), so the legacy chain keeps
   verifying byte-for-byte; only records written since COL-14 hash their kind.
 - No external timestamping authority — deferred to a separate ticket.

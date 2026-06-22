@@ -164,14 +164,16 @@ class TraceIndex(ABC):
 
     @abstractmethod
     def is_run_audited(self, run_id: str) -> bool:
-        """Return whether ``run_id`` has been appended to the WORM chain (COL-14).
+        """Return whether ``run_id`` needs no WORM append (COL-14).
 
-        Tracks the one fact the hash chain cannot: that a given run already
-        entered the audit log. The run-ingest path consults this so a re-ingest
-        retries the audit append for a run whose first attempt failed (e.g. a
-        transient storage error or a concurrent writer), instead of skipping it
-        forever because the immutable blob already exists. An unknown ``run_id``
-        returns ``False``.
+        Tracks the one fact the hash chain cannot: whether a run still owes an
+        audit entry. Backed by a tri-state flag — a COL-14-era run is stored
+        ``False`` (awaiting/failed chaining) and flipped ``True`` once chained,
+        while a run that predates COL-14 has no flag (``NULL``) and is out of
+        scope (no retroactive backfill). This returns ``True`` for both the
+        chained and the pre-COL-14 cases, so neither the re-ingest retry nor the
+        reconcile sweep touches them; only an explicit ``False`` is retried. An
+        unknown ``run_id`` returns ``False``.
         """
 
     @abstractmethod
@@ -181,7 +183,9 @@ class TraceIndex(ABC):
         Bounded by ``limit``. The reconciliation sweep uses this to retry runs
         whose audit append failed on an otherwise-successful request — the case
         a re-ingest never heals because the client saw success and does not
-        resend. Ordered by ingest time so the oldest gap is closed first.
+        resend. Only runs flagged ``False`` qualify; pre-COL-14 runs (flag
+        ``NULL``) are excluded, so the sweep does not retroactively backfill
+        history. Ordered by ingest time so the oldest gap is closed first.
         """
 
     @abstractmethod

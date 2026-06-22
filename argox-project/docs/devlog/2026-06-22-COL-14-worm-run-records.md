@@ -23,8 +23,11 @@
   failure is logged and swallowed (the run is already durable), never a 503 or
   a crashed background task.
 - `TraceIndex` gains `is_run_audited` / `mark_run_audited` /
-  `list_unaudited_runs`; the DuckDB backend adds an `audited BOOLEAN` column
-  (with `ADD COLUMN IF NOT EXISTS` migration).
+  `list_unaudited_runs`; the DuckDB backend adds a tri-state `audited` column
+  (`ADD COLUMN IF NOT EXISTS`, no default): `insert_run` writes `FALSE` for
+  every COL-14 run, flipped `TRUE` once chained, while pre-COL-14 rows stay
+  `NULL` and are excluded from the sweep — so history is not retroactively
+  backfilled and first-startup cost stays near-zero.
 - `reconcile_run_audit` (`routers/runs.py`), run on app startup
   (`app.py` lifespan), heals the residual the per-run flag cannot: a run whose
   only append failed on an otherwise-successful request (client saw success, so
