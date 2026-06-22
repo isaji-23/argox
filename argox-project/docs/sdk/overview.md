@@ -182,7 +182,13 @@ by versioned policy CRUD under `/api/v1/policies`. The Collector also exposes
 a read-only Query API for the dashboard (COL-06): paginated trace summaries
 (`GET /api/v1/traces`), per-trace span waterfalls (`GET /api/v1/traces/{id}`)
 and trailing-window aggregations (`GET /api/v1/metrics/cost|latency|success`)
-served from the DuckDB index. Alongside the lightweight span path, a parallel
+served from the DuckDB index. The Query API also reads run content (COL-13):
+`GET /api/v1/runs` lists lightweight run rows (no prompt/output payload) with
+`agent`/`from`/`to`/`success`/`page`/`page_size` filters, sorted and windowed on
+the collector-assigned `ingested_at`; `GET /api/v1/runs/{run_id}` and
+`GET /api/v1/runs/by-trace/{trace_id}` return the full record byte-for-byte from
+the immutable blob (falling back to the index row when the blob is unavailable).
+Alongside the lightweight span path, a parallel
 run-summary ingest path (COL-11) accepts full run content the spans omit:
 `POST /v1/runs` takes one or a batch of `AgentRunMetrics`-shaped records, stores
 each as an immutable blob (`runs/{YYYY-MM-DD}/{run_id}.json`) and projects a
