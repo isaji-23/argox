@@ -208,9 +208,18 @@ class DuckDBTraceIndex(TraceIndex):
             # Add the model column to runs tables created before COL-17 so the
             # cost backfill can read it on an upgraded database.
             self._conn.execute("ALTER TABLE runs ADD COLUMN IF NOT EXISTS model VARCHAR")
+            # Likewise add ingested_at for runs tables created before it was
+            # promoted, so the COL-13 list index and ordering bind on an
+            # upgraded database.
+            self._conn.execute("ALTER TABLE runs ADD COLUMN IF NOT EXISTS ingested_at TIMESTAMP")
             # trace_id is indexed so the Query API can join from a span back
             # to its run record (COL-13).
             self._conn.execute("CREATE INDEX IF NOT EXISTS idx_runs_trace_id ON runs (trace_id)")
+            # The run list sorts/paginates on ingest time and filters on
+            # agent_name; both are indexed so the list query stays within the
+            # P95 SLO on large datasets (COL-13).
+            self._conn.execute("CREATE INDEX IF NOT EXISTS idx_runs_ingested_at ON runs (ingested_at)")
+            self._conn.execute("CREATE INDEX IF NOT EXISTS idx_runs_agent_name ON runs (agent_name)")
 
     def insert_span(self, record: SpanRecord) -> None:
         self.insert_spans([record])
@@ -512,6 +521,46 @@ class DuckDBTraceIndex(TraceIndex):
     def get_run_model_from_trace(self, trace_id: str) -> Optional[str]:
         rows = self._read(_TRACE_MODEL_SQL, (trace_id,))
         return rows[0][0] if rows and rows[0][0] else None
+
+    def list_runs(
+        self,
+        *,
+        skip: int = 0,
+        limit: int = 50,
+        agent_name: Optional[str] = None,
+        success: Optional[bool] = None,
+        start: Optional[datetime] = None,
+        end: Optional[datetime] = None,
+    ) -> tuple[list[RunRecord], int]:
+        # Build the WHERE clause from the supplied filters only, so an absent
+        # filter neither narrows the result nor changes the query plan.
+        clauses: list[str] = []
+        params: list[Any] = []
+        if agent_name is not None:
+            clauses.append("agent_name = ?")
+            params.append(agent_name)
+        if success is not None:
+            clauses.append("success = ?")
+            params.append(success)
+        if start is not None:
+            clauses.append("ingested_at >= ?")
+            params.append(_to_naive_utc(start))
+        if end is not None:
+            # Half-open interval: the upper bound is exclusive so adjacent
+            # windows do not double-count a run on the boundary.
+            clauses.append("ingested_at < ?")
+            params.append(_to_naive_utc(end))
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+
+        rows = self._read(
+            f"SELECT {_RUN_COLUMNS} FROM runs{where} "
+            "ORDER BY ingested_at DESC NULLS LAST, run_id LIMIT ? OFFSET ?",
+            (*params, limit, skip),
+        )
+        total = self._read(
+            f"SELECT COUNT(*) FROM runs{where}", tuple(params)
+        )[0][0]
+        return [self._row_to_run(row) for row in rows], total
 
     def get_run(self, run_id: str) -> Optional[RunRecord]:
         rows = self._read(
