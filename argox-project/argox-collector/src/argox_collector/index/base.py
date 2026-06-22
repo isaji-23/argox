@@ -163,6 +163,29 @@ class TraceIndex(ABC):
         """
 
     @abstractmethod
+    def is_run_audited(self, run_id: str) -> bool:
+        """Return whether ``run_id`` has been appended to the WORM chain (COL-14).
+
+        Tracks the one fact the hash chain cannot: that a given run already
+        entered the audit log. The run-ingest path consults this so a re-ingest
+        retries the audit append for a run whose first attempt failed (e.g. a
+        transient storage error or a concurrent writer), instead of skipping it
+        forever because the immutable blob already exists. An unknown ``run_id``
+        returns ``False``.
+        """
+
+    @abstractmethod
+    def mark_run_audited(self, run_id: str) -> None:
+        """Record that ``run_id`` has been appended to the WORM chain (COL-14).
+
+        Set only after the audit append succeeds, so a crash between the append
+        and this call leaves the flag unset and the next re-ingest re-appends —
+        biasing toward a duplicate audit entry over a missing one (over-
+        recording is compliant; omission is not). Marking an unknown ``run_id``
+        is a harmless no-op.
+        """
+
+    @abstractmethod
     def get_run_model_from_trace(self, trace_id: str) -> Optional[str]:
         """Return a model id from the spans of ``trace_id``, or ``None``.
 

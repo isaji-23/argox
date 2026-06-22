@@ -18,8 +18,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import asdict, dataclass
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, Optional
 
 # prev_hash of the very first record in the chain. A fixed all-zero digest
 # marks the genesis link so verification can recognise the chain's start
@@ -61,7 +61,10 @@ class AuditRecord:
             (COL-14): ``"run"`` for a run record persisted by COL-11,
             ``"span_batch"`` for an ingested span batch, or ``"event"`` for a
             generic administrative event. Hashed like every other field so the
-            kind itself is tamper-evident.
+            kind itself is tamper-evident. ``None`` marks a legacy entry that
+            predates COL-14 and carried no ``kind``; such entries are hashed
+            *without* a ``kind`` field (see :meth:`signing_dict`) so the chain
+            written before this field existed still verifies unchanged.
         actor: Identity that performed the action (user, service, system).
         action: What happened (e.g. ``policy.update``, ``trace.ingest``).
         target: The object the action applied to: a policy id for events, the
@@ -74,7 +77,7 @@ class AuditRecord:
 
     seq: int
     timestamp: str
-    kind: str
+    kind: Optional[str]
     actor: str
     action: str
     target: str
@@ -82,8 +85,25 @@ class AuditRecord:
     prev_hash: str
 
     def signing_dict(self) -> dict[str, Any]:
-        """Return the field mapping that feeds the hash (excludes ``hash``)."""
-        return asdict(self)
+        """Return the field mapping that feeds the hash (excludes ``hash``).
+
+        ``kind`` is included only when present. A legacy record (``kind is
+        None``) was hashed before the field existed, so omitting it here keeps
+        its recomputed hash byte-identical to the stored one; every record
+        written since COL-14 carries a non-``None`` kind and hashes it.
+        """
+        data: dict[str, Any] = {
+            "seq": self.seq,
+            "timestamp": self.timestamp,
+            "actor": self.actor,
+            "action": self.action,
+            "target": self.target,
+            "payload_digest": self.payload_digest,
+            "prev_hash": self.prev_hash,
+        }
+        if self.kind is not None:
+            data["kind"] = self.kind
+        return data
 
     def compute_hash(self) -> str:
         """Return ``sha256(prev_hash || canonical_json(record))`` as hex."""
@@ -119,12 +139,11 @@ class AuditEntry:
         record = AuditRecord(
             seq=data["seq"],
             timestamp=data["timestamp"],
-            # Pre-COL-14 entries carry no ``kind``; default them to the generic
-            # "event" so the chain still parses. Such legacy records were hashed
-            # without a kind field, so ``verify`` will flag them — there is no
-            # production audit data predating COL-14, and no backfill (per the
-            # ticket non-goals), so this only affects synthetic old fixtures.
-            kind=data.get("kind", "event"),
+            # Pre-COL-14 entries carry no ``kind`` key; preserve that as ``None``
+            # so ``signing_dict`` hashes them exactly as they were originally
+            # written and the legacy chain still verifies. New entries always
+            # carry an explicit kind.
+            kind=data.get("kind"),
             actor=data["actor"],
             action=data["action"],
             target=data["target"],

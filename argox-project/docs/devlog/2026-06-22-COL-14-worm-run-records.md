@@ -5,23 +5,28 @@
 - **Status:** in-review
 
 ## What changed
-- `AuditRecord` (`audit/chain.py`) gains a `kind` field, hashed with the rest
-  of the record so the discriminator is itself tamper-evident. Values:
-  `run` | `span_batch` | `event`. `from_dict` defaults a missing `kind` to
-  `event` (pre-COL-14 entries; no backfill).
+- `AuditRecord` (`audit/chain.py`) gains a `kind` field (`run` | `span_batch` |
+  `event`), hashed with the rest of the record so the discriminator is itself
+  tamper-evident. Backward compatible: a legacy entry with no `kind` is read as
+  `kind=None` and `signing_dict` omits the field, so the pre-COL-14 chain keeps
+  verifying byte-for-byte.
 - `AuditLog.append` (`audit/log.py`) accepts `kind=` (default `event`).
   `AuditVerificationResult` and `verify` now also report `broken_offset`
   (zero-based position), `broken_kind`, and `broken_target` for the first
   broken record. Added `AUDIT_KIND_RUN` / `AUDIT_KIND_SPAN_BATCH` /
   `AUDIT_KIND_EVENT` constants.
 - Run ingest `_persist` (`routers/runs.py`) appends a `kind="run"` audit entry
-  after a fresh blob write, with `target=run_id` and `payload_digest` = digest
-  of the immutable blob bytes. Skipped on re-ingest (blob already exists);
-  audit failures are logged via `_audit_run`, never re-raised, so an
-  already-persisted run never becomes a 503 nor crashes the background task.
+  with `target=run_id` and `payload_digest` = digest of the immutable blob
+  bytes. The append is idempotent and gated on a new `audited` flag on the run
+  index row, not on whether the blob was newly written, so a re-ingest retries
+  a run whose first append failed instead of skipping it forever. Any audit
+  failure is logged and swallowed (the run is already durable), never a 503 or
+  a crashed background task.
+- `TraceIndex` gains `is_run_audited` / `mark_run_audited`; the DuckDB backend
+  adds an `audited BOOLEAN` column (with `ADD COLUMN IF NOT EXISTS` migration).
 - `POST /api/v1/audit` accepts an optional `kind`; `GET /api/v1/audit/verify`
-  and the entry/list responses expose the new `kind` / break fields.
-  `openapi.json` regenerated.
+  and the entry/list responses expose the new `kind` / break fields
+  (`kind` nullable for legacy entries). `openapi.json` regenerated.
 
 ## Why
 Route B run records carry the prompt, final output, per-call tokens and policy

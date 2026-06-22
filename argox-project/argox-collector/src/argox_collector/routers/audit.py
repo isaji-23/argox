@@ -70,7 +70,8 @@ class AuditEntryResponse(BaseModel):
 
     seq: int
     timestamp: str
-    kind: str
+    # ``None`` for legacy entries written before COL-14 (no kind field).
+    kind: Optional[str] = None
     actor: str
     action: str
     target: str

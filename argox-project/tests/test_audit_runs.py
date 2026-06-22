@@ -163,6 +163,55 @@ def test_tampered_run_record_reports_kind_and_target(client: TestClient) -> None
     assert verify["reason"]
 
 
+def test_failed_append_is_retried_on_reingest(client: TestClient) -> None:
+    """A run whose first audit append fails must still enter the chain on a
+    later re-ingest, even though its immutable blob already exists (point 1)."""
+    audit = client.app.state.audit
+    real_append = audit.append
+    calls = {"n": 0}
+
+    def flaky_append(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("transient storage blip")
+        return real_append(*args, **kwargs)
+
+    audit.append = flaky_append  # type: ignore[assignment]
+    try:
+        _ingest_run(client, _run_payload("run-x"))  # append raises, swallowed
+        assert client.get("/api/v1/audit").json()["returned"] == 0
+        assert client.app.state.index.is_run_audited("run-x") is False
+
+        _ingest_run(client, _run_payload("run-x"))  # blob exists; retry succeeds
+    finally:
+        audit.append = real_append  # type: ignore[assignment]
+
+    listed = client.get("/api/v1/audit").json()
+    assert listed["returned"] == 1
+    assert listed["items"][0]["target"] == "run-x"
+    assert client.app.state.index.is_run_audited("run-x") is True
+    assert client.get("/api/v1/audit/verify").json()["ok"] is True
+
+
+def test_durable_audit_failure_does_not_503(client: TestClient) -> None:
+    """A non-AuditLogError audit failure must not fail a durable run that is
+    already committed to blob + index (point 3)."""
+    audit = client.app.state.audit
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("transient storage blip")
+
+    audit.append = boom  # type: ignore[assignment]
+    try:
+        resp = _ingest_run(client, _run_payload("run-d"), durable=True)
+    finally:
+        del audit.append  # restore the bound method
+
+    assert resp.status_code == 200  # run is durable despite the audit failure
+    assert client.app.state.index.get_run("run-d") is not None
+    assert client.app.state.index.is_run_audited("run-d") is False
+
+
 def test_tampered_span_record_reports_span_kind(client: TestClient) -> None:
     _ingest_run(client, _run_payload("run-a"))
     _post_event(client, "trace-x", kind="span_batch")

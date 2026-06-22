@@ -30,10 +30,19 @@ the discriminator is itself tamper-evident. This matches Art. 12's intent of
 Data flow: run ingest `_persist` appends a `kind="run"` entry **after** the
 immutable blob write (post-ack, so a failed write never enters the chain),
 `target=run_id`, `payload_digest` = digest of the stored blob bytes. The append
-is skipped on re-ingest (the blob already exists, so the run is already chained)
-and any audit failure is logged, never re-raised — an already-persisted run
-must not become a 503 or crash the background task; the chain still surfaces the
-resulting gap at `verify` time.
+is idempotent and self-healing: it is gated on an `audited` flag on the run's
+index row, not on whether the blob was newly written, so a re-ingest **retries**
+the append for a run whose first attempt failed (transient storage error,
+concurrent writer) instead of skipping it forever because the immutable blob
+already exists. The flag is set only after the append succeeds, biasing toward a
+duplicate audit entry over a missing one (over-recording is compliant; omission
+is not). Any audit failure is logged, never re-raised — an already-persisted run
+must not become a 503 or crash the background task.
+
+`verify` cannot by itself prove a run *should* be in the chain (sequence numbers
+are assigned at append time, not derived from runs), so a never-re-ingested run
+that failed its only append would stay absent. The `audited` flag plus retry-on-
+re-ingest is what closes that gap.
 
 `verify` (and `GET /api/v1/audit/verify`) report the first broken record's
 `kind`, `target` (`run_id` / `trace_id`) and zero-based `offset`, so an auditor
@@ -52,8 +61,9 @@ can page straight to it.
 
 ## What stays out of scope
 
-- No retroactive backfill of runs ingested before COL-14. Pre-COL-14 entries
-  without a `kind` default to `event` on read and will flag under `verify`
-  (acceptable: there is no production audit data predating this).
+- No retroactive backfill of runs ingested before COL-14. Pre-COL-14 audit
+  entries that carry no `kind` are hashed *without* a `kind` field
+  (`signing_dict` omits it when `kind is None`), so the legacy chain keeps
+  verifying byte-for-byte; only records written since COL-14 hash their kind.
 - No external timestamping authority — deferred to a separate ticket.
 - The SDK still does not write to the audit log; it remains Collector-side.

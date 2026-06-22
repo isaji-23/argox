@@ -278,8 +278,15 @@
             "type": "string"
           },
           "kind": {
-            "title": "Kind",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kind"
           },
           "payload_digest": {
             "title": "Payload Digest",
@@ -305,7 +312,6 @@
         "required": [
           "seq",
           "timestamp",
-          "kind",
           "actor",
           "action",
           "target",

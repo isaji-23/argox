@@ -25,7 +25,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, Request, Response
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from argox_collector.audit import AUDIT_KIND_RUN, AuditLog, AuditLogError, digest_payload
+from argox_collector.audit import AUDIT_KIND_RUN, AuditLog, digest_payload
 from argox_collector.auth import Scope, require_scope
 from argox_collector.enrichment.cost import enrich_run_cost
 from argox_collector.enrichment.pricing import PricingTable, cached_pricing
@@ -168,15 +168,18 @@ def _persist(
     already-persisted run, so it is logged and swallowed independently of the
     blob/index writes above.
 
-    Finally, a freshly written run record is appended to the WORM audit chain
-    (COL-14) with ``kind="run"`` and the digest of its immutable blob bytes, so
+    Finally, a run record that is not yet in the WORM audit chain (COL-14) is
+    appended with ``kind="run"`` and the digest of its immutable blob bytes, so
     the AI Act Art. 12/13 content (prompt, output, tokens, violations) is
-    tamper-evident. The append happens only after the blob write so a failed
-    write never enters the chain, and is skipped on re-ingest (the blob already
-    exists, hence the run is already chained from its first ingest).
+    tamper-evident. The append is gated on the index ``audited`` flag rather
+    than on whether the blob was newly written: if a prior attempt failed (a
+    transient storage error or a concurrent writer), a re-ingest retries it
+    instead of skipping forever because the immutable blob already exists. The
+    flag is set only after the append succeeds, so a crash in between re-appends
+    on the next re-ingest — a duplicate audit entry is compliant, an omission is
+    not.
     """
     for record, blob in items:
-        newly_written = True
         try:
             storage.put(
                 record.blob_path,
@@ -187,25 +190,29 @@ def _persist(
             )
         except ConditionNotMetError:
             logger.info("run_blob_exists", run_id=record.run_id)
-            newly_written = False
         index.insert_run(record)
         _backfill_cost(record, index, pricing)
-        if newly_written:
-            _audit_run(record, blob, audit)
+        _audit_run(record, blob, index, audit)
 
 
 def _audit_run(
-    record: RunRecord, blob: bytes, audit: Optional[AuditLog]
+    record: RunRecord,
+    blob: bytes,
+    index: TraceIndex,
+    audit: Optional[AuditLog],
 ) -> None:
-    """Append a run record to the WORM chain, never losing the stored run.
+    """Append a run to the WORM chain once, idempotently, never losing the run.
 
-    The blob and index writes are already committed when this runs, so a
-    concurrent-writer :class:`AuditLogError` (or any audit failure) is logged
-    and swallowed rather than re-raised: the durable path must not turn an
-    already-persisted run into a 503, and the background path must not crash.
-    The hash chain still surfaces the resulting gap at ``verify`` time.
+    Skips a run already marked ``audited`` in the index, so the append happens
+    exactly once across re-ingests. The blob and index writes are already
+    committed when this runs, so *any* audit failure (a concurrent-writer
+    :class:`AuditLogError` or a transient storage error inside the append) is
+    logged and swallowed rather than re-raised: the durable path must not turn
+    an already-persisted run into a 503, and the background path must not crash.
+    The ``audited`` flag stays unset on failure, so the next re-ingest retries
+    the append.
     """
-    if audit is None:
+    if audit is None or index.is_run_audited(record.run_id):
         return
     try:
         audit.append(
@@ -215,8 +222,10 @@ def _audit_run(
             kind=AUDIT_KIND_RUN,
             payload_digest=digest_payload(blob),
         )
-    except AuditLogError:
+    except Exception:  # noqa: BLE001 - run is already durable; retried on re-ingest
         logger.warning("run_audit_append_failed", run_id=record.run_id)
+        return
+    index.mark_run_audited(record.run_id)
 
 
 def _backfill_cost(

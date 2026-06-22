@@ -202,12 +202,19 @@ class DuckDBTraceIndex(TraceIndex):
                     cost_usd DOUBLE,
                     blob_path VARCHAR,
                     model VARCHAR,
-                    ingested_at TIMESTAMP
+                    ingested_at TIMESTAMP,
+                    audited BOOLEAN DEFAULT FALSE
                 )
             """)
             # Add the model column to runs tables created before COL-17 so the
             # cost backfill can read it on an upgraded database.
             self._conn.execute("ALTER TABLE runs ADD COLUMN IF NOT EXISTS model VARCHAR")
+            # Track whether a run has entered the WORM chain (COL-14) so a
+            # re-ingest can retry a failed audit append. Defaults FALSE on
+            # upgraded databases; existing runs are re-audited on next re-ingest.
+            self._conn.execute(
+                "ALTER TABLE runs ADD COLUMN IF NOT EXISTS audited BOOLEAN DEFAULT FALSE"
+            )
             # Likewise add ingested_at for runs tables created before it was
             # promoted, so the COL-13 list index and ordering bind on an
             # upgraded database.
@@ -517,6 +524,19 @@ class DuckDBTraceIndex(TraceIndex):
             self._conn.execute(
                 "UPDATE runs SET cost_usd = ? WHERE run_id = ?",
                 (_finite_or_none(cost_usd), run_id),
+            )
+
+    def is_run_audited(self, run_id: str) -> bool:
+        rows = self._read("SELECT audited FROM runs WHERE run_id = ?", (run_id,))
+        return bool(rows[0][0]) if rows else False
+
+    def mark_run_audited(self, run_id: str) -> None:
+        # Standalone UPDATE like set_run_cost: ``audited`` is a collector-side
+        # bookkeeping flag, not client content, so it never touches the
+        # first-write-wins immutable columns. Marking an unknown run is a no-op.
+        with self._lock:
+            self._conn.execute(
+                "UPDATE runs SET audited = TRUE WHERE run_id = ?", (run_id,)
             )
 
     def get_run_model_from_trace(self, trace_id: str) -> Optional[str]:
