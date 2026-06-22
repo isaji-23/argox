@@ -222,6 +222,12 @@
             "title": "Action",
             "type": "string"
           },
+          "kind": {
+            "default": "event",
+            "pattern": "^(event|run|span_batch)$",
+            "title": "Kind",
+            "type": "string"
+          },
           "payload": {
             "anyOf": [
               {},
@@ -271,6 +277,10 @@
             "title": "Hash",
             "type": "string"
           },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
           "payload_digest": {
             "title": "Payload Digest",
             "type": "string"
@@ -295,6 +305,7 @@
         "required": [
           "seq",
           "timestamp",
+          "kind",
           "actor",
           "action",
           "target",
@@ -343,8 +354,30 @@
         "type": "object"
       },
       "AuditVerifyResponse": {
-        "description": "Result of walking the chain.",
+        "description": "Result of walking the chain.\n\nOn a break, ``broken_kind`` and ``broken_target`` identify which kind of\nrecord failed and its ``run_id`` (kind ``run``) or ``trace_id`` (kind\n``span_batch``); ``broken_offset`` is the zero-based position usable as the\nlist endpoint's ``offset``. All are ``None`` when the chain is intact or\nwhen the broken record is too malformed to read.",
         "properties": {
+          "broken_kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Broken Kind"
+          },
+          "broken_offset": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Broken Offset"
+          },
           "broken_seq": {
             "anyOf": [
               {
@@ -355,6 +388,17 @@
               }
             ],
             "title": "Broken Seq"
+          },
+          "broken_target": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Broken Target"
           },
           "ok": {
             "title": "Ok",

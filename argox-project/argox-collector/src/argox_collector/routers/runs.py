@@ -25,6 +25,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, Request, Response
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from argox_collector.audit import AUDIT_KIND_RUN, AuditLog, AuditLogError, digest_payload
 from argox_collector.auth import Scope, require_scope
 from argox_collector.enrichment.cost import enrich_run_cost
 from argox_collector.enrichment.pricing import PricingTable, cached_pricing
@@ -37,6 +38,12 @@ router = APIRouter(tags=["runs"])
 
 _DURABLE_HEADER = "x-argox-durable"
 _CONTENT_TYPE_JSON = "application/json"
+
+# Audit attribution for a run record entering the WORM chain (COL-14). The
+# write happens in a trusted background/threadpool task with no request
+# principal, so the actor is the Collector itself, not a client-supplied value.
+_AUDIT_ACTOR = "collector"
+_AUDIT_ACTION = "run.ingest"
 
 # Upper bound on records per submission. The global payload-size middleware
 # already caps the request body; this caps the element count so a single
@@ -140,8 +147,9 @@ def _persist(
     storage: StorageBackend,
     index: TraceIndex,
     pricing: Optional[PricingTable] = None,
+    audit: Optional[AuditLog] = None,
 ) -> None:
-    """Write each run blob, index its summary, and backfill its cost.
+    """Write each run blob, index its summary, backfill cost, and audit it.
 
     Raises on any failure so the durable path can surface it. The background
     path wraps this in :func:`_persist_safe`, which logs and swallows because
@@ -159,8 +167,16 @@ def _persist(
     the bundled snapshot price table. A pricing failure must not lose the
     already-persisted run, so it is logged and swallowed independently of the
     blob/index writes above.
+
+    Finally, a freshly written run record is appended to the WORM audit chain
+    (COL-14) with ``kind="run"`` and the digest of its immutable blob bytes, so
+    the AI Act Art. 12/13 content (prompt, output, tokens, violations) is
+    tamper-evident. The append happens only after the blob write so a failed
+    write never enters the chain, and is skipped on re-ingest (the blob already
+    exists, hence the run is already chained from its first ingest).
     """
     for record, blob in items:
+        newly_written = True
         try:
             storage.put(
                 record.blob_path,
@@ -171,8 +187,36 @@ def _persist(
             )
         except ConditionNotMetError:
             logger.info("run_blob_exists", run_id=record.run_id)
+            newly_written = False
         index.insert_run(record)
         _backfill_cost(record, index, pricing)
+        if newly_written:
+            _audit_run(record, blob, audit)
+
+
+def _audit_run(
+    record: RunRecord, blob: bytes, audit: Optional[AuditLog]
+) -> None:
+    """Append a run record to the WORM chain, never losing the stored run.
+
+    The blob and index writes are already committed when this runs, so a
+    concurrent-writer :class:`AuditLogError` (or any audit failure) is logged
+    and swallowed rather than re-raised: the durable path must not turn an
+    already-persisted run into a 503, and the background path must not crash.
+    The hash chain still surfaces the resulting gap at ``verify`` time.
+    """
+    if audit is None:
+        return
+    try:
+        audit.append(
+            actor=_AUDIT_ACTOR,
+            action=_AUDIT_ACTION,
+            target=record.run_id,
+            kind=AUDIT_KIND_RUN,
+            payload_digest=digest_payload(blob),
+        )
+    except AuditLogError:
+        logger.warning("run_audit_append_failed", run_id=record.run_id)
 
 
 def _backfill_cost(
@@ -289,9 +333,10 @@ async def ingest_runs(
 
     storage: StorageBackend = request.app.state.storage
     index: TraceIndex = request.app.state.index
+    audit: AuditLog = request.app.state.audit
     pricing = cached_pricing(request.app.state.settings.pricing_table_path)
     persist_kwargs = dict(
-        items=items, storage=storage, index=index, pricing=pricing
+        items=items, storage=storage, index=index, pricing=pricing, audit=audit
     )
 
     durable = request.headers.get(_DURABLE_HEADER, "").strip().lower() == "true"

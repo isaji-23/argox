@@ -57,9 +57,15 @@ class AuditRecord:
     Attributes:
         seq: Monotonic, gap-free sequence number assigned at append time.
         timestamp: RFC 3339 / ISO 8601 UTC timestamp of the event.
+        kind: Discriminator for the kind of record in the unified chain
+            (COL-14): ``"run"`` for a run record persisted by COL-11,
+            ``"span_batch"`` for an ingested span batch, or ``"event"`` for a
+            generic administrative event. Hashed like every other field so the
+            kind itself is tamper-evident.
         actor: Identity that performed the action (user, service, system).
         action: What happened (e.g. ``policy.update``, ``trace.ingest``).
-        target: The object the action applied to (e.g. a policy id).
+        target: The object the action applied to: a policy id for events, the
+            ``run_id`` for a run record, the ``trace_id`` for a span batch.
         payload_digest: SHA-256 hex digest of the associated payload, kept
             instead of the payload itself so the log never stores raw PII.
         prev_hash: ``hash`` of the preceding record, or :data:`GENESIS_HASH`
@@ -68,6 +74,7 @@ class AuditRecord:
 
     seq: int
     timestamp: str
+    kind: str
     actor: str
     action: str
     target: str
@@ -112,6 +119,12 @@ class AuditEntry:
         record = AuditRecord(
             seq=data["seq"],
             timestamp=data["timestamp"],
+            # Pre-COL-14 entries carry no ``kind``; default them to the generic
+            # "event" so the chain still parses. Such legacy records were hashed
+            # without a kind field, so ``verify`` will flag them — there is no
+            # production audit data predating COL-14, and no backfill (per the
+            # ticket non-goals), so this only affects synthetic old fixtures.
+            kind=data.get("kind", "event"),
             actor=data["actor"],
             action=data["action"],
             target=data["target"],
