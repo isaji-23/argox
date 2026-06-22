@@ -11,7 +11,7 @@ Requirements:
 import asyncio
 import os
 from azure.ai.projects import AIProjectClient
-from azure.ai.projects.models import FunctionTool
+from azure.ai.projects.models import AsyncFunctionTool
 from azure.identity import DefaultAzureCredential
 from dotenv import load_dotenv
 
@@ -42,7 +42,7 @@ async def main():
     ) as client:
         
         # 2. Define tools
-        weather_tool = FunctionTool(functions=[get_weather])
+        weather_tool = AsyncFunctionTool(functions=[get_weather])
         
         # 3. Create Agent
         agent = await client.agents.create_agent(
@@ -81,7 +81,11 @@ async def main():
             
             # Retrieve final message content to return to the manager
             messages = await client.agents.list_messages(thread_id=thread.id)
-            final_content = messages.data[0].content[0].text.value
+            final_content = ""
+            for msg in messages.data:
+                if msg.role == "assistant" and msg.content:
+                    final_content = msg.content[0].text.value
+                    break
             
             # We return the run object as 'raw_result' for token extraction
             # and the final content as a result.

@@ -1,4 +1,4 @@
-# ADR-0008: Azure AI Foundry Tool Interception via wrapping
+# ADR-0012: Azure AI Foundry Tool Interception via wrapping
 
 - **Status:** accepted
 - **Date:** 2026-06-18

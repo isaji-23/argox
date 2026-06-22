@@ -12,6 +12,13 @@
   - Compatibility with `ArgoxManager` tool-args processors.
 - Added unit tests with mocked Azure AI Foundry SDK.
 - Updated SDK overview documentation.
+- Addressed PR review feedback (2026-06-22):
+  - Solved sync event loop deadlock and nested loop issues in sync wrappers.
+  - Normalized positional arguments via `inspect.signature` to ensure PII redaction works on all parameter types.
+  - Added OTel `execute_tool` child span emission per tool call (conforming to PLUGIN-06).
+  - Wired `gen_ai.request.model` extraction into active run spans for accurate pricing tracking (conforming to PLUGIN-05).
+  - Masked exception message leaking in spans and metrics to protect PII.
+  - Fixed demo script tool wrapping and message content extraction bugs.
 
 ## Why
 Azure AI Foundry Agent Service (formerly part of Azure OpenAI Assistants) is a key enterprise framework. Providing a native plugin allows Argox to govern and monitor agents built on Microsoft's AI stack with zero changes to the agent's core logic.

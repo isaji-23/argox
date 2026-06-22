@@ -21,14 +21,19 @@ from __future__ import annotations
 import asyncio
 import copy
 import functools
+import inspect
 import logging
 import time
 from typing import Any, Callable
+
+from opentelemetry import trace
+from opentelemetry.trace import SpanKind, Status, StatusCode
 
 from argox.core.state import AgentRunMetrics, ApiCallRecord, ToolCallRecord
 from argox.interfaces.plugin import ArgoxPlugin, ToolArgsRunner
 
 logger = logging.getLogger(__name__)
+_tracer = trace.get_tracer("argox")
 
 
 class ArgoxAzureFoundryPlugin(ArgoxPlugin):
@@ -50,6 +55,18 @@ class ArgoxAzureFoundryPlugin(ArgoxPlugin):
         Instead, we wrap the function tools provided to the agent to record 
         start/end times and results, and to run the tool-args processors.
         """
+        try:
+            self._loop = asyncio.get_running_loop()
+        except RuntimeError:
+            self._loop = None
+
+        model = getattr(target, "model", None)
+        if model:
+            if not isinstance(model, str):
+                model = getattr(model, "model", None)
+            if model and isinstance(model, str):
+                trace.get_current_span().set_attribute("gen_ai.request.model", model)
+
         if not hasattr(target, "tools") or not target.tools:
             return target
 
@@ -78,7 +95,7 @@ class ArgoxAzureFoundryPlugin(ArgoxPlugin):
         returned by create_and_process_run or retrieved via get_run.
         """
         usage = getattr(raw_result, "usage", None)
-        if not usage:
+        if usage is None:
             return
 
         # Azure SDK models use snake_case for usage attributes like prompt_tokens.
@@ -112,7 +129,27 @@ class ArgoxAzureFoundryPlugin(ArgoxPlugin):
         
         # Check for common result patterns
         if hasattr(raw_result, "content"):
-            return str(raw_result.content)
+            content = raw_result.content
+            if isinstance(content, str):
+                return content
+            
+            # If it's a list (e.g. content blocks in Azure messages)
+            if isinstance(content, list):
+                parts = []
+                for item in content:
+                    if hasattr(item, "text"):
+                        text_obj = item.text
+                        if hasattr(text_obj, "value"):
+                            parts.append(str(text_obj.value))
+                        else:
+                            parts.append(str(text_obj))
+                    elif hasattr(item, "value"):
+                        parts.append(str(item.value))
+                    else:
+                        parts.append(str(item))
+                return "".join(parts)
+            
+            return str(content)
         
         logger.warning("Could not extract output: raw_result does not have 'content' attribute.")
         return ""
@@ -130,11 +167,18 @@ class ArgoxAzureFoundryPlugin(ArgoxPlugin):
         except ImportError:
             is_async = False
 
-        original_functions = getattr(tool, "_functions", {})
-        if not original_functions:
+        original_functions = getattr(tool, "_functions", None)
+        if original_functions is None:
+            logger.warning(
+                "FunctionTool does not have a private '_functions' attribute. "
+                "ArgoxAzureFoundryPlugin cannot wrap its functions. Tool monitoring may not work."
+            )
             return tool
 
         wrapped_tool = copy.copy(tool)
+        if hasattr(tool, "definitions") and tool.definitions is not None:
+            wrapped_tool.definitions = copy.deepcopy(tool.definitions)
+
         wrapped_functions = {}
         for name, func in original_functions.items():
             if is_async:
@@ -144,6 +188,27 @@ class ArgoxAzureFoundryPlugin(ArgoxPlugin):
 
         wrapped_tool._functions = wrapped_functions
         return wrapped_tool
+
+    def _run_async(self, coro):
+        """Helper to run a coroutine synchronously without deadlock or loop issues."""
+        try:
+            current_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            current_loop = None
+
+        if current_loop is not None:
+            # We are inside a running loop. Run in a separate thread to avoid deadlock.
+            if not hasattr(self, "_executor"):
+                import concurrent.futures
+                self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=10)
+            return self._executor.submit(asyncio.run, coro).result()
+        else:
+            # We are not in a thread with a running loop.
+            main_loop = getattr(self, "_loop", None)
+            if main_loop and main_loop.is_running():
+                return asyncio.run_coroutine_threadsafe(coro, main_loop).result()
+            else:
+                return asyncio.run(coro)
 
     def _make_sync_wrapper(
         self, 
@@ -158,29 +223,39 @@ class ArgoxAzureFoundryPlugin(ArgoxPlugin):
             record = ToolCallRecord(name=name, start=time.time())
             metrics.tools_called.append(record)
             
-            try:
-                if runner:
-                    try:
-                        loop = asyncio.get_running_loop()
-                    except RuntimeError:
-                        loop = None
+            with _tracer.start_as_current_span(
+                f"execute_tool {name}",
+                kind=SpanKind.INTERNAL,
+                attributes={
+                    "gen_ai.operation.name": "execute_tool",
+                    "gen_ai.tool.name": name,
+                },
+                record_exception=False,
+                set_status_on_exception=False,
+            ) as span:
+                try:
+                    sig = inspect.signature(func)
+                    bound = sig.bind(*args, **kwargs)
+                    bound.apply_defaults()
+
+                    if runner:
+                        processed_args = self._run_async(runner(name, bound.arguments))
+                        bound.arguments.update(processed_args)
                     
-                    if loop and loop.is_running():
-                        import concurrent.futures
-                        with concurrent.futures.ThreadPoolExecutor() as pool:
-                            kwargs = pool.submit(asyncio.run, runner(name, kwargs)).result()
+                    if asyncio.iscoroutinefunction(func):
+                        result = self._run_async(func(*bound.args, **bound.kwargs))
                     else:
-                        kwargs = asyncio.run(runner(name, kwargs))
-                
-                result = func(*args, **kwargs)
-                
-                record.end = time.time()
-                record.result = str(result)
-                return result
-            except Exception as e:
-                record.end = time.time()
-                record.result = f"Error: {str(e)}"
-                raise
+                        result = func(*bound.args, **bound.kwargs)
+                    
+                    record.end = time.time()
+                    record.result = str(result)
+                    return result
+                except Exception as e:
+                    span.set_attribute("error.type", type(e).__qualname__)
+                    span.set_status(Status(StatusCode.ERROR))
+                    record.end = time.time()
+                    record.result = f"Error: {type(e).__name__}"
+                    raise
         
         return wrapper
 
@@ -197,18 +272,35 @@ class ArgoxAzureFoundryPlugin(ArgoxPlugin):
             record = ToolCallRecord(name=name, start=time.time())
             metrics.tools_called.append(record)
             
-            try:
-                if runner:
-                    kwargs = await runner(name, kwargs)
-                
-                result = await func(*args, **kwargs)
-                
-                record.end = time.time()
-                record.result = str(result)
-                return result
-            except Exception as e:
-                record.end = time.time()
-                record.result = f"Error: {str(e)}"
-                raise
+            with _tracer.start_as_current_span(
+                f"execute_tool {name}",
+                kind=SpanKind.INTERNAL,
+                attributes={
+                    "gen_ai.operation.name": "execute_tool",
+                    "gen_ai.tool.name": name,
+                },
+                record_exception=False,
+                set_status_on_exception=False,
+            ) as span:
+                try:
+                    sig = inspect.signature(func)
+                    bound = sig.bind(*args, **kwargs)
+                    bound.apply_defaults()
+
+                    if runner:
+                        processed_args = await runner(name, bound.arguments)
+                        bound.arguments.update(processed_args)
+                    
+                    result = await func(*bound.args, **bound.kwargs)
+                    
+                    record.end = time.time()
+                    record.result = str(result)
+                    return result
+                except Exception as e:
+                    span.set_attribute("error.type", type(e).__qualname__)
+                    span.set_status(Status(StatusCode.ERROR))
+                    record.end = time.time()
+                    record.result = f"Error: {type(e).__name__}"
+                    raise
         
         return wrapper
