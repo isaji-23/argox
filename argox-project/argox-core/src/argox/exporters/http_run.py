@@ -82,13 +82,18 @@ class HttpRunExporter(ExporterBase):
 
         max_attempts = self.max_retries + 1
         last_error = None
+        next_delay = None
 
         for attempt in range(max_attempts):
             if attempt > 0:
-                # Exponential backoff with jitter and a 10s cap
-                base_delay = 0.5 * (2 ** (attempt - 1))
-                jitter = random.uniform(0, 0.1 * base_delay)
-                delay = min(base_delay + jitter, 10.0)
+                if next_delay is not None:
+                    delay = next_delay
+                    next_delay = None
+                else:
+                    # Exponential backoff with jitter and a 10s cap
+                    base_delay = 0.5 * (2 ** (attempt - 1))
+                    jitter = random.uniform(0, 0.1 * base_delay)
+                    delay = min(base_delay + jitter, 10.0)
 
                 logger.warning(
                     "Retrying HttpRunExporter export to %s in %.2fs (attempt %d/%d). Error: %s",
@@ -116,12 +121,7 @@ class HttpRunExporter(ExporterBase):
                             try:
                                 retry_seconds = float(retry_after)
                                 # Cap the Retry-After value to prevent excessive thread blocking
-                                delay = min(retry_seconds, 10.0)
-                                logger.warning(
-                                    "Rate limited (429). Respecting Retry-After header: waiting %.2fs before retry.",
-                                    delay
-                                )
-                                time.sleep(delay)
+                                next_delay = min(retry_seconds, 10.0)
                             except ValueError:
                                 pass
                 else:

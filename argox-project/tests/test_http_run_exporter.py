@@ -232,12 +232,12 @@ def test_exporter_429_retry_with_retry_after(metrics, mock_sleep):
 
         exporter.export(metrics)
 
-        # 1st attempt: returns 429. Sleeps 5.0s (from Retry-After).
-        # 2nd attempt: backoff sleeps 0.5s, then returns 202.
+        # 1st attempt: 429. Sets next_delay = 5.0. No immediate sleep.
+        # 2nd attempt: Sleeps 5.0s, then returns 202.
+        # Total sleeps: 1 (only the Retry-After sleep, no exponential backoff).
         assert mock_post.call_count == 2
-        assert mock_sleep.call_count == 2
-        mock_sleep.assert_any_call(5.0)
-        mock_sleep.assert_any_call(0.5)
+        assert mock_sleep.call_count == 1
+        mock_sleep.assert_called_once_with(5.0)
         assert len(metrics.exporter_errors) == 0
 
 
@@ -256,10 +256,46 @@ def test_exporter_429_retry_with_retry_after_capped(metrics, mock_sleep):
 
         exporter.export(metrics)
 
-        # Retry-After should be capped at 10.0
-        assert mock_sleep.call_count == 2
-        mock_sleep.assert_any_call(10.0)
-        mock_sleep.assert_any_call(0.5)
+        # Retry-After should be capped at 10.0, and sleep only once
+        assert mock_sleep.call_count == 1
+        mock_sleep.assert_called_once_with(10.0)
+
+
+def test_exporter_429_no_sleep_on_last_attempt(metrics, mock_sleep):
+    exporter = HttpRunExporter(endpoint="http://localhost:8000", max_retries=1)
+
+    with patch.object(exporter._client, "post") as mock_post:
+        resp_429 = MagicMock(spec=httpx.Response)
+        resp_429.status_code = 429
+        resp_429.headers = {"Retry-After": "5.0"}
+
+        mock_post.return_value = resp_429
+
+        exporter.export(metrics)
+
+        # 1st attempt: returns 429, sets next_delay = 5.0
+        # 2nd attempt (final): sleeps 5.0, returns 429, sets next_delay = 5.0
+        # Loop terminates. Since no subsequent attempt, the 2nd sleep is skipped.
+        assert mock_post.call_count == 2
+        assert mock_sleep.call_count == 1
+        mock_sleep.assert_called_once_with(5.0)
+
+
+def test_exporter_429_no_sleep_when_zero_retries(metrics, mock_sleep):
+    exporter = HttpRunExporter(endpoint="http://localhost:8000", max_retries=0)
+
+    with patch.object(exporter._client, "post") as mock_post:
+        resp_429 = MagicMock(spec=httpx.Response)
+        resp_429.status_code = 429
+        resp_429.headers = {"Retry-After": "5.0"}
+
+        mock_post.return_value = resp_429
+
+        exporter.export(metrics)
+
+        # 1st attempt: returns 429, loop terminates. Zero sleeps.
+        assert mock_post.call_count == 1
+        assert mock_sleep.call_count == 0
 
 
 def test_exporter_close_and_context_manager():
