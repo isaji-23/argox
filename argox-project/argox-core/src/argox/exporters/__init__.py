@@ -5,4 +5,6 @@ implementations. OpenTelemetry-specific span processors and exporters
 live in `argox.observability`.
 """
 
-__all__: list[str] = []
+from argox.exporters.http_run import HttpRunExporter
+
+__all__: list[str] = ["HttpRunExporter"]
