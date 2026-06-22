@@ -618,3 +618,29 @@ def test_list_traces_endpoint_malformed_sort_string_returns_422(search_sort_clie
     assert res.status_code == 422
     res = search_sort_client.get("/api/v1/traces", params={"sort": "invalid_field:asc"})
     assert res.status_code == 422
+
+
+def test_index_list_traces_filters_by_window_hours(tmp_path: Path) -> None:
+    from datetime import timedelta
+    idx = DuckDBTraceIndex(tmp_path / "window.duckdb")
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    idx.insert_spans(
+        [
+            SpanRecord(trace_id="t-recent", span_id="s1", start_time=now - timedelta(minutes=10)),
+            SpanRecord(trace_id="t-old", span_id="s2", start_time=now - timedelta(hours=5)),
+        ]
+    )
+    # 2 hours window should only return recent trace
+    summaries, total = idx.list_traces(window_hours=2)
+    assert total == 1
+    assert summaries[0]["trace_id"] == "t-recent"
+
+    # 10 hours window should return both
+    summaries, total = idx.list_traces(window_hours=10)
+    assert total == 2
+
+
+def test_list_traces_endpoint_filters_by_window_hours(client: TestClient) -> None:
+    res = client.get("/api/v1/traces", params={"window_hours": 24})
+    assert res.status_code == 200
+

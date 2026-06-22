@@ -333,13 +333,21 @@ class DuckDBTraceIndex(TraceIndex):
         status: Optional[str] = None,
         decision: Optional[str] = None,
         sort: Optional[str] = None,
+        window_hours: Optional[int] = None,
     ) -> tuple[list[dict], int]:
-        # Pre-filter by trace_id on the raw spans table if possible to speed up aggregation.
-        spans_where = ""
+        # Pre-filter by trace_id and window_hours on the raw spans table if possible to speed up aggregation.
+        spans_where_parts = []
         base_params = []
         if trace_id:
-            spans_where = r" WHERE trace_id LIKE ? ESCAPE '\'"
+            spans_where_parts.append(r"trace_id LIKE ? ESCAPE '\'")
             base_params.append(f"{self._escape_like_wildcards(trace_id)}%")
+        if window_hours is not None:
+            spans_where_parts.append("start_time >= ?")
+            base_params.append(_window_cutoff(window_hours))
+
+        spans_where = ""
+        if spans_where_parts:
+            spans_where = " WHERE " + " AND ".join(spans_where_parts)
 
         # Base query to aggregate traces.
         base_query = f"""
@@ -372,23 +380,28 @@ class DuckDBTraceIndex(TraceIndex):
             GROUP BY trace_id
         """
 
+        # Construct the filters clause dynamically once (Finding 5)
+        filters = []
+        filter_params = []
+        if agent_name:
+            filters.append("agent_name = ?")
+            filter_params.append(agent_name)
+        if status:
+            filters.append("status = ?")
+            filter_params.append(status)
+        if decision:
+            filters.append("decision = ?")
+            filter_params.append(decision)
+
+        filter_clause = ""
+        if filters:
+            filter_clause = " AND " + " AND ".join(filters)
+
         # Wrap in a subquery to allow filtering on aggregated columns.
         # We use COUNT(*) OVER () AS _total_count to calculate the total matching count
         # in a single query execution pass, avoiding double aggregation.
-        query = f"SELECT *, COUNT(*) OVER () AS _total_count FROM ({base_query}) AS t WHERE 1=1"
-        params = list(base_params)
-
-        if agent_name:
-            query += " AND agent_name = ?"
-            params.append(agent_name)
-        
-        if status:
-            query += " AND status = ?"
-            params.append(status)
-            
-        if decision:
-            query += " AND decision = ?"
-            params.append(decision)
+        query = f"SELECT *, COUNT(*) OVER () AS _total_count FROM ({base_query}) AS t WHERE 1=1{filter_clause}"
+        params = base_params + filter_params
 
         # Sorting
         # Keep this mapping synchronized with the route validation in the collector api.
@@ -425,17 +438,8 @@ class DuckDBTraceIndex(TraceIndex):
             if skip == 0:
                 total = 0
             else:
-                count_query = f"SELECT COUNT(*) FROM ({base_query}) AS t WHERE 1=1"
-                count_params = list(base_params)
-                if agent_name:
-                    count_query += " AND agent_name = ?"
-                    count_params.append(agent_name)
-                if status:
-                    count_query += " AND status = ?"
-                    count_params.append(status)
-                if decision:
-                    count_query += " AND decision = ?"
-                    count_params.append(decision)
+                count_query = f"SELECT COUNT(*) FROM ({base_query}) AS t WHERE 1=1{filter_clause}"
+                count_params = base_params + filter_params
                 total = self._read(count_query, tuple(count_params))[0][0]
 
         summaries = [
@@ -744,4 +748,3 @@ class DuckDBTraceIndex(TraceIndex):
         """Close the DuckDB connection."""
         with self._lock:
             self._conn.close()
-

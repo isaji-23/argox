@@ -48,7 +48,10 @@ export function TraceDetailScreen({ traceId, onBack }: TraceDetailScreenProps) {
   const traceSummary = useMemo(() => {
     if (spans.length === 0) return null;
     const start = new Date(spans[0].start_time).getTime();
-    const end = Math.max(...spans.map(s => new Date(s.end_time).getTime()));
+    const endTimes = spans
+      .map(s => s.end_time ? new Date(s.end_time).getTime() : null)
+      .filter((t): t is number => t !== null && !isNaN(t));
+    const end = endTimes.length > 0 ? Math.max(...endTimes) : start;
     return {
       id: traceId,
       name: spans[0].name || 'Trace',

@@ -1726,6 +1726,7 @@ export interface operations {
                 status?: string | null;
                 decision?: string | null;
                 sort?: string | null;
+                window_hours?: number | null;
             };
             header?: never;
             path?: never;

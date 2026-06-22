@@ -98,6 +98,7 @@ class TraceIndex(ABC):
         status: Optional[str] = None,
         decision: Optional[str] = None,
         sort: Optional[str] = None,
+        window_hours: Optional[int] = None,
     ) -> tuple[list[dict], int]:
         """Return paginated trace summaries plus the total trace count.
 

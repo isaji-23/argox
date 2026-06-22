@@ -59,6 +59,7 @@ export const api = {
     status?: string;
     decision?: string;
     sort?: string;
+    window_hours?: number;
   }): Promise<TraceListResponse> {
     const searchParams = new URLSearchParams();
     if (params.skip !== undefined) searchParams.set('skip', params.skip.toString());
@@ -68,6 +69,7 @@ export const api = {
     if (params.status && params.status !== 'all') searchParams.set('status', params.status);
     if (params.decision && params.decision !== 'all') searchParams.set('decision', params.decision);
     if (params.sort) searchParams.set('sort', params.sort);
+    if (params.window_hours !== undefined) searchParams.set('window_hours', params.window_hours.toString());
 
     const res = await fetch(`${API_BASE}/traces?${searchParams.toString()}`);
     if (!res.ok) throw new APIError('Failed to fetch traces', res.status);

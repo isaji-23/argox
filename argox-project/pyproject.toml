@@ -34,10 +34,3 @@ markers = [
     "benchmark: performance benchmarks (select with -m benchmark)",
     "live: requires real API key and ARGOX_LIVE_BENCH=1",
 ]
-
-[tool.setuptools]
-package-dir = {"" = "argox-core/src"}
-
-[tool.setuptools.packages.find]
-where = ["argox-core/src"]
-

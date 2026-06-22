@@ -195,6 +195,7 @@ def list_traces(
     status: Optional[str] = Query(None, pattern="^(ok|error)$"),
     decision: Optional[str] = Query(None, pattern="^(allow|block|warn)$"),
     sort: Optional[str] = Query(None, pattern="^(start_time|duration|cost|spans):(asc|desc)$"),
+    window_hours: Optional[int] = Query(None, ge=1, le=_MAX_WINDOW_HOURS),
 ) -> TraceListResponse:
     """List trace summaries, newest first."""
     summaries, total = _index(request).list_traces(
@@ -205,6 +206,7 @@ def list_traces(
         status=status,
         decision=decision,
         sort=sort,
+        window_hours=window_hours,
     )
     return TraceListResponse(
         items=[TraceSummary(**summary) for summary in summaries],

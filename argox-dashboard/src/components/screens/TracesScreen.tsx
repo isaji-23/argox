@@ -59,6 +59,14 @@ export function TracesScreen({ timeRange, agent, onOpenTrace }: TracesScreenProp
     const backendSort = sortMap[sort.key] ? `${sortMap[sort.key]}:${sort.dir}` : undefined;
 
     try {
+      const rangeMap: Record<string, number> = {
+        '1h': 1,
+        '24h': 24,
+        '7d': 168,
+        '30d': 720,
+      };
+      const windowHours = rangeMap[timeRange] || 24;
+
       const data = await api.listTraces({
         skip: (page - 1) * pageSize,
         limit: pageSize,
@@ -67,6 +75,7 @@ export function TracesScreen({ timeRange, agent, onOpenTrace }: TracesScreenProp
         status: filterStatus,
         decision: filterDecision,
         sort: backendSort,
+        window_hours: windowHours,
       });
       setTraces(data.items);
       setTotal(data.total);
@@ -79,11 +88,11 @@ export function TracesScreen({ timeRange, agent, onOpenTrace }: TracesScreenProp
 
   useEffect(() => {
     fetchTraces();
-  }, [page, debouncedQuery, filterStatus, filterDecision, filterAgent, sort]);
+  }, [page, debouncedQuery, filterStatus, filterDecision, filterAgent, sort, timeRange]);
 
   useEffect(() => {
     setPage(1);
-  }, [debouncedQuery, filterStatus, filterDecision, filterAgent, sort]);
+  }, [debouncedQuery, filterStatus, filterDecision, filterAgent, sort, timeRange]);
 
   const fmtMs = (ms: number) => ms >= 1000 ? (ms / 1000).toFixed(2) + 's' : Math.round(ms) + 'ms';
   const fmtDate = (iso: string) => {
