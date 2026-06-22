@@ -25,11 +25,21 @@ from fastapi import APIRouter, BackgroundTasks, Depends, Request, Response
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from argox_collector.audit import (
+    AUDIT_KIND_RUN,
+    AuditLog,
+    AuditLogError,
+    digest_payload,
+)
 from argox_collector.auth import Scope, require_scope
 from argox_collector.enrichment.cost import enrich_run_cost
 from argox_collector.enrichment.pricing import PricingTable, cached_pricing
 from argox_collector.index import RunRecord, TraceIndex
-from argox_collector.storage import ConditionNotMetError, StorageBackend
+from argox_collector.storage import (
+    BlobNotFoundError,
+    ConditionNotMetError,
+    StorageBackend,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -37,6 +47,12 @@ router = APIRouter(tags=["runs"])
 
 _DURABLE_HEADER = "x-argox-durable"
 _CONTENT_TYPE_JSON = "application/json"
+
+# Audit attribution for a run record entering the WORM chain (COL-14). The
+# write happens in a trusted background/threadpool task with no request
+# principal, so the actor is the Collector itself, not a client-supplied value.
+_AUDIT_ACTOR = "collector"
+_AUDIT_ACTION = "run.ingest"
 
 # Upper bound on records per submission. The global payload-size middleware
 # already caps the request body; this caps the element count so a single
@@ -140,8 +156,9 @@ def _persist(
     storage: StorageBackend,
     index: TraceIndex,
     pricing: Optional[PricingTable] = None,
+    audit: Optional[AuditLog] = None,
 ) -> None:
-    """Write each run blob, index its summary, and backfill its cost.
+    """Write each run blob, index its summary, backfill cost, and audit it.
 
     Raises on any failure so the durable path can surface it. The background
     path wraps this in :func:`_persist_safe`, which logs and swallows because
@@ -159,6 +176,17 @@ def _persist(
     the bundled snapshot price table. A pricing failure must not lose the
     already-persisted run, so it is logged and swallowed independently of the
     blob/index writes above.
+
+    Finally, a run record that is not yet in the WORM audit chain (COL-14) is
+    appended with ``kind="run"`` and the digest of its immutable blob bytes, so
+    the AI Act Art. 12/13 content (prompt, output, tokens, violations) is
+    tamper-evident. The append is gated on the index ``audited`` flag rather
+    than on whether the blob was newly written: if a prior attempt failed (a
+    transient storage error or a concurrent writer), a re-ingest retries it
+    instead of skipping forever because the immutable blob already exists. The
+    flag is set only after the append succeeds, so a crash in between re-appends
+    on the next re-ingest — a duplicate audit entry is compliant, an omission is
+    not.
     """
     for record, blob in items:
         try:
@@ -173,6 +201,99 @@ def _persist(
             logger.info("run_blob_exists", run_id=record.run_id)
         index.insert_run(record)
         _backfill_cost(record, index, pricing)
+        _audit_run(record, blob, index, audit)
+
+
+def _audit_run(
+    record: RunRecord,
+    blob: bytes,
+    index: TraceIndex,
+    audit: Optional[AuditLog],
+) -> None:
+    """Append a run to the WORM chain once, idempotently, never losing the run.
+
+    Skips a run already marked ``audited`` in the index, so the append happens
+    exactly once across re-ingests. The blob and index writes are already
+    committed when this runs, so *any* audit failure (a concurrent-writer
+    :class:`AuditLogError` or a transient storage error inside the append) is
+    logged and swallowed rather than re-raised: the durable path must not turn
+    an already-persisted run into a 503, and the background path must not crash.
+    The ``audited`` flag stays unset on failure, so the next re-ingest retries
+    the append.
+    """
+    if audit is None or index.is_run_audited(record.run_id):
+        return
+    try:
+        audit.append(
+            actor=_AUDIT_ACTOR,
+            action=_AUDIT_ACTION,
+            target=record.run_id,
+            kind=AUDIT_KIND_RUN,
+            payload_digest=digest_payload(blob),
+        )
+    except Exception:  # noqa: BLE001 - run is already durable; retried on re-ingest
+        logger.warning("run_audit_append_failed", run_id=record.run_id)
+        return
+    index.mark_run_audited(record.run_id)
+
+
+# Cap per sweep so a large backlog of unaudited runs cannot block startup
+# unboundedly; the next sweep continues from where this one left off.
+_RECONCILE_LIMIT = 1000
+
+
+def reconcile_run_audit(
+    *,
+    storage: StorageBackend,
+    index: TraceIndex,
+    audit: AuditLog,
+    limit: int = _RECONCILE_LIMIT,
+) -> int:
+    """Retry the WORM append for runs left unaudited by a failed append (COL-14).
+
+    Closes the residual that the per-run ``audited`` flag alone cannot: a run
+    whose only audit append failed on an otherwise-successful request stays
+    ``audited=false`` and is never re-ingested (the client saw success), so the
+    re-ingest retry path never heals it. Run at startup, this sweep reads each
+    such run's immutable blob, appends it to the chain and marks it audited.
+
+    Best-effort: a per-run failure is logged and the run stays unaudited for the
+    next sweep; a chain-level :class:`AuditLogError` (e.g. a concurrent writer)
+    aborts the sweep, since no further append can succeed until it clears.
+
+    Returns the number of runs newly appended to the chain.
+    """
+    appended = 0
+    for record in index.list_unaudited_runs(limit=limit):
+        if not record.blob_path:
+            continue
+        try:
+            blob = storage.get(record.blob_path).data
+        except BlobNotFoundError:
+            # The blob write never landed, so there is no immutable content to
+            # chain. Leave the run unaudited; a later re-ingest can still write
+            # both the blob and the chain entry.
+            logger.warning("run_audit_reconcile_no_blob", run_id=record.run_id)
+            continue
+        try:
+            audit.append(
+                actor=_AUDIT_ACTOR,
+                action=_AUDIT_ACTION,
+                target=record.run_id,
+                kind=AUDIT_KIND_RUN,
+                payload_digest=digest_payload(blob),
+            )
+        except AuditLogError:
+            logger.warning("run_audit_reconcile_aborted", run_id=record.run_id)
+            break
+        except Exception:  # noqa: BLE001 - heal the rest of the backlog
+            logger.warning("run_audit_reconcile_failed", run_id=record.run_id)
+            continue
+        index.mark_run_audited(record.run_id)
+        appended += 1
+    if appended:
+        logger.info("run_audit_reconciled", count=appended)
+    return appended
 
 
 def _backfill_cost(
@@ -289,9 +410,10 @@ async def ingest_runs(
 
     storage: StorageBackend = request.app.state.storage
     index: TraceIndex = request.app.state.index
+    audit: AuditLog = request.app.state.audit
     pricing = cached_pricing(request.app.state.settings.pricing_table_path)
     persist_kwargs = dict(
-        items=items, storage=storage, index=index, pricing=pricing
+        items=items, storage=storage, index=index, pricing=pricing, audit=audit
     )
 
     durable = request.headers.get(_DURABLE_HEADER, "").strip().lower() == "true"

@@ -53,8 +53,8 @@ _INSERT_RUN_SQL = """
     INSERT INTO runs (
         run_id, trace_id, agent_name, agent_version, timestamp,
         success, total_input_tokens, total_output_tokens,
-        duration_seconds, cost_usd, blob_path, model, ingested_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        duration_seconds, cost_usd, blob_path, model, ingested_at, audited
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, FALSE)
     ON CONFLICT (run_id) DO NOTHING
 """
 
@@ -202,12 +202,22 @@ class DuckDBTraceIndex(TraceIndex):
                     cost_usd DOUBLE,
                     blob_path VARCHAR,
                     model VARCHAR,
-                    ingested_at TIMESTAMP
+                    ingested_at TIMESTAMP,
+                    audited BOOLEAN
                 )
             """)
             # Add the model column to runs tables created before COL-17 so the
             # cost backfill can read it on an upgraded database.
             self._conn.execute("ALTER TABLE runs ADD COLUMN IF NOT EXISTS model VARCHAR")
+            # Track whether a run has entered the WORM chain (COL-14). Tri-state
+            # on purpose: ``insert_run`` writes FALSE for every COL-14-era run
+            # (awaiting/failed chaining), TRUE once chained. The column is added
+            # WITHOUT a default, so pre-COL-14 rows stay NULL — "out of scope,
+            # never attempted" — and the reconcile sweep (``audited = FALSE``)
+            # skips them, honouring the no-retroactive-backfill non-goal.
+            self._conn.execute(
+                "ALTER TABLE runs ADD COLUMN IF NOT EXISTS audited BOOLEAN"
+            )
             # Likewise add ingested_at for runs tables created before it was
             # promoted, so the COL-13 list index and ordering bind on an
             # upgraded database.
@@ -517,6 +527,32 @@ class DuckDBTraceIndex(TraceIndex):
             self._conn.execute(
                 "UPDATE runs SET cost_usd = ? WHERE run_id = ?",
                 (_finite_or_none(cost_usd), run_id),
+            )
+
+    def is_run_audited(self, run_id: str) -> bool:
+        rows = self._read("SELECT audited FROM runs WHERE run_id = ?", (run_id,))
+        if not rows:
+            return False
+        # Tri-state: only an explicit FALSE means "COL-14 run still to chain".
+        # TRUE (already chained) and NULL (pre-COL-14, out of scope) both report
+        # audited so neither the re-ingest retry nor the sweep touches them.
+        return rows[0][0] is not False
+
+    def list_unaudited_runs(self, *, limit: int) -> list[RunRecord]:
+        rows = self._read(
+            f"SELECT {_RUN_COLUMNS} FROM runs WHERE audited = FALSE "
+            "ORDER BY ingested_at NULLS FIRST, run_id LIMIT ?",
+            (limit,),
+        )
+        return [self._row_to_run(row) for row in rows]
+
+    def mark_run_audited(self, run_id: str) -> None:
+        # Standalone UPDATE like set_run_cost: ``audited`` is a collector-side
+        # bookkeeping flag, not client content, so it never touches the
+        # first-write-wins immutable columns. Marking an unknown run is a no-op.
+        with self._lock:
+            self._conn.execute(
+                "UPDATE runs SET audited = TRUE WHERE run_id = ?", (run_id,)
             )
 
     def get_run_model_from_trace(self, trace_id: str) -> Optional[str]:

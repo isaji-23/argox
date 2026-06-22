@@ -15,7 +15,9 @@ import pytest
 from argox_collector.app import create_app
 from argox_collector.audit import (
     GENESIS_HASH,
+    AuditEntry,
     AuditLog,
+    AuditRecord,
     canonical_json,
     digest_payload,
     lifecycle_tier,
@@ -201,6 +203,43 @@ def test_state_recovered_by_new_instance(
     assert fourth.record.seq == 4
     assert second.count() == 4
     assert second.verify().ok is True
+
+
+# -- backward compatibility (COL-14) ---------------------------------------
+
+
+def test_legacy_entry_without_kind_verifies_and_extends(
+    storage: LocalStorageBackend,
+) -> None:
+    """A record written before COL-14 carries no ``kind`` and was hashed
+    without one. It must still verify, and the chain must extend onto it."""
+    legacy = AuditEntry.seal(
+        AuditRecord(
+            seq=1,
+            timestamp="2026-01-01T00:00:00+00:00",
+            kind=None,
+            actor="a",
+            action="x",
+            target="t",
+            payload_digest=digest_payload(None),
+            prev_hash=GENESIS_HASH,
+        )
+    )
+    # A legacy entry serialises without a ``kind`` key.
+    assert "kind" not in legacy.to_dict()
+    storage.put(
+        "audit-log/2026/01/000000000001-open.jsonl",
+        (canonical_json(legacy.to_dict()) + "\n").encode(),
+    )
+
+    audit = AuditLog(storage, max_segment_records=100)
+    assert audit.verify().ok is True
+
+    # The next append links onto the legacy tail and carries a modern kind.
+    entry = audit.append(actor="b", action="run.ingest", target="run-1", kind="run")
+    assert entry.record.seq == 2
+    assert entry.record.prev_hash == legacy.hash
+    assert audit.verify().ok is True
 
 
 # -- lifecycle -------------------------------------------------------------

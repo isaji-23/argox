@@ -17,3 +17,4 @@ decision future contributors should not silently re-open.
 | ADR-0008 | [Run-cost pricing source and model resolution](ADR-0008-run-cost-pricing-source-and-model-resolution.md) | accepted |
 | ADR-0009 | [Plugin owns tool-call spans via unconditional FunctionTool wrapping](ADR-0009-plugin-owns-tool-call-spans.md) | accepted |
 | ADR-0010 | [Instrument a per-run copy of the agent, not the shared instance](ADR-0010-per-run-agent-copy.md) | accepted |
+| ADR-0011 | [One unified audit chain for run records and span batches](ADR-0011-unified-audit-chain-for-run-records.md) | accepted |

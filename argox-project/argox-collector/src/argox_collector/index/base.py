@@ -163,6 +163,43 @@ class TraceIndex(ABC):
         """
 
     @abstractmethod
+    def is_run_audited(self, run_id: str) -> bool:
+        """Return whether ``run_id`` needs no WORM append (COL-14).
+
+        Tracks the one fact the hash chain cannot: whether a run still owes an
+        audit entry. Backed by a tri-state flag — a COL-14-era run is stored
+        ``False`` (awaiting/failed chaining) and flipped ``True`` once chained,
+        while a run that predates COL-14 has no flag (``NULL``) and is out of
+        scope (no retroactive backfill). This returns ``True`` for both the
+        chained and the pre-COL-14 cases, so neither the re-ingest retry nor the
+        reconcile sweep touches them; only an explicit ``False`` is retried. An
+        unknown ``run_id`` returns ``False``.
+        """
+
+    @abstractmethod
+    def list_unaudited_runs(self, *, limit: int) -> list[RunRecord]:
+        """Return runs not yet appended to the WORM chain, oldest first (COL-14).
+
+        Bounded by ``limit``. The reconciliation sweep uses this to retry runs
+        whose audit append failed on an otherwise-successful request — the case
+        a re-ingest never heals because the client saw success and does not
+        resend. Only runs flagged ``False`` qualify; pre-COL-14 runs (flag
+        ``NULL``) are excluded, so the sweep does not retroactively backfill
+        history. Ordered by ingest time so the oldest gap is closed first.
+        """
+
+    @abstractmethod
+    def mark_run_audited(self, run_id: str) -> None:
+        """Record that ``run_id`` has been appended to the WORM chain (COL-14).
+
+        Set only after the audit append succeeds, so a crash between the append
+        and this call leaves the flag unset and the next re-ingest re-appends —
+        biasing toward a duplicate audit entry over a missing one (over-
+        recording is compliant; omission is not). Marking an unknown ``run_id``
+        is a harmless no-op.
+        """
+
+    @abstractmethod
     def get_run_model_from_trace(self, trace_id: str) -> Optional[str]:
         """Return a model id from the spans of ``trace_id``, or ``None``.
 

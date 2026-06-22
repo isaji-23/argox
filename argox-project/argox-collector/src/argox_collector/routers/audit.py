@@ -21,7 +21,12 @@ from typing import Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field, model_validator
 
-from argox_collector.audit import AuditEntry, AuditLog, AuditLogError
+from argox_collector.audit import (
+    AUDIT_KIND_EVENT,
+    AuditEntry,
+    AuditLog,
+    AuditLogError,
+)
 from argox_collector.auth import Principal, Scope, require_scope
 
 router = APIRouter(prefix="/api/v1/audit", tags=["audit"])
@@ -29,6 +34,10 @@ router = APIRouter(prefix="/api/v1/audit", tags=["audit"])
 _MAX_PAGE_SIZE = 1000
 # 64-char lowercase SHA-256 hex digest.
 _DIGEST_PATTERN = r"^[0-9a-f]{64}$"
+# Record kinds the manual endpoint accepts. Run records are chained by the
+# Collector's ingest path (COL-14), not minted here, but an admin may record a
+# generic event or backfill a span-batch marker.
+_KIND_PATTERN = r"^(event|run|span_batch)$"
 
 
 class AuditAppendRequest(BaseModel):
@@ -45,6 +54,7 @@ class AuditAppendRequest(BaseModel):
 
     action: str = Field(..., min_length=1)
     target: str = Field(..., min_length=1)
+    kind: str = Field(default=AUDIT_KIND_EVENT, pattern=_KIND_PATTERN)
     payload: Optional[Any] = None
     payload_digest: Optional[str] = Field(default=None, pattern=_DIGEST_PATTERN)
 
@@ -60,6 +70,8 @@ class AuditEntryResponse(BaseModel):
 
     seq: int
     timestamp: str
+    # ``None`` for legacy entries written before COL-14 (no kind field).
+    kind: Optional[str] = None
     actor: str
     action: str
     target: str
@@ -73,11 +85,21 @@ class AuditEntryResponse(BaseModel):
 
 
 class AuditVerifyResponse(BaseModel):
-    """Result of walking the chain."""
+    """Result of walking the chain.
+
+    On a break, ``broken_kind`` and ``broken_target`` identify which kind of
+    record failed and its ``run_id`` (kind ``run``) or ``trace_id`` (kind
+    ``span_batch``); ``broken_offset`` is the zero-based position usable as the
+    list endpoint's ``offset``. All are ``None`` when the chain is intact or
+    when the broken record is too malformed to read.
+    """
 
     ok: bool
     total_entries: int
     broken_seq: Optional[int] = None
+    broken_offset: Optional[int] = None
+    broken_kind: Optional[str] = None
+    broken_target: Optional[str] = None
     reason: Optional[str] = None
 
 
@@ -120,6 +142,7 @@ def append_entry(
             actor=principal.subject,
             action=body.action,
             target=body.target,
+            kind=body.kind,
             payload=body.payload,
             payload_digest=body.payload_digest,
         )
@@ -142,6 +165,9 @@ def verify_chain(request: Request) -> AuditVerifyResponse:
         ok=result.ok,
         total_entries=result.total_entries,
         broken_seq=result.broken_seq,
+        broken_offset=result.broken_offset,
+        broken_kind=result.broken_kind,
+        broken_target=result.broken_target,
         reason=result.reason,
     )
 

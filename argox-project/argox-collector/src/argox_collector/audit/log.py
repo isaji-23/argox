@@ -51,6 +51,13 @@ _DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
 LIFECYCLE_HOT_DAYS = 90
 LIFECYCLE_COOL_DAYS = 365
 
+# Record kinds in the unified chain (COL-14). ``run`` and ``span_batch`` are the
+# content-bearing records AI Act Art. 12/13 require evidence for; ``event`` is
+# the generic administrative entry used by the manual audit endpoint.
+AUDIT_KIND_RUN = "run"
+AUDIT_KIND_SPAN_BATCH = "span_batch"
+AUDIT_KIND_EVENT = "event"
+
 Clock = Callable[[], datetime]
 
 
@@ -78,12 +85,24 @@ class AuditVerificationResult:
         total_entries: Number of entries inspected.
         broken_seq: Sequence number of the first record that failed, or
             ``None`` when the chain is intact.
+        broken_offset: Zero-based position of the first failing record in the
+            chain, or ``None`` when intact. Lets a caller page straight to the
+            break via the list endpoint's ``offset``.
+        broken_kind: ``kind`` of the first failing record (``run`` /
+            ``span_batch`` / ``event``), or ``None`` when intact or when the
+            record is too malformed to read its kind.
+        broken_target: ``target`` of the first failing record — the ``run_id``
+            for a run, the ``trace_id`` for a span batch — or ``None`` when
+            intact or unreadable.
         reason: Human-readable explanation of the first break, or ``None``.
     """
 
     ok: bool
     total_entries: int
     broken_seq: Optional[int] = None
+    broken_offset: Optional[int] = None
+    broken_kind: Optional[str] = None
+    broken_target: Optional[str] = None
     reason: Optional[str] = None
 
 
@@ -155,10 +174,16 @@ class AuditLog:
         actor: str,
         action: str,
         target: str,
+        kind: str = AUDIT_KIND_EVENT,
         payload: Any = None,
         payload_digest: Optional[str] = None,
     ) -> AuditEntry:
         """Record an event and return the sealed, chained entry.
+
+        ``kind`` discriminates the unified chain (COL-14): ``"run"`` for a run
+        record, ``"span_batch"`` for an ingested span batch, or the default
+        ``"event"`` for a generic administrative entry. It is hashed with the
+        rest of the record so the kind is tamper-evident.
 
         Exactly one of ``payload`` or ``payload_digest`` should be supplied.
         ``payload`` is hashed into a digest so the log never stores the raw
@@ -185,6 +210,7 @@ class AuditLog:
             record = AuditRecord(
                 seq=seq,
                 timestamp=self._now_iso(),
+                kind=kind,
                 actor=actor,
                 action=action,
                 target=target,
@@ -244,39 +270,52 @@ class AuditLog:
                 break
             except (ValueError, KeyError) as exc:
                 # json.JSONDecodeError (a ValueError) or a missing field
-                # (KeyError): cannot parse the next line into an entry.
+                # (KeyError): cannot parse the next line into an entry, so its
+                # kind and target are unknown. ``count`` is the zero-based
+                # offset of this unread record.
                 return AuditVerificationResult(
                     ok=False,
                     total_entries=count,
                     broken_seq=expected_seq,
+                    broken_offset=count,
                     reason=f"malformed record near seq {expected_seq}: {exc}",
                 )
             count += 1
+            offset = count - 1  # zero-based position of the record just read
             rec = entry.record
             if rec.seq != expected_seq:
-                return AuditVerificationResult(
-                    ok=False,
-                    total_entries=count,
-                    broken_seq=rec.seq,
-                    reason=(f"sequence gap: expected {expected_seq}, got {rec.seq}"),
+                return self._break(
+                    count, offset, rec,
+                    f"sequence gap: expected {expected_seq}, got {rec.seq}",
                 )
             if rec.prev_hash != prev_hash:
-                return AuditVerificationResult(
-                    ok=False,
-                    total_entries=count,
-                    broken_seq=rec.seq,
-                    reason="prev_hash does not match previous record",
+                return self._break(
+                    count, offset, rec,
+                    "prev_hash does not match previous record",
                 )
             if rec.compute_hash() != entry.hash:
-                return AuditVerificationResult(
-                    ok=False,
-                    total_entries=count,
-                    broken_seq=rec.seq,
-                    reason="record hash does not match its content",
+                return self._break(
+                    count, offset, rec,
+                    "record hash does not match its content",
                 )
             prev_hash = entry.hash
             expected_seq += 1
         return AuditVerificationResult(ok=True, total_entries=count)
+
+    @staticmethod
+    def _break(
+        count: int, offset: int, rec: AuditRecord, reason: str
+    ) -> AuditVerificationResult:
+        """Build a failed verification result for a readable broken record."""
+        return AuditVerificationResult(
+            ok=False,
+            total_entries=count,
+            broken_seq=rec.seq,
+            broken_offset=offset,
+            broken_kind=rec.kind,
+            broken_target=rec.target,
+            reason=reason,
+        )
 
     def list_segments(self) -> list[SegmentInfo]:
         """Return all segments ordered by their starting sequence number.

@@ -13,6 +13,9 @@ from argox_collector.audit.chain import (
     digest_payload,
 )
 from argox_collector.audit.log import (
+    AUDIT_KIND_EVENT,
+    AUDIT_KIND_RUN,
+    AUDIT_KIND_SPAN_BATCH,
     LIFECYCLE_COOL_DAYS,
     LIFECYCLE_HOT_DAYS,
     AuditLog,
@@ -31,6 +34,9 @@ __all__ = [
     "AuditLogError",
     "AuditVerificationResult",
     "SegmentInfo",
+    "AUDIT_KIND_RUN",
+    "AUDIT_KIND_SPAN_BATCH",
+    "AUDIT_KIND_EVENT",
     "LIFECYCLE_HOT_DAYS",
     "LIFECYCLE_COOL_DAYS",
     "canonical_json",
