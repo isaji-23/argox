@@ -193,6 +193,30 @@ def test_failed_append_is_retried_on_reingest(client: TestClient) -> None:
     assert client.get("/api/v1/audit/verify").json()["ok"] is True
 
 
+def test_startup_reconcile_heals_unaudited_run(settings: CollectorSettings) -> None:
+    """A run whose only append failed on a successful request is never
+    re-ingested; the startup reconciliation sweep is what finally chains it."""
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("transient storage blip")
+
+    # App 1: the audit append fails, so the run persists but stays unaudited.
+    with TestClient(create_app(settings)) as c1:
+        c1.app.state.audit.append = boom  # type: ignore[assignment]
+        assert _ingest_run(c1, _run_payload("run-z")).status_code == 202
+        assert c1.app.state.index.is_run_audited("run-z") is False
+        assert c1.get("/api/v1/audit").json()["returned"] == 0
+
+    # App 2 over the same storage + index: startup reconcile chains the run.
+    with TestClient(create_app(settings)) as c2:
+        assert c2.app.state.index.is_run_audited("run-z") is True
+        listed = c2.get("/api/v1/audit").json()
+        assert listed["returned"] == 1
+        assert listed["items"][0]["target"] == "run-z"
+        assert listed["items"][0]["kind"] == AUDIT_KIND_RUN
+        assert c2.get("/api/v1/audit/verify").json()["ok"] is True
+
+
 def test_durable_audit_failure_does_not_503(client: TestClient) -> None:
     """A non-AuditLogError audit failure must not fail a durable run that is
     already committed to blob + index (point 3)."""

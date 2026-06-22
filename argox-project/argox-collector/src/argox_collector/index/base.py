@@ -175,6 +175,16 @@ class TraceIndex(ABC):
         """
 
     @abstractmethod
+    def list_unaudited_runs(self, *, limit: int) -> list[RunRecord]:
+        """Return runs not yet appended to the WORM chain, oldest first (COL-14).
+
+        Bounded by ``limit``. The reconciliation sweep uses this to retry runs
+        whose audit append failed on an otherwise-successful request — the case
+        a re-ingest never heals because the client saw success and does not
+        resend. Ordered by ingest time so the oldest gap is closed first.
+        """
+
+    @abstractmethod
     def mark_run_audited(self, run_id: str) -> None:
         """Record that ``run_id`` has been appended to the WORM chain (COL-14).
 

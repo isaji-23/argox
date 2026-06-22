@@ -22,8 +22,14 @@
   a run whose first append failed instead of skipping it forever. Any audit
   failure is logged and swallowed (the run is already durable), never a 503 or
   a crashed background task.
-- `TraceIndex` gains `is_run_audited` / `mark_run_audited`; the DuckDB backend
-  adds an `audited BOOLEAN` column (with `ADD COLUMN IF NOT EXISTS` migration).
+- `TraceIndex` gains `is_run_audited` / `mark_run_audited` /
+  `list_unaudited_runs`; the DuckDB backend adds an `audited BOOLEAN` column
+  (with `ADD COLUMN IF NOT EXISTS` migration).
+- `reconcile_run_audit` (`routers/runs.py`), run on app startup
+  (`app.py` lifespan), heals the residual the per-run flag cannot: a run whose
+  only append failed on an otherwise-successful request (client saw success, so
+  no re-ingest). It reads each `audited=false` run's blob, appends it, and marks
+  it audited; best-effort and bounded per sweep.
 - `POST /api/v1/audit` accepts an optional `kind`; `GET /api/v1/audit/verify`
   and the entry/list responses expose the new `kind` / break fields
   (`kind` nullable for legacy entries). `openapi.json` regenerated.

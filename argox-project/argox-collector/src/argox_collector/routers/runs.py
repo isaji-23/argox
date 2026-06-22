@@ -25,12 +25,21 @@ from fastapi import APIRouter, BackgroundTasks, Depends, Request, Response
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from argox_collector.audit import AUDIT_KIND_RUN, AuditLog, digest_payload
+from argox_collector.audit import (
+    AUDIT_KIND_RUN,
+    AuditLog,
+    AuditLogError,
+    digest_payload,
+)
 from argox_collector.auth import Scope, require_scope
 from argox_collector.enrichment.cost import enrich_run_cost
 from argox_collector.enrichment.pricing import PricingTable, cached_pricing
 from argox_collector.index import RunRecord, TraceIndex
-from argox_collector.storage import ConditionNotMetError, StorageBackend
+from argox_collector.storage import (
+    BlobNotFoundError,
+    ConditionNotMetError,
+    StorageBackend,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -226,6 +235,65 @@ def _audit_run(
         logger.warning("run_audit_append_failed", run_id=record.run_id)
         return
     index.mark_run_audited(record.run_id)
+
+
+# Cap per sweep so a large backlog of unaudited runs cannot block startup
+# unboundedly; the next sweep continues from where this one left off.
+_RECONCILE_LIMIT = 1000
+
+
+def reconcile_run_audit(
+    *,
+    storage: StorageBackend,
+    index: TraceIndex,
+    audit: AuditLog,
+    limit: int = _RECONCILE_LIMIT,
+) -> int:
+    """Retry the WORM append for runs left unaudited by a failed append (COL-14).
+
+    Closes the residual that the per-run ``audited`` flag alone cannot: a run
+    whose only audit append failed on an otherwise-successful request stays
+    ``audited=false`` and is never re-ingested (the client saw success), so the
+    re-ingest retry path never heals it. Run at startup, this sweep reads each
+    such run's immutable blob, appends it to the chain and marks it audited.
+
+    Best-effort: a per-run failure is logged and the run stays unaudited for the
+    next sweep; a chain-level :class:`AuditLogError` (e.g. a concurrent writer)
+    aborts the sweep, since no further append can succeed until it clears.
+
+    Returns the number of runs newly appended to the chain.
+    """
+    appended = 0
+    for record in index.list_unaudited_runs(limit=limit):
+        if not record.blob_path:
+            continue
+        try:
+            blob = storage.get(record.blob_path).data
+        except BlobNotFoundError:
+            # The blob write never landed, so there is no immutable content to
+            # chain. Leave the run unaudited; a later re-ingest can still write
+            # both the blob and the chain entry.
+            logger.warning("run_audit_reconcile_no_blob", run_id=record.run_id)
+            continue
+        try:
+            audit.append(
+                actor=_AUDIT_ACTOR,
+                action=_AUDIT_ACTION,
+                target=record.run_id,
+                kind=AUDIT_KIND_RUN,
+                payload_digest=digest_payload(blob),
+            )
+        except AuditLogError:
+            logger.warning("run_audit_reconcile_aborted", run_id=record.run_id)
+            break
+        except Exception:  # noqa: BLE001 - heal the rest of the backlog
+            logger.warning("run_audit_reconcile_failed", run_id=record.run_id)
+            continue
+        index.mark_run_audited(record.run_id)
+        appended += 1
+    if appended:
+        logger.info("run_audit_reconciled", count=appended)
+    return appended
 
 
 def _backfill_cost(

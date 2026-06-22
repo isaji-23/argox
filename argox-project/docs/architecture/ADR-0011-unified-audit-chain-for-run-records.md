@@ -40,9 +40,14 @@ is not). Any audit failure is logged, never re-raised — an already-persisted r
 must not become a 503 or crash the background task.
 
 `verify` cannot by itself prove a run *should* be in the chain (sequence numbers
-are assigned at append time, not derived from runs), so a never-re-ingested run
-that failed its only append would stay absent. The `audited` flag plus retry-on-
-re-ingest is what closes that gap.
+are assigned at append time, not derived from runs), so a run whose only append
+failed on an otherwise-successful request would stay absent — the client saw
+success and never re-ingests, so the retry path cannot reach it. A startup
+**reconciliation sweep** (`reconcile_run_audit`) closes that residual: it reads
+every `audited=false` run's immutable blob, appends it to the chain and marks it
+audited, bounded per run-list page. Together the `audited` flag (retry on
+re-ingest) and the sweep (heal on restart) guarantee a persisted run eventually
+enters the chain.
 
 `verify` (and `GET /api/v1/audit/verify`) report the first broken record's
 `kind`, `target` (`run_id` / `trace_id`) and zero-based `offset`, so an auditor
@@ -58,6 +63,9 @@ can page straight to it.
   or whether parallel chains become justified.
 - If regulators require external timestamping (RFC 3161), that is a new chain
   property, not a re-chaining.
+- The reconciliation sweep runs only at startup. If long-running deployments
+  accumulate unaudited runs faster than restarts heal them, promote it to a
+  periodic background task or expose the `audited=false` count for monitoring.
 
 ## What stays out of scope
 

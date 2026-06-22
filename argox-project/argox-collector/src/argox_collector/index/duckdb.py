@@ -530,6 +530,14 @@ class DuckDBTraceIndex(TraceIndex):
         rows = self._read("SELECT audited FROM runs WHERE run_id = ?", (run_id,))
         return bool(rows[0][0]) if rows else False
 
+    def list_unaudited_runs(self, *, limit: int) -> list[RunRecord]:
+        rows = self._read(
+            f"SELECT {_RUN_COLUMNS} FROM runs WHERE audited = FALSE "
+            "ORDER BY ingested_at NULLS FIRST, run_id LIMIT ?",
+            (limit,),
+        )
+        return [self._row_to_run(row) for row in rows]
+
     def mark_run_audited(self, run_id: str) -> None:
         # Standalone UPDATE like set_run_cost: ``audited`` is a collector-side
         # bookkeeping flag, not client content, so it never touches the

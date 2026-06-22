@@ -5,6 +5,7 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from typing import Optional
 
+import structlog
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.routing import APIRoute
@@ -32,6 +33,8 @@ from argox_collector.routers import (
 from argox_collector.settings import CollectorSettings
 from argox_collector.storage import StorageBackend, build_storage
 
+logger = structlog.get_logger(__name__)
+
 
 def _operation_id(route: APIRoute) -> str:
     """Derive a stable OpenAPI ``operationId`` from the route handler name.
@@ -45,6 +48,20 @@ def _operation_id(route: APIRoute) -> str:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Heal any run left unaudited by a WORM append that failed on an otherwise
+    # successful request (COL-14): the client saw success and will not re-ingest,
+    # so this startup sweep is the only path that closes that gap. Best-effort —
+    # a reconcile error must never block the service from starting.
+    try:
+        appended = runs.reconcile_run_audit(
+            storage=app.state.storage,
+            index=app.state.index,
+            audit=app.state.audit,
+        )
+        if appended:
+            logger.info("run_audit_reconcile_startup", count=appended)
+    except Exception:  # noqa: BLE001 - startup must not fail on a reconcile error
+        logger.warning("run_audit_reconcile_startup_failed", exc_info=True)
     yield
     # Clean up index connections
     if hasattr(app.state, "index") and app.state.index is not None:
