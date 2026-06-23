@@ -38,6 +38,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi import Path as PathParam
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from argox.policies.parser import PolicyParser
 from argox_collector.auth import Scope, require_scope
 from argox_collector.storage import (
     BlobNotFoundError,
@@ -139,6 +140,20 @@ class PolicySummary(BaseModel):
 class PolicyListResponse(BaseModel):
     policies: list[PolicySummary]
     total: int
+
+
+class PolicyValidateRequest(BaseModel):
+    """Request body for ``POST /api/v1/policies/validate`` (dry-run)."""
+
+    yaml: str
+
+
+class PolicyValidateResponse(BaseModel):
+    """Response body for ``POST /api/v1/policies/validate`` (dry-run)."""
+
+    valid: bool
+    errors: list[str]
+    policy: dict[str, Any] | None = None
 
 
 def _storage(request: Request) -> StorageBackend:
@@ -266,6 +281,24 @@ def _etag_matches(if_none_match: str | None, etag: str) -> bool:
     return False
 
 
+@router.post(
+    "/validate",
+    response_model=PolicyValidateResponse,
+    summary="Validate policy YAML (dry-run)",
+    dependencies=[Depends(require_scope(Scope.POLICY_WRITE))],
+)
+def validate_policy(
+    payload: PolicyValidateRequest,
+) -> PolicyValidateResponse:
+    """Validate policy YAML content against the policy schema without persisting."""
+    try:
+        parser = PolicyParser()
+        policy = parser.parse_yaml(payload.yaml)
+        return PolicyValidateResponse(valid=True, errors=[], policy=policy.model_dump())
+    except ValueError as e:
+        return PolicyValidateResponse(valid=False, errors=[str(e)])
+
+
 @router.get(
     "",
     response_model=PolicyListResponse,
@@ -381,7 +414,7 @@ def get_bundle(request: Request) -> Response:
 def get_active_policy(
     request: Request,
     policy_id: str = PathParam(pattern=_ID_PATTERN),
-) -> PolicyResponse:
+) -> PolicyResponse | Response:
     """Return the active version of a policy.
 
     A policy without an active version (draft or archived) is 404: clients
@@ -399,6 +432,23 @@ def get_active_policy(
             detail=f"policy {policy_id!r} has no active version",
         )
     content_hash = _version_hash(entry, active_version)
+
+    accept = request.headers.get("accept", "")
+    if "application/x-yaml" in accept or "text/yaml" in accept:
+        try:
+            blob = storage.get(_blob_key(policy_id, content_hash))
+            return Response(content=blob.data, media_type=_YAML_CONTENT_TYPE)
+        except BlobNotFoundError:
+            logger.error(
+                "policy_dangling_pointer",
+                policy_id=policy_id,
+                version=active_version,
+            )
+            raise HTTPException(
+                status_code=500,
+                detail="policy data missing for committed version",
+            ) from None
+
     try:
         document = _load_document(storage, policy_id, content_hash)
     except BlobNotFoundError:
@@ -424,7 +474,7 @@ def get_policy_version(
     request: Request,
     policy_id: str = PathParam(pattern=_ID_PATTERN),
     version: int = PathParam(ge=1),
-) -> PolicyResponse:
+) -> PolicyResponse | Response:
     """Return one specific committed version of a policy.
 
     The lookup goes through the manifest, so blobs that were written but
@@ -438,6 +488,21 @@ def get_policy_version(
     content_hash = entry.get("versions", {}).get(str(version))
     if content_hash is None:
         raise HTTPException(status_code=404, detail="policy version not found")
+
+    accept = request.headers.get("accept", "")
+    if "application/x-yaml" in accept or "text/yaml" in accept:
+        try:
+            blob = storage.get(_blob_key(policy_id, content_hash))
+            return Response(content=blob.data, media_type=_YAML_CONTENT_TYPE)
+        except BlobNotFoundError:
+            logger.error(
+                "policy_dangling_pointer", policy_id=policy_id, version=version
+            )
+            raise HTTPException(
+                status_code=500,
+                detail="policy data missing for committed version",
+            ) from None
+
     try:
         document = _load_document(storage, policy_id, content_hash)
     except BlobNotFoundError:

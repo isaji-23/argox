@@ -4,6 +4,7 @@ import { Header } from './components/layout/Header';
 import { TracesScreen } from './components/screens/TracesScreen';
 import { TraceDetailScreen } from './components/screens/TraceDetailScreen';
 import { MetricsScreen } from './components/screens/MetricsScreen';
+import { PoliciesScreen } from './components/screens/PoliciesScreen';
 import { AGENTS } from './data/mockData';
 
 type Route = 'metrics' | 'traces' | 'trace' | 'policies' | 'system';
@@ -74,7 +75,7 @@ function App() {
       case 'trace':
         return <TraceDetailScreen traceId={selectedTraceId || undefined} onBack={() => setRoute('traces')} />;
       case 'policies':
-        return <div className="p-6 text-text-muted">Policies Screen (Coming soon)</div>;
+        return <PoliciesScreen theme={theme} />;
       case 'system':
         return <div className="p-6 text-text-muted">Design System Screen (Coming soon)</div>;
       default:
