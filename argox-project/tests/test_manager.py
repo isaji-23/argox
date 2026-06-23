@@ -136,6 +136,46 @@ class TestRegistration:
         mgr.register_plugin(plugin)
         assert "fake" in mgr._plugins
 
+    def test_plugin_auto_discovery(self, monkeypatch):
+        class MockEntryPoint:
+            name = "fake_auto"
+            value = "tests.test_manager:_FakePlugin"
+            group = "argox.plugins"
+
+            def load(self):
+                return _FakePlugin
+
+        mock_ep = MockEntryPoint()
+
+        def mock_entry_points(**kwargs):
+            if kwargs.get("group") == "argox.plugins":
+                return [mock_ep]
+            return {"argox.plugins": [mock_ep]}
+
+        monkeypatch.setattr("importlib.metadata.entry_points", mock_entry_points)
+
+        mgr = ArgoxManager()
+        assert "fake" in mgr._plugins
+
+    def test_plugin_auto_discovery_handles_errors(self, monkeypatch):
+        class MockEntryPoint:
+            name = "failing_plugin"
+            value = "tests.test_manager:_FailingPlugin"
+            group = "argox.plugins"
+
+            def load(self):
+                raise ImportError("Missing dependencies")
+
+        mock_ep = MockEntryPoint()
+
+        monkeypatch.setattr(
+            "importlib.metadata.entry_points",
+            lambda **kwargs: [mock_ep]
+        )
+
+        mgr = ArgoxManager()
+        assert len(mgr._plugins) == 0
+
     def test_register_exporter(self):
         mgr = ArgoxManager()
         exp = _CapturingExporter()

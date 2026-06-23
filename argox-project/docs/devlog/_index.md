@@ -8,6 +8,8 @@ for the decisions behind these changes and
 
 | Date | Ticket | Title | PR | Status |
 |---|---|---|---|---|
+| 2026-06-23 | DX-02 | Implement plugin auto-discovery via importlib.metadata | #166 | in-review |
+| 2026-06-23 | DOC-01 | Write docs/compliance/ai-act-mapping.md | #98 | in-review |
 | 2026-06-22 | DASH-03 | Metrics dashboard (cost, latency, success ratio) | #90 | in-review |
 | 2026-06-22 | COL-14 | Chain run records into the WORM audit log | #158 | in-review |
 | 2026-06-22 | COL-13 | Query API extension for run records | #157 | in-review |
