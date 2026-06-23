@@ -550,26 +550,33 @@ class DuckDBTraceIndex(TraceIndex):
         return decoded
 
     def get_metrics_cost(self, *, window_hours: int = 24) -> dict:
-        # Cost is aggregated from the runs table for consistency across totals and timelines
+        # Cost is aggregated from the spans table to capture all traces
         cutoff = _window_cutoff(window_hours)
         query = """
             SELECT
-                SUM(cost_usd) FILTER (WHERE isfinite(cost_usd)),
+                SUM(run_cost) FILTER (WHERE isfinite(run_cost)),
                 COUNT(DISTINCT trace_id)
-            FROM runs
-            WHERE ingested_at >= ?
+            FROM spans
+            WHERE start_time >= ?
         """
         row = self._read(query, (cutoff,))[0]
 
-        # Stacked cost over time by model: aggregated from runs table
+        # Stacked cost over time by model: aggregated from spans and joined with runs for model name fallbacks
         bucket_unit = "hour" if window_hours <= 72 else "day"
-        query_timeline = """
+        query_timeline = f"""
             SELECT
-                date_trunc(?, ingested_at) AS bucket,
-                COALESCE(model, 'unknown') AS model,
-                SUM(cost_usd) FILTER (WHERE isfinite(cost_usd)) AS cost
-            FROM runs
-            WHERE ingested_at >= ?
+                date_trunc(?, s.start_time) AS bucket,
+                COALESCE(
+                    r.model,
+                    json_extract_string(s.attributes, '$.\"{semconv.GEN_AI_REQUEST_MODEL}\"'),
+                    json_extract_string(s.attributes, '$.\"{semconv.GEN_AI_RESPONSE_MODEL}\"'),
+                    json_extract_string(s.attributes, '$.model'),
+                    'unknown'
+                ) AS model,
+                SUM(s.run_cost) FILTER (WHERE isfinite(s.run_cost)) AS cost
+            FROM spans s
+            LEFT JOIN runs r ON s.trace_id = r.trace_id
+            WHERE s.start_time >= ?
             GROUP BY 1, 2
             ORDER BY 1 ASC, 2 ASC
         """
@@ -582,13 +589,13 @@ class DuckDBTraceIndex(TraceIndex):
                 "cost": r[2] if r[2] is not None else 0.0,
             })
 
-        # Top agents by spend: aggregated from runs table
+        # Top agents by spend: aggregated from spans table
         query_agents = """
             SELECT
                 COALESCE(agent_name, 'unknown') AS agent_name,
-                SUM(cost_usd) FILTER (WHERE isfinite(cost_usd)) AS spend
-            FROM runs
-            WHERE ingested_at >= ?
+                SUM(run_cost) FILTER (WHERE isfinite(run_cost)) AS spend
+            FROM spans
+            WHERE start_time >= ?
             GROUP BY 1
             ORDER BY 2 DESC
             LIMIT 10
