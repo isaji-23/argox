@@ -107,9 +107,12 @@ export function MetricsScreen({ timeRange }: MetricsScreenProps) {
   }
 
   // --- Transform Stacked Cost Timeline ---
+  // Array fields are defaulted to `[]` so a partial response (e.g. a Collector
+  // version predating one of these fields) renders an empty chart instead of
+  // crashing the whole screen on `.forEach`/`.map` of `undefined`.
   const costTimelineMap: Record<string, any> = {};
   const modelsSet = new Set<string>();
-  costData.timeline.forEach((pt) => {
+  (costData.timeline ?? []).forEach((pt) => {
     const label = new Date(pt.bucket).toLocaleString([], {
       month: 'short',
       day: 'numeric',
@@ -128,7 +131,7 @@ export function MetricsScreen({ timeRange }: MetricsScreenProps) {
   const modelsList = Array.from(modelsSet);
 
   // --- Transform Latency Histogram ---
-  const formattedHistogram = latencyData.histogram.map((bin) => ({
+  const formattedHistogram = (latencyData.histogram ?? []).map((bin) => ({
     name: `${Math.round(bin.bin_min)}-${Math.round(bin.bin_max)}ms`,
     count: bin.count,
     bin_min: bin.bin_min,
@@ -137,7 +140,7 @@ export function MetricsScreen({ timeRange }: MetricsScreenProps) {
 
   const findBinIdx = (val: number) => {
     if (!formattedHistogram.length) return null;
-    const idx = latencyData.histogram.findIndex(
+    const idx = (latencyData.histogram ?? []).findIndex(
       (bin) => val >= bin.bin_min && val <= bin.bin_max
     );
     return idx !== -1 ? idx : null;
@@ -148,7 +151,7 @@ export function MetricsScreen({ timeRange }: MetricsScreenProps) {
   const p99BinIdx = findBinIdx(latencyData.percentiles.p99);
 
   // --- Transform Success Rate Timeline ---
-  const formattedSuccessTimeline = successData.timeline.map((pt) => ({
+  const formattedSuccessTimeline = (successData.timeline ?? []).map((pt) => ({
     name: new Date(pt.bucket).toLocaleString([], {
       month: 'short',
       day: 'numeric',
@@ -161,13 +164,13 @@ export function MetricsScreen({ timeRange }: MetricsScreenProps) {
   }));
 
   // --- Transform Top Agents ---
-  const formattedAgents = costData.top_agents.map((pt) => ({
+  const formattedAgents = (costData.top_agents ?? []).map((pt) => ({
     name: pt.agent_name,
     spend: parseFloat(pt.spend.toFixed(4)),
   }));
 
   // --- Transform Blocked Tools ---
-  const formattedBlockedTools = successData.top_blocked_tools.map((pt) => ({
+  const formattedBlockedTools = (successData.top_blocked_tools ?? []).map((pt) => ({
     name: pt.tool_name,
     count: pt.blocked_count,
   }));
