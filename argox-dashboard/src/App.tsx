@@ -5,11 +5,12 @@ import { TracesScreen } from './components/screens/TracesScreen';
 import { TraceDetailScreen } from './components/screens/TraceDetailScreen';
 import { MetricsScreen } from './components/screens/MetricsScreen';
 import { PoliciesScreen } from './components/screens/PoliciesScreen';
+import { KeysScreen } from './components/screens/KeysScreen';
 import { AuthDialog } from './components/ui/AuthDialog';
 import { AGENTS } from './data/mockData';
 import { AUTH_REQUIRED_EVENT, TOKEN_CHANGED_EVENT, authBus, getToken } from './lib/auth';
 
-type Route = 'metrics' | 'traces' | 'trace' | 'policies' | 'system';
+type Route = 'metrics' | 'traces' | 'trace' | 'policies' | 'keys' | 'system';
 
 function App() {
   const [theme, setTheme] = useState<'dark' | 'light'>(
@@ -85,6 +86,8 @@ function App() {
         };
       case 'policies':
         return { crumbs: [{ label: 'Policies' }], showTimeControls: false };
+      case 'keys':
+        return { crumbs: [{ label: 'API keys' }], showTimeControls: false };
       case 'system':
         return { crumbs: [{ label: 'Design system' }], showTimeControls: false };
       default:
@@ -111,6 +114,8 @@ function App() {
         return <TraceDetailScreen traceId={selectedTraceId || undefined} onBack={() => setRoute('traces')} />;
       case 'policies':
         return <PoliciesScreen theme={theme} />;
+      case 'keys':
+        return <KeysScreen />;
       case 'system':
         return <div className="p-6 text-text-muted">Design System Screen (Coming soon)</div>;
       default:

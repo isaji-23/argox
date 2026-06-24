@@ -9,8 +9,17 @@
 
 const STORAGE_KEY = 'argox.apikey';
 
+// Admin-scoped credential used only by the key-management screen (DASH-06).
+// Kept in a slot separate from the `read` key so an operator's day-to-day
+// read credential and their admin credential do not collide. Any
+// `admin`-scoped key works, including the break-glass bootstrap key.
+const ADMIN_STORAGE_KEY = 'argox.adminkey';
+
 /** Fires whenever the stored token changes (set or cleared). */
 export const TOKEN_CHANGED_EVENT = 'argox:token-changed';
+
+/** Fires whenever the stored admin token changes (set or cleared). */
+export const ADMIN_TOKEN_CHANGED_EVENT = 'argox:admin-token-changed';
 
 /**
  * Fires when an API call is rejected for missing/insufficient credentials
@@ -66,4 +75,34 @@ export function clearToken(): void {
 /** Notifies listeners that a request failed authentication/authorization. */
 export function signalAuthRequired(): void {
   authBus.dispatchEvent(new Event(AUTH_REQUIRED_EVENT));
+}
+
+/** Returns the stored admin key, or `null` when none is set. */
+export function getAdminToken(): string | null {
+  return localStorage.getItem(ADMIN_STORAGE_KEY);
+}
+
+/**
+ * Persists an admin key (trimmed) or clears it when the value is empty.
+ *
+ * Returns false without storing anything when the value contains control
+ * characters; otherwise stores it and returns true. Same validation as the
+ * read key — see {@link isValidToken}.
+ */
+export function setAdminToken(token: string): boolean {
+  const trimmed = token.trim();
+  if (!isValidToken(trimmed)) return false;
+  if (trimmed) {
+    localStorage.setItem(ADMIN_STORAGE_KEY, trimmed);
+  } else {
+    localStorage.removeItem(ADMIN_STORAGE_KEY);
+  }
+  authBus.dispatchEvent(new Event(ADMIN_TOKEN_CHANGED_EVENT));
+  return true;
+}
+
+/** Removes the stored admin key. */
+export function clearAdminToken(): void {
+  localStorage.removeItem(ADMIN_STORAGE_KEY);
+  authBus.dispatchEvent(new Event(ADMIN_TOKEN_CHANGED_EVENT));
 }

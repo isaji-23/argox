@@ -9,6 +9,10 @@ export const NAV_ITEMS = [
   { id: 'policies', label: 'Policies', icon: 'policies' },
 ];
 
+export const MANAGE_ITEMS = [
+  { id: 'keys', label: 'API keys', icon: 'key' },
+];
+
 interface SidebarProps {
   route: string;
   setRoute: (route: string) => void;
@@ -40,6 +44,35 @@ export function Sidebar({ route, setRoute, collapsed }: SidebarProps) {
           </div>
         )}
         {NAV_ITEMS.map((n) => {
+          const active = route === n.id;
+          return (
+            <Tooltip key={n.id} label={n.label} side="right">
+              <button
+                onClick={() => setRoute(n.id)}
+                className={cn(
+                  "flex items-center gap-3 w-full rounded-md font-medium text-base relative transition-all group",
+                  collapsed ? "h-10 justify-center p-0" : "p-2 justify-start",
+                  active
+                    ? "text-accent bg-accent-surface border-accent-border border"
+                    : "text-text-secondary bg-transparent border-transparent hover:bg-surface-3 hover:text-text-primary"
+                )}
+              >
+                {active && !collapsed && (
+                  <span className="absolute -left-3 top-2 bottom-2 w-[2.5px] rounded-r-sm bg-accent" />
+                )}
+                <Icon name={n.icon} size={17} />
+                {!collapsed && <span>{n.label}</span>}
+              </button>
+            </Tooltip>
+          );
+        })}
+
+        {!collapsed && (
+          <div className="px-2 py-1 mt-3 text-2xs font-semibold tracking-widest uppercase text-text-faint mb-1">
+            Manage
+          </div>
+        )}
+        {MANAGE_ITEMS.map((n) => {
           const active = route === n.id;
           return (
             <Tooltip key={n.id} label={n.label} side="right">
