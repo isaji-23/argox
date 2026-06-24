@@ -28,15 +28,15 @@ export function TraceDetailScreen({ traceId, onBack }: TraceDetailScreenProps) {
   useEffect(() => {
     let ignore = false;
 
-    const fetchAll = async () => {
-      if (!traceId) {
-        setSpans([]);
-        setRun(null);
-        setLoading(false);
-        setLoadingRun(false);
-        return;
-      }
+    if (!traceId) {
+      setSpans([]);
+      setRun(null);
+      setLoading(false);
+      setLoadingRun(false);
+      return;
+    }
 
+    const fetchTraceData = async () => {
       setLoading(true);
       setError(null);
       try {
@@ -58,7 +58,9 @@ export function TraceDetailScreen({ traceId, onBack }: TraceDetailScreenProps) {
           setLoading(false);
         }
       }
+    };
 
+    const fetchRunData = async () => {
       setLoadingRun(true);
       setRunError(null);
       try {
@@ -82,7 +84,8 @@ export function TraceDetailScreen({ traceId, onBack }: TraceDetailScreenProps) {
       }
     };
 
-    fetchAll();
+    fetchTraceData();
+    fetchRunData();
 
     return () => {
       ignore = true;
