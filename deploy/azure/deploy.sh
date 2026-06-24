@@ -39,6 +39,28 @@ DASHBOARD_CTX="../../argox-dashboard"
 
 log() { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
 
+# Set KEY=VALUE in an env file, in place, creating it if missing. Uses python so
+# the value is written literally (no sed delimiter/metacharacter pitfalls).
+persist_env() {
+  local key="$1" value="$2" file="$3"
+  KEY="$key" VALUE="$value" FILE="$file" python3 - <<'PY'
+import os
+key, value, path = os.environ["KEY"], os.environ["VALUE"], os.environ["FILE"]
+try:
+    lines = open(path).read().splitlines()
+except FileNotFoundError:
+    lines = []
+prefix = key + "="
+for i, line in enumerate(lines):
+    if line.startswith(prefix):
+        lines[i] = prefix + value
+        break
+else:
+    lines.append(prefix + value)
+open(path, "w").write("\n".join(lines) + "\n")
+PY
+}
+
 # --- preflight -------------------------------------------------------------
 command -v az >/dev/null || { echo "ERROR: az CLI not found." >&2; exit 1; }
 az account show >/dev/null 2>&1 || { echo "ERROR: not logged in. Run 'az login'." >&2; exit 1; }
@@ -65,20 +87,18 @@ ensure_provider Microsoft.App
 ensure_provider Microsoft.OperationalInsights
 
 # --- admin key: generate once and persist back to .env ---------------------
+# The admin key is a break-glass secret: persist it to .env, never echo it to
+# stdout (terminal scrollback / CI logs leak it).
 if [[ -z "$ADMIN_KEY" ]]; then
   ADMIN_KEY="$(openssl rand -hex 32)"
   if [[ -f "$ENV_FILE" ]]; then
-    if grep -q '^ADMIN_KEY=' "$ENV_FILE"; then
-      sed -i "s|^ADMIN_KEY=.*|ADMIN_KEY=$ADMIN_KEY|" "$ENV_FILE"
-    else
-      printf '\nADMIN_KEY=%s\n' "$ADMIN_KEY" >> "$ENV_FILE"
-    fi
-    echo "Generated ADMIN_KEY and wrote it to $ENV_FILE"
+    persist_env ADMIN_KEY "$ADMIN_KEY" "$ENV_FILE"
+    echo "Generated ADMIN_KEY and wrote it to $ENV_FILE (not printed here)."
   else
-    echo "Generated ADMIN_KEY (no .env to persist into): $ADMIN_KEY"
+    echo "Generated ADMIN_KEY but no .env to persist into; re-run with a .env." >&2
+    echo "Read it once from this shell:  echo \"\$ADMIN_KEY\"" >&2
   fi
 fi
-echo "SAVE THIS ADMIN KEY: $ADMIN_KEY"
 
 # --- container registry + images ------------------------------------------
 log "Container registry: $ACR"
@@ -230,10 +250,13 @@ fi
 FQDN="$(az containerapp show -n dashboard -g "$RG" --query properties.configuration.ingress.fqdn -o tsv)"
 log "Deploy complete"
 echo "Dashboard: https://$FQDN"
-echo "Admin key: $ADMIN_KEY"
+echo "Admin key: stored in $ENV_FILE (ADMIN_KEY); not printed."
 echo
-echo "Smoke test:"
-echo "  curl -s https://$FQDN/healthz"
+echo "Smoke test (the Collector is reachable only via /api and /v1 through the"
+echo "dashboard proxy; / serves the SPA, so test an /api path):"
+echo "  # 401 'missing bearer credential' proves the Collector is reachable:"
+echo "  curl -s -o /dev/null -w '%{http_code}\\n' https://$FQDN/api/v1/traces?limit=1"
+echo "  # Mint a key with the break-glass admin key (loaded from .env):"
 echo "  curl -s -X POST https://$FQDN/api/v1/keys \\"
 echo "    -H \"Authorization: Bearer \$ADMIN_KEY\" -H 'Content-Type: application/json' \\"
 echo "    -d '{\"name\":\"prod\",\"scopes\":[\"read\",\"ingest\"]}'"

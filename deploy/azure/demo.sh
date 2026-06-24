@@ -66,15 +66,19 @@ export ARGOX_COLLECTOR_API_KEY="$API_KEY"
 # --- 4. read the metrics back from the Collector ---------------------------
 auth=(-H "Authorization: Bearer $API_KEY")
 
+# Treat the count as a number only when it is one; an empty/garbled response
+# (transient 5xx, partial body) is forced to 0 so the arithmetic stays safe.
+indexed() { [[ "$1" =~ ^[0-9]+$ ]] && (( $1 > 0 )); }
+
 log "Waiting for the trace to be indexed"
 total=0
 for _ in $(seq 1 20); do
   total="$(curl -fsS "${auth[@]}" "$BASE/api/v1/traces?limit=1" \
     | "$PY" -c 'import sys,json; print(json.load(sys.stdin).get("total",0))' 2>/dev/null || echo 0)"
-  [[ "$total" -gt 0 ]] && break
+  indexed "$total" && break
   sleep 2
 done
-[[ "$total" -gt 0 ]] || echo "  (no trace indexed yet; metrics below may be empty)"
+indexed "$total" || echo "  (no trace indexed yet; metrics below may be empty)"
 
 show() {  # pretty-print a JSON endpoint
   local label="$1" path="$2"

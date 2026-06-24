@@ -29,11 +29,12 @@ try:
         Agent,
         Runner,
         function_tool,
+        set_default_openai_api,
         set_default_openai_client,
         set_tracing_disabled,
     )
     from dotenv import load_dotenv
-    from openai import AsyncOpenAI
+    from openai import AsyncAzureOpenAI, AsyncOpenAI
 
     import argox
     from argox.core import init_telemetry
@@ -55,13 +56,22 @@ load_dotenv(Path(__file__).resolve().parent / ".env")
 
 def _make_client_and_model() -> tuple[AsyncOpenAI, str]:
     """Pick the LLM backend from the environment. Azure OpenAI is preferred
-    (same cloud as the deploy); plain OpenAI is the fallback. Mirrors the client
-    wiring in argox-project/examples/demo_azure_openai.py."""
+    (same cloud as the deploy); plain OpenAI is the fallback.
+
+    Azure OpenAI must use ``AsyncAzureOpenAI`` (the ``api-key`` header,
+    ``api-version`` query, and the ``/openai/deployments/{deployment}/...``
+    route) — a plain ``AsyncOpenAI`` with ``base_url`` set to the resource root
+    and a Bearer token returns 404. The model name is the Azure *deployment*
+    name. The Agents SDK is also switched to the Chat Completions API because
+    Azure deployments do not universally expose the Responses API.
+    """
     if os.environ.get("AZURE_OPENAI_API_KEY"):
-        client = AsyncOpenAI(
+        client = AsyncAzureOpenAI(
             api_key=os.environ["AZURE_OPENAI_API_KEY"],
-            base_url=os.environ["AZURE_OPENAI_ENDPOINT"],
+            azure_endpoint=os.environ["AZURE_OPENAI_ENDPOINT"],
+            api_version=os.environ.get("AZURE_OPENAI_API_VERSION", "2024-10-21"),
         )
+        set_default_openai_api("chat_completions")
         return client, os.environ["AZURE_OPENAI_DEPLOYMENT"]
     if os.environ.get("OPENAI_API_KEY"):
         model = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")

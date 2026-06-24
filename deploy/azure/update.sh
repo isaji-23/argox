@@ -38,6 +38,28 @@ log() { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
 die() { echo "ERROR: $*" >&2; exit 1; }
 usage() { sed -n '2,30p' "$0"; exit "${1:-1}"; }
 
+# Set KEY=VALUE in an env file in place (python: value written literally, no sed
+# delimiter/metacharacter pitfalls).
+persist_env() {
+  local key="$1" value="$2" file="$3"
+  KEY="$key" VALUE="$value" FILE="$file" python3 - <<'PY'
+import os
+key, value, path = os.environ["KEY"], os.environ["VALUE"], os.environ["FILE"]
+try:
+    lines = open(path).read().splitlines()
+except FileNotFoundError:
+    lines = []
+prefix = key + "="
+for i, line in enumerate(lines):
+    if line.startswith(prefix):
+        lines[i] = prefix + value
+        break
+else:
+    lines.append(prefix + value)
+open(path, "w").write("\n".join(lines) + "\n")
+PY
+}
+
 command -v az >/dev/null || die "az CLI not found."
 az account show >/dev/null 2>&1 || die "not logged in. Run 'az login'."
 
@@ -69,9 +91,7 @@ case "$CMD" in
     esac
 
     # Persist the new tag so the next deploy.sh run matches.
-    if [[ -f "$ENV_FILE" ]] && grep -q '^TAG=' "$ENV_FILE"; then
-      sed -i "s|^TAG=.*|TAG=$NEWTAG|" "$ENV_FILE"
-    fi
+    [[ -f "$ENV_FILE" ]] && persist_env TAG "$NEWTAG" "$ENV_FILE"
     echo
     echo "NOTE: for a clean collector swap (DuckDB single-writer lock), deactivate"
     echo "the old revision once the new one is healthy:"
@@ -92,10 +112,12 @@ case "$CMD" in
     az containerapp secret set -n collector -g "$RG" --secrets "admin-key=$NEW"
     # Bump a revision so the running replica picks up the new secret value.
     az containerapp update -n collector -g "$RG"
-    if [[ -f "$ENV_FILE" ]] && grep -q '^ADMIN_KEY=' "$ENV_FILE"; then
-      sed -i "s|^ADMIN_KEY=.*|ADMIN_KEY=$NEW|" "$ENV_FILE"
+    if [[ -f "$ENV_FILE" ]]; then
+      persist_env ADMIN_KEY "$NEW" "$ENV_FILE"
+      echo "Rotated admin key and wrote it to $ENV_FILE (not printed here)."
+    else
+      die "no .env to persist the rotated key into; aborting before it is lost."
     fi
-    echo "NEW ADMIN KEY: $NEW"
     ;;
 
   rollback)
