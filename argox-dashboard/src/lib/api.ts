@@ -362,7 +362,7 @@ export interface LatencyMetricsResponse {
   avg_latency_ms: number;
   p95_latency_ms: number;
   trace_count: number;
-  percentiles: LatencyPercentiles;
+  percentiles?: LatencyPercentiles;
   histogram: LatencyHistogramBin[];
 }
 

@@ -146,9 +146,10 @@ export function MetricsScreen({ timeRange }: MetricsScreenProps) {
     return idx !== -1 ? idx : null;
   };
 
-  const p50BinIdx = findBinIdx(latencyData.percentiles.p50);
-  const p95BinIdx = findBinIdx(latencyData.percentiles.p95);
-  const p99BinIdx = findBinIdx(latencyData.percentiles.p99);
+  const percentiles = latencyData.percentiles ?? { p50: 0, p95: 0, p99: 0 };
+  const p50BinIdx = findBinIdx(percentiles.p50);
+  const p95BinIdx = findBinIdx(percentiles.p95);
+  const p99BinIdx = findBinIdx(percentiles.p99);
 
   // --- Transform Success Rate Timeline ---
   const formattedSuccessTimeline = (successData.timeline ?? []).map((pt) => ({
@@ -215,9 +216,9 @@ export function MetricsScreen({ timeRange }: MetricsScreenProps) {
             <span className="text-3xl font-bold tracking-tight text-text-primary">
               {latencyData.trace_count === 0
                 ? 'N/A'
-                : latencyData.percentiles.p50 >= 1000
-                ? (latencyData.percentiles.p50 / 1000).toFixed(2) + 's'
-                : Math.round(latencyData.percentiles.p50) + 'ms'}
+                : percentiles.p50 >= 1000
+                ? (percentiles.p50 / 1000).toFixed(2) + 's'
+                : Math.round(percentiles.p50) + 'ms'}
             </span>
           </div>
           <div className="mt-1.5 text-xs text-text-muted">
