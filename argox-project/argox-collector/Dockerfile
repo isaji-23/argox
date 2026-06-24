@@ -1,4 +1,10 @@
 # syntax=docker/dockerfile:1.7
+#
+# Build context is the argox-project/ PARENT (not this directory), so the image
+# can bundle the sibling `argox-core` package that the Collector imports (policy
+# parsing). Build with:
+#   az acr build -t argox-collector:<tag> -f argox-collector/Dockerfile ../../argox-project
+# (the deploy/azure scripts already pass this context and -f path).
 
 FROM python:3.11-slim AS base
 
@@ -16,10 +22,18 @@ RUN useradd --create-home --uid 1000 argox
 # inherit writable ownership on first use (the DuckDB index lives here).
 RUN mkdir -p /data && chown argox:argox /data
 
-COPY pyproject.toml ./
-COPY src ./src
+# Install argox-core FIRST. The Collector imports it (e.g.
+# `from argox.policies.parser import PolicyParser`), and installing it locally
+# here satisfies the collector's `argox-core` dependency without a PyPI fetch
+# (the package is not published).
+COPY argox-core/pyproject.toml ./argox-core/
+COPY argox-core/src ./argox-core/src
+RUN pip install --upgrade pip && pip install ./argox-core
 
-RUN pip install --upgrade pip && pip install ".[azure]"
+# Then the Collector itself, with the Azure storage extra.
+COPY argox-collector/pyproject.toml ./argox-collector/
+COPY argox-collector/src ./argox-collector/src
+RUN pip install "./argox-collector[azure]"
 
 USER argox
 
