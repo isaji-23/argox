@@ -1,4 +1,5 @@
 import type { components } from '../api/schema';
+import { getToken, signalAuthRequired } from './auth';
 
 const API_BASE = '/api/v1';
 
@@ -53,6 +54,39 @@ export class APIError extends Error {
   }
 }
 
+/**
+ * Single fetch wrapper for the Collector API.
+ *
+ * Attaches `Authorization: Bearer <token>` whenever an API key is stored; when
+ * none is set (e.g. auth disabled), the request goes out unauthenticated and
+ * behaves as before. On `401`/`403` it signals the UI to prompt for a key and
+ * raises an `APIError` carrying the status so callers can react.
+ *
+ * Args:
+ *   path: API path relative to `API_BASE`.
+ *   errorMessage: fallback message for non-auth failures.
+ *
+ * Returns:
+ *   The parsed JSON response body.
+ */
+async function apiFetch<T>(path: string, errorMessage: string): Promise<T> {
+  const token = getToken();
+  const headers: HeadersInit = token ? { Authorization: `Bearer ${token}` } : {};
+
+  const res = await fetch(`${API_BASE}${path}`, { headers });
+  if (!res.ok) {
+    if (res.status === 401 || res.status === 403) {
+      signalAuthRequired();
+      const msg = res.status === 401
+        ? 'Authentication required: enter a Collector API key.'
+        : 'Access denied: this key lacks the read scope.';
+      throw new APIError(msg, res.status);
+    }
+    throw new APIError(errorMessage, res.status);
+  }
+  return res.json();
+}
+
 export const api = {
   async listTraces(params: {
     skip?: number;
@@ -74,36 +108,33 @@ export const api = {
     if (params.sort) searchParams.set('sort', params.sort);
     if (params.window_hours !== undefined) searchParams.set('window_hours', params.window_hours.toString());
 
-    const res = await fetch(`${API_BASE}/traces?${searchParams.toString()}`);
-    if (!res.ok) throw new APIError('Failed to fetch traces', res.status);
-    return res.json();
+    return apiFetch<TraceListResponse>(`/traces?${searchParams.toString()}`, 'Failed to fetch traces');
   },
 
   async getTrace(traceId: string): Promise<TraceDetailResponse> {
-    const res = await fetch(`${API_BASE}/traces/${encodeURIComponent(traceId)}`);
-    if (!res.ok) {
-      const msg = res.status === 404 ? `Trace ${traceId} not found` : `Failed to fetch trace ${traceId}`;
-      throw new APIError(msg, res.status);
+    try {
+      return await apiFetch<TraceDetailResponse>(
+        `/traces/${encodeURIComponent(traceId)}`,
+        `Failed to fetch trace ${traceId}`,
+      );
+    } catch (err) {
+      if (err instanceof APIError && err.status === 404) {
+        throw new APIError(`Trace ${traceId} not found`, 404);
+      }
+      throw err;
     }
-    return res.json();
   },
 
   async getCostMetrics(windowHours: number = 24): Promise<CostMetricsResponse> {
-    const res = await fetch(`${API_BASE}/metrics/cost?window_hours=${windowHours}`);
-    if (!res.ok) throw new APIError('Failed to fetch cost metrics', res.status);
-    return res.json();
+    return apiFetch<CostMetricsResponse>(`/metrics/cost?window_hours=${windowHours}`, 'Failed to fetch cost metrics');
   },
 
   async getLatencyMetrics(windowHours: number = 24): Promise<LatencyMetricsResponse> {
-    const res = await fetch(`${API_BASE}/metrics/latency?window_hours=${windowHours}`);
-    if (!res.ok) throw new APIError('Failed to fetch latency metrics', res.status);
-    return res.json();
+    return apiFetch<LatencyMetricsResponse>(`/metrics/latency?window_hours=${windowHours}`, 'Failed to fetch latency metrics');
   },
 
   async getSuccessMetrics(windowHours: number = 24): Promise<SuccessMetricsResponse> {
-    const res = await fetch(`${API_BASE}/metrics/success?window_hours=${windowHours}`);
-    if (!res.ok) throw new APIError('Failed to fetch success metrics', res.status);
-    return res.json();
+    return apiFetch<SuccessMetricsResponse>(`/metrics/success?window_hours=${windowHours}`, 'Failed to fetch success metrics');
   },
 
   async listPolicies(): Promise<PolicyListResponse> {

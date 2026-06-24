@@ -25,6 +25,8 @@ interface HeaderProps {
   setAgent: (agent: string) => void;
   agents: string[];
   onToggleSidebar: () => void;
+  onOpenAuth: () => void;
+  hasCredential: boolean;
   showTimeControls?: boolean;
 }
 
@@ -41,6 +43,8 @@ export function Header({
   setAgent,
   agents,
   onToggleSidebar,
+  onOpenAuth,
+  hasCredential,
   showTimeControls = true
 }: HeaderProps) {
   return (
@@ -86,6 +90,15 @@ export function Header({
       )}
 
       <div className="w-px h-6 bg-border mx-1" />
+
+      <Tooltip label={hasCredential ? 'API key set' : 'Set API key'}>
+        <IconButton
+          name="key"
+          label="API key"
+          onClick={onOpenAuth}
+          className={hasCredential ? 'text-allow' : undefined}
+        />
+      </Tooltip>
 
       <Tooltip label={theme === 'dark' ? 'Switch to light' : 'Switch to dark'}>
         <IconButton
