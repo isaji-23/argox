@@ -12,7 +12,15 @@
 # COLLECTOR_UPSTREAM picks where /api and /v1 are proxied:
 #   - local Docker Compose: http://collector:8000 (the Compose service)
 #   - Azure Container Apps: http://collector  (internal ingress, port 80)
-# The upstream is resolved once at startup; both targets are stable hostnames.
+#
+# The upstream is a literal host (envsubst'd into proxy_pass), so nginx resolves
+# it ONCE at worker startup and caches the address. This is intentional: on
+# Azure Container Apps the ingress hostname is stable, and a per-request
+# `resolver` would have to hardcode a DNS server that differs per environment
+# (127.0.0.11 is Docker's embedded DNS and does not exist on ACA, where it would
+# break resolution). Trade-off: in local Docker Compose, if the `collector`
+# container restarts with a new IP, nginx keeps the stale address until reload —
+# restart (or `nginx -s reload`) the dashboard after restarting the collector.
 
 server {
     listen 80;
