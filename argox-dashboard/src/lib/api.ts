@@ -245,19 +245,10 @@ export const api = {
   },
 
   async getRunByTrace(traceId: string): Promise<RunDetail> {
-    const res = await fetch(`${API_BASE}/runs/by-trace/${encodeURIComponent(traceId)}`);
-    if (!res.ok) {
-      let detail = '';
-      try {
-        const errBody = await res.json();
-        detail = errBody.detail || '';
-      } catch {}
-      const msg = res.status === 404
-        ? `Run not found for trace ${traceId}`
-        : (detail || `Failed to fetch run for trace ${traceId}`);
-      throw new APIError(msg, res.status);
-    }
-    return res.json();
+    return apiFetch<RunDetail>(
+      `/runs/by-trace/${encodeURIComponent(traceId)}`,
+      `Failed to load run record for trace ${traceId}`,
+    );
   },
 
   async getCostMetrics(windowHours: number = 24): Promise<CostMetricsResponse> {

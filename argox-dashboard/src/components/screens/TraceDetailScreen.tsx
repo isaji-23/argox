@@ -269,7 +269,7 @@ export function TraceDetailScreen({ traceId, onBack }: TraceDetailScreenProps) {
                             {tool.result && (
                               <div className="mt-1.5">
                                 <div className="text-[10px] font-bold text-text-muted uppercase mb-0.5">Result Preview</div>
-                                <pre className="text-[11px] font-mono text-text-secondary bg-bg-base p-2 rounded border border-border max-h-24 overflow-y-auto whitespace-pre-wrap break-all">
+                                <pre className="text-[11px] font-mono text-text-secondary bg-bg-base p-2 rounded border border-border max-h-24 overflow-y-auto whitespace-pre-wrap break-words">
                                   {tool.result}
                                 </pre>
                               </div>
@@ -312,13 +312,13 @@ export function TraceDetailScreen({ traceId, onBack }: TraceDetailScreenProps) {
                               <tr className="bg-surface-3/20 font-bold border-t border-border">
                                 <td className="px-3 py-2 text-text-primary">Total</td>
                                 <td className="px-3 py-2 font-mono text-text-primary text-right">
-                                  {run.tokens.input != null ? run.tokens.input.toLocaleString() : run.tokens.by_api_call.reduce((sum, c) => sum + (c.input || 0), 0).toLocaleString()}
+                                  {run.tokens.input != null ? run.tokens.input.toLocaleString() : '-'}
                                 </td>
                                 <td className="px-3 py-2 font-mono text-text-primary text-right">
-                                  {run.tokens.output != null ? run.tokens.output.toLocaleString() : run.tokens.by_api_call.reduce((sum, c) => sum + (c.output || 0), 0).toLocaleString()}
+                                  {run.tokens.output != null ? run.tokens.output.toLocaleString() : '-'}
                                 </td>
                                 <td className="px-3 py-2 font-mono text-accent text-right">
-                                  {run.tokens.total != null ? run.tokens.total.toLocaleString() : run.tokens.by_api_call.reduce((sum, c) => sum + (c.total || 0), 0).toLocaleString()}
+                                  {run.tokens.total != null ? run.tokens.total.toLocaleString() : '-'}
                                 </td>
                               </tr>
                             )}
@@ -405,7 +405,7 @@ function CollapsibleBlock({ title, content, badge }: { title: string; content: s
       </div>
       {open && (
         <div className="p-3 border-t border-border bg-bg-base/30">
-          <pre className="text-xs font-mono text-text-secondary whitespace-pre-wrap break-all bg-bg-base p-2.5 rounded border border-border max-h-60 overflow-y-auto">
+          <pre className="text-xs font-mono text-text-secondary whitespace-pre-wrap break-words bg-bg-base p-2.5 rounded border border-border max-h-60 overflow-y-auto">
             {content || <span className="italic text-text-faint">Empty</span>}
           </pre>
         </div>
