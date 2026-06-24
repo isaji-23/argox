@@ -909,6 +909,7 @@
         "description": "Request body for ``POST /api/v1/policies/validate`` (dry-run).",
         "properties": {
           "yaml": {
+            "maxLength": 1000000,
             "title": "Yaml",
             "type": "string"
           }

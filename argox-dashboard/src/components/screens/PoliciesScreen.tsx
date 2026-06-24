@@ -1,7 +1,7 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import Editor, { DiffEditor } from '@monaco-editor/react';
 import { api } from '../../lib/api';
-import type { PolicySummary } from '../../lib/api';
+import type { PolicySummary, PolicyValidateResponse, PolicyRule } from '../../lib/api';
 import { Icon } from '../shared/Icon';
 import { Button } from '../ui/Button';
 import { Badge } from '../ui/Badge';
@@ -47,11 +47,7 @@ export function PoliciesScreen({ theme = 'dark' }: PoliciesScreenProps) {
   const [loadingDetail, setLoadingDetail] = useState<boolean>(false);
   const [saving, setSaving] = useState<boolean>(false);
   const [validating, setValidating] = useState<boolean>(false);
-  const [validationResult, setValidationResult] = useState<{
-    valid: boolean;
-    errors: string[];
-    policy?: any;
-  } | null>(null);
+  const [validationResult, setValidationResult] = useState<PolicyValidateResponse | null>(null);
   
   // UI States
   const [error, setError] = useState<string | null>(null);
@@ -119,9 +115,16 @@ export function PoliciesScreen({ theme = 'dark' }: PoliciesScreenProps) {
     }
   };
 
+  const lastLoadedPolicyIdRef = useRef<string | null>(null);
+
   useEffect(() => {
     if (selectedPolicyId && !isCreatingNew) {
-      loadPolicyDetail(selectedPolicyId);
+      if (selectedPolicyId !== lastLoadedPolicyIdRef.current) {
+        loadPolicyDetail(selectedPolicyId);
+        lastLoadedPolicyIdRef.current = selectedPolicyId;
+      }
+    } else {
+      lastLoadedPolicyIdRef.current = null;
     }
   }, [selectedPolicyId, policies, isCreatingNew]);
 
@@ -187,21 +190,25 @@ export function PoliciesScreen({ theme = 'dark' }: PoliciesScreenProps) {
         const payload = {
           id: parsedPolicy.id,
           status: selectedStatus,
-          rules: parsedPolicy.rules,
+          rules: parsedPolicy.rules as PolicyRule[],
           created_by: parsedPolicy.created_by || 'dashboard'
         };
         await api.createPolicy(payload);
         setIsCreatingNew(false);
         await fetchPolicies(parsedPolicy.id);
+        lastLoadedPolicyIdRef.current = parsedPolicy.id;
+        await loadPolicyDetail(parsedPolicy.id);
       } else if (selectedPolicyId) {
         // Update existing policy (creates version n+1)
         const payload = {
           status: selectedStatus,
-          rules: parsedPolicy.rules,
+          rules: parsedPolicy.rules as PolicyRule[],
           created_by: parsedPolicy.created_by || 'dashboard'
         };
         await api.updatePolicy(selectedPolicyId, payload);
         await fetchPolicies(selectedPolicyId);
+        lastLoadedPolicyIdRef.current = selectedPolicyId;
+        await loadPolicyDetail(selectedPolicyId);
       }
       
       setValidationResult({ valid: true, errors: [] });

@@ -145,7 +145,7 @@ class PolicyListResponse(BaseModel):
 class PolicyValidateRequest(BaseModel):
     """Request body for ``POST /api/v1/policies/validate`` (dry-run)."""
 
-    yaml: str
+    yaml: str = Field(..., max_length=1000000)
 
 
 class PolicyValidateResponse(BaseModel):
@@ -295,7 +295,7 @@ def validate_policy(
         parser = PolicyParser()
         policy = parser.parse_yaml(payload.yaml)
         return PolicyValidateResponse(valid=True, errors=[], policy=policy.model_dump())
-    except ValueError as e:
+    except Exception as e:
         return PolicyValidateResponse(valid=False, errors=[str(e)])
 
 
@@ -437,7 +437,11 @@ def get_active_policy(
     if "application/x-yaml" in accept or "text/yaml" in accept:
         try:
             blob = storage.get(_blob_key(policy_id, content_hash))
-            return Response(content=blob.data, media_type=_YAML_CONTENT_TYPE)
+            return Response(
+                content=blob.data,
+                media_type=_YAML_CONTENT_TYPE,
+                headers={"X-Content-Type-Options": "nosniff"},
+            )
         except BlobNotFoundError:
             logger.error(
                 "policy_dangling_pointer",
@@ -493,7 +497,11 @@ def get_policy_version(
     if "application/x-yaml" in accept or "text/yaml" in accept:
         try:
             blob = storage.get(_blob_key(policy_id, content_hash))
-            return Response(content=blob.data, media_type=_YAML_CONTENT_TYPE)
+            return Response(
+                content=blob.data,
+                media_type=_YAML_CONTENT_TYPE,
+                headers={"X-Content-Type-Options": "nosniff"},
+            )
         except BlobNotFoundError:
             logger.error(
                 "policy_dangling_pointer", policy_id=policy_id, version=version

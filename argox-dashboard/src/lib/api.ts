@@ -1,3 +1,5 @@
+import type { components } from '../api/schema';
+
 const API_BASE = '/api/v1';
 
 export interface TraceSummary {
@@ -122,14 +124,6 @@ export const api = {
     return res.json();
   },
 
-  async getPolicyYaml(id: string): Promise<string> {
-    const res = await fetch(`${API_BASE}/policies/${encodeURIComponent(id)}`, {
-      headers: { 'Accept': 'application/x-yaml' }
-    });
-    if (!res.ok) throw new APIError(`Failed to fetch policy ${id} YAML`, res.status);
-    return res.text();
-  },
-
   async getPolicyVersionYaml(id: string, version: number): Promise<string> {
     const res = await fetch(`${API_BASE}/policies/${encodeURIComponent(id)}/v${version}`, {
       headers: { 'Accept': 'application/x-yaml' }
@@ -138,7 +132,7 @@ export const api = {
     return res.text();
   },
 
-  async createPolicy(policy: { id: string; status: string; rules: any[]; created_by?: string }): Promise<PolicyResponse> {
+  async createPolicy(policy: { id: string; status: 'active' | 'draft' | 'archived'; rules: PolicyRule[]; created_by?: string }): Promise<PolicyResponse> {
     const res = await fetch(`${API_BASE}/policies`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -151,7 +145,7 @@ export const api = {
     return res.json();
   },
 
-  async updatePolicy(id: string, policy: { status: string; rules: any[]; created_by?: string }): Promise<PolicyResponse> {
+  async updatePolicy(id: string, policy: { status: 'active' | 'draft' | 'archived'; rules: PolicyRule[]; created_by?: string }): Promise<PolicyResponse> {
     const res = await fetch(`${API_BASE}/policies/${encodeURIComponent(id)}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
@@ -236,43 +230,19 @@ export interface SuccessMetricsResponse {
   top_blocked_tools: BlockedToolPoint[];
 }
 
-export interface PolicySummary {
-  id: string;
-  status: 'active' | 'draft' | 'archived';
-  latest_version: number;
-  active_version: number | null;
-}
+export type PolicySummary = components["schemas"]["PolicySummary"];
 
 export interface PolicyListResponse {
   policies: PolicySummary[];
   total: number;
 }
 
-export interface PolicyRule {
-  id: string;
-  trigger: string;
-  condition: {
-    metric: string;
-    operator: 'eq' | 'neq' | 'gt' | 'gte' | 'lt' | 'lte' | 'contains' | 'in';
-    threshold: any;
-  };
-  action: 'block' | 'alert' | 'ok';
-  enforcement?: string;
-}
-
-export interface PolicyResponse {
-  id: string;
-  version: number;
-  status: 'active' | 'draft' | 'archived';
-  rules: PolicyRule[];
-  created_by?: string | null;
-  updated_at?: string | null;
-  content_hash: string;
-}
+export type PolicyRule = components["schemas"]["PolicyRule"];
+export type PolicyResponse = components["schemas"]["PolicyResponse"];
 
 export interface PolicyValidateResponse {
   valid: boolean;
   errors: string[];
-  policy?: any;
+  policy?: Omit<PolicyResponse, 'content_hash'> | null;
 }
 

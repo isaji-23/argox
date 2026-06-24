@@ -73,12 +73,7 @@ _RUN_COLUMNS = (
 # correct. For a genuinely multi-model run there is no single right answer here
 # — pricing the run's token totals at one model's rate is approximate; exact
 # per-call cost would need per-span pricing summed over the trace (see ADR-0008).
-_TRACE_MODEL_SQL = (
-    "SELECT COALESCE("
-    f"  MAX(json_extract_string(attributes, '$.\"{semconv.GEN_AI_REQUEST_MODEL}\"')),"
-    f"  MAX(json_extract_string(attributes, '$.\"{semconv.GEN_AI_RESPONSE_MODEL}\"'))"
-    ") FROM spans WHERE trace_id = ?"
-)
+
 
 
 def _to_naive_utc(dt: Optional[datetime]) -> Optional[datetime]:
@@ -563,24 +558,37 @@ class DuckDBTraceIndex(TraceIndex):
 
         # Stacked cost over time by model: aggregated from spans and joined with runs for model name fallbacks
         bucket_unit = "hour" if window_hours <= 72 else "day"
-        query_timeline = f"""
+        query_timeline = """
             SELECT
                 date_trunc(?, s.start_time) AS bucket,
                 COALESCE(
                     r.model,
-                    json_extract_string(s.attributes, '$.\"{semconv.GEN_AI_REQUEST_MODEL}\"'),
-                    json_extract_string(s.attributes, '$.\"{semconv.GEN_AI_RESPONSE_MODEL}\"'),
+                    json_extract_string(s.attributes, ?),
+                    json_extract_string(s.attributes, ?),
                     json_extract_string(s.attributes, '$.model'),
                     'unknown'
                 ) AS model,
                 SUM(s.run_cost) FILTER (WHERE isfinite(s.run_cost)) AS cost
             FROM spans s
-            LEFT JOIN runs r ON s.trace_id = r.trace_id
+            LEFT JOIN (
+                SELECT DISTINCT ON (trace_id) trace_id, model
+                FROM runs
+                WHERE trace_id IS NOT NULL
+                ORDER BY trace_id, ingested_at DESC, run_id DESC
+            ) r ON s.trace_id = r.trace_id
             WHERE s.start_time >= ?
             GROUP BY 1, 2
             ORDER BY 1 ASC, 2 ASC
         """
-        rows_timeline = self._read(query_timeline, (bucket_unit, cutoff))
+        rows_timeline = self._read(
+            query_timeline,
+            (
+                bucket_unit,
+                f'$.\"{semconv.GEN_AI_REQUEST_MODEL}\"',
+                f'$.\"{semconv.GEN_AI_RESPONSE_MODEL}\"',
+                cutoff,
+            ),
+        )
         timeline = []
         for r in rows_timeline:
             timeline.append({
@@ -728,7 +736,6 @@ class DuckDBTraceIndex(TraceIndex):
         row = self._read(query, (cutoff,))[0]
         total = row[0] or 0
         successful = row[1] or 0
-        success_rate = (successful / total) if total else None
 
         # Success ratio over time timeline: aggregated by bucket from spans
         bucket_unit = "hour" if window_hours <= 72 else "day"
@@ -777,7 +784,7 @@ class DuckDBTraceIndex(TraceIndex):
             "window_hours": window_hours,
             "total_runs": total,
             "successful_runs": successful,
-            "success_rate": success_rate,
+            "success_rate": (successful / total) if total else None,
             "timeline": timeline,
             "top_blocked_tools": top_blocked_tools,
         }
@@ -839,7 +846,20 @@ class DuckDBTraceIndex(TraceIndex):
             )
 
     def get_run_model_from_trace(self, trace_id: str) -> Optional[str]:
-        rows = self._read(_TRACE_MODEL_SQL, (trace_id,))
+        query = """
+            SELECT COALESCE(
+                MAX(json_extract_string(attributes, ?)),
+                MAX(json_extract_string(attributes, ?))
+            ) FROM spans WHERE trace_id = ?
+        """
+        rows = self._read(
+            query,
+            (
+                f'$.\"{semconv.GEN_AI_REQUEST_MODEL}\"',
+                f'$.\"{semconv.GEN_AI_RESPONSE_MODEL}\"',
+                trace_id,
+            ),
+        )
         return rows[0][0] if rows and rows[0][0] else None
 
     def list_runs(
