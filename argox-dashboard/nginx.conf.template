@@ -1,0 +1,57 @@
+# Serves the built dashboard and reverse-proxies API calls to the Collector.
+# Keeping the API same-origin means the browser needs no CORS at all; the
+# Collector itself can stay private (internal ingress on Azure Container Apps,
+# loopback-only in local Compose) because only this nginx talks to it.
+#
+# This is an envsubst TEMPLATE, not a final config. The stock nginx image
+# renders every file in /etc/nginx/templates/*.template into
+# /etc/nginx/conf.d/ at startup, substituting environment variables. We restrict
+# substitution to the COLLECTOR_ prefix (NGINX_ENVSUBST_FILTER in the
+# Dockerfile) so nginx runtime variables like $host and $uri survive untouched.
+#
+# COLLECTOR_UPSTREAM picks where /api and /v1 are proxied:
+#   - local Docker Compose: http://collector:8000 (the Compose service)
+#   - Azure Container Apps: http://collector  (internal ingress, port 80)
+# The upstream is resolved once at startup; both targets are stable hostnames.
+
+server {
+    listen 80;
+    server_name _;
+
+    root /usr/share/nginx/html;
+    index index.html;
+
+    # Match the Collector's ingest limit (ARGOX_MAX_PAYLOAD_SIZE, 10 MB default)
+    # so proxied OTLP batches are not capped at nginx's 1 MB default and
+    # rejected with 413 before reaching the Collector.
+    client_max_body_size 10m;
+
+    # Query and policy APIs (GET /api/v1/traces, /api/v1/policies, ...).
+    location /api/ {
+        proxy_pass ${COLLECTOR_UPSTREAM};
+        # HTTP/1.1 is mandatory: nginx proxies as HTTP/1.0 by default, which the
+        # Azure Container Apps ingress (Envoy) rejects with 426 Upgrade Required.
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        # Do NOT override Host with the public FQDN: Azure Container Apps routes
+        # internal ingress by Host, so the Host must stay the upstream name
+        # (nginx defaults it to the proxy_pass host, e.g. "collector"). Sending
+        # the dashboard's public host yields a 404 "Container App Unavailable".
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # OTLP ingest (POST /v1/traces), handy for browser-side demos.
+    location /v1/ {
+        proxy_pass ${COLLECTOR_UPSTREAM};
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # SPA fallback: unknown paths render the app shell.
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}
