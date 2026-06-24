@@ -114,13 +114,15 @@ log "Building images in ACR (cloud build, no local Docker)"
 # unconditional otherwise, so a plain re-run rebuilds both images at $TAG.
 build_image() {
   local repo="$1" ctx="$2" dockerfile="${3:-}"
-  local file_arg=()
-  [[ -n "$dockerfile" ]] && file_arg=(-f "$dockerfile")
   if [[ "${FORCE_BUILD:-0}" != "1" ]] && \
      az acr repository show -n "$ACR" --image "$repo:$TAG" >/dev/null 2>&1; then
     echo "  $repo:$TAG already in registry; skipping (FORCE_BUILD=1 to rebuild)"
+  elif [[ -n "$dockerfile" ]]; then
+    # az acr build validates --file relative to the CWD (not the context root)
+    # for local-context builds, so run from inside the context and pass `.`.
+    ( cd "$ctx" && az acr build -r "$ACR" -t "$repo:$TAG" -f "$dockerfile" . )
   else
-    az acr build -r "$ACR" -t "$repo:$TAG" "${file_arg[@]+"${file_arg[@]}"}" "$ctx"
+    az acr build -r "$ACR" -t "$repo:$TAG" "$ctx"
   fi
 }
 build_image argox-collector "$COLLECTOR_CTX" "$COLLECTOR_DOCKERFILE"

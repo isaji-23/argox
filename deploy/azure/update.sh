@@ -75,7 +75,9 @@ case "$CMD" in
 
     build_collector() {
       log "Building argox-collector:$NEWTAG"
-      az acr build -r "$ACR" -t "argox-collector:$NEWTAG" -f "$COLLECTOR_DOCKERFILE" "$COLLECTOR_CTX"
+      # az acr build validates --file relative to the CWD (not the context root)
+      # for local-context builds, so run from inside the context and pass `.`.
+      ( cd "$COLLECTOR_CTX" && az acr build -r "$ACR" -t "argox-collector:$NEWTAG" -f "$COLLECTOR_DOCKERFILE" . )
       log "Rolling collector to $NEWTAG"
       az containerapp update -n collector -g "$RG" --image "$ACR_SERVER/argox-collector:$NEWTAG"
     }
