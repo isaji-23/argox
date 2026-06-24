@@ -51,6 +51,8 @@ export const ICON_PATHS: Record<string, string> = {
   chevronUp: 'M18 15l-6-6-6 6',
   agent: 'M12 12m-9 0a9 9 0 1018 0 9 9 0 10-18 0 M12 8v4 M12 16v.01',
   share: 'M4 12v7a2 2 0 002 2h12a2 2 0 002-2v-7 M16 6l-4-4-4 4 M12 2v13',
+  key: 'M15 8a4 4 0 11-3.6 5.7L4 21H3v-3l1-1h2v-2h2l1.3-1.3A4 4 0 0115 8z M16.5 9.5h.01',
+  eyeOff: 'M3 3l18 18 M10.6 10.6a3 3 0 004.2 4.2 M9.4 5.2A10 10 0 0112 5c6 0 10 7 10 7a17 17 0 01-3.5 4.1 M6.1 6.1A17 17 0 002 12s4 7 10 7a10 10 0 003.9-.8',
 };
 
 interface IconProps extends React.SVGProps<SVGSVGElement> {
