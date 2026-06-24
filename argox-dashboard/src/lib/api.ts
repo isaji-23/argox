@@ -1,3 +1,5 @@
+import type { components } from '../api/schema';
+
 const API_BASE = '/api/v1';
 
 export interface TraceSummary {
@@ -102,6 +104,68 @@ export const api = {
     const res = await fetch(`${API_BASE}/metrics/success?window_hours=${windowHours}`);
     if (!res.ok) throw new APIError('Failed to fetch success metrics', res.status);
     return res.json();
+  },
+
+  async listPolicies(): Promise<PolicyListResponse> {
+    const res = await fetch(`${API_BASE}/policies`);
+    if (!res.ok) throw new APIError('Failed to fetch policies', res.status);
+    return res.json();
+  },
+
+  async getPolicy(id: string): Promise<PolicyResponse> {
+    const res = await fetch(`${API_BASE}/policies/${encodeURIComponent(id)}`);
+    if (!res.ok) throw new APIError(`Failed to fetch policy ${id}`, res.status);
+    return res.json();
+  },
+
+  async getPolicyVersion(id: string, version: number): Promise<PolicyResponse> {
+    const res = await fetch(`${API_BASE}/policies/${encodeURIComponent(id)}/v${version}`);
+    if (!res.ok) throw new APIError(`Failed to fetch policy ${id} v${version}`, res.status);
+    return res.json();
+  },
+
+  async getPolicyVersionYaml(id: string, version: number): Promise<string> {
+    const res = await fetch(`${API_BASE}/policies/${encodeURIComponent(id)}/v${version}`, {
+      headers: { 'Accept': 'application/x-yaml' }
+    });
+    if (!res.ok) throw new APIError(`Failed to fetch policy ${id} v${version} YAML`, res.status);
+    return res.text();
+  },
+
+  async createPolicy(policy: { id: string; status: 'active' | 'draft' | 'archived'; rules: PolicyRule[]; created_by?: string }): Promise<PolicyResponse> {
+    const res = await fetch(`${API_BASE}/policies`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(policy)
+    });
+    if (!res.ok) {
+      const errBody = await res.json().catch(() => ({}));
+      throw new APIError(errBody.detail || 'Failed to create policy', res.status);
+    }
+    return res.json();
+  },
+
+  async updatePolicy(id: string, policy: { status: 'active' | 'draft' | 'archived'; rules: PolicyRule[]; created_by?: string }): Promise<PolicyResponse> {
+    const res = await fetch(`${API_BASE}/policies/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(policy)
+    });
+    if (!res.ok) {
+      const errBody = await res.json().catch(() => ({}));
+      throw new APIError(errBody.detail || 'Failed to update policy', res.status);
+    }
+    return res.json();
+  },
+
+  async validatePolicy(yamlContent: string): Promise<PolicyValidateResponse> {
+    const res = await fetch(`${API_BASE}/policies/validate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ yaml: yamlContent })
+    });
+    if (!res.ok) throw new APIError('Failed to validate policy', res.status);
+    return res.json();
   }
 };
 
@@ -165,3 +229,20 @@ export interface SuccessMetricsResponse {
   timeline: SuccessTimeSeriesPoint[];
   top_blocked_tools: BlockedToolPoint[];
 }
+
+export type PolicySummary = components["schemas"]["PolicySummary"];
+
+export interface PolicyListResponse {
+  policies: PolicySummary[];
+  total: number;
+}
+
+export type PolicyRule = components["schemas"]["PolicyRule"];
+export type PolicyResponse = components["schemas"]["PolicyResponse"];
+
+export interface PolicyValidateResponse {
+  valid: boolean;
+  errors: string[];
+  policy?: Omit<PolicyResponse, 'content_hash'> | null;
+}
+

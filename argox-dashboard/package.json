@@ -12,6 +12,7 @@
     "check:api": "openapi-typescript ../argox-project/argox-collector/openapi.json -o /tmp/argox-schema.ts && diff -u src/api/schema.ts /tmp/argox-schema.ts"
   },
   "dependencies": {
+    "@monaco-editor/react": "^4.7.0",
     "clsx": "^2.1.1",
     "lucide-react": "^1.17.0",
     "react": "^19.2.6",

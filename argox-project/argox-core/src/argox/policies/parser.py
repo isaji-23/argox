@@ -112,7 +112,7 @@ class PolicyParser:
     def parse_yaml(self, yaml_content: str) -> PolicyDocument:
         try:
             data = yaml.safe_load(yaml_content)
-        except yaml.YAMLError as e:
+        except Exception as e:
             raise ValueError(f"Failed to parse YAML: {e}") from e
 
         if data is None:

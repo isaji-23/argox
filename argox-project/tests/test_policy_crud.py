@@ -119,6 +119,25 @@ def test_get_specific_version(client: TestClient) -> None:
     assert client.get(f"{BASE}/missing/v1").status_code == 404
 
 
+def test_get_policy_as_yaml(client: TestClient) -> None:
+    client.post(BASE, json=_policy("pol_a"))
+
+    # Get active policy as YAML
+    response = client.get(f"{BASE}/pol_a", headers={"Accept": "application/x-yaml"})
+    assert response.status_code == 200
+    assert "application/x-yaml" in response.headers["Content-Type"]
+    doc = yaml.safe_load(response.text)
+    assert doc["id"] == "pol_a"
+    assert doc["version"] == 1
+
+    # Get specific version as YAML
+    response_v1 = client.get(f"{BASE}/pol_a/v1", headers={"Accept": "application/x-yaml"})
+    assert response_v1.status_code == 200
+    assert "application/x-yaml" in response_v1.headers["Content-Type"]
+    doc_v1 = yaml.safe_load(response_v1.text)
+    assert doc_v1["id"] == "pol_a"
+
+
 # ---------------------------------------------------------------------------
 # Update (new version)
 # ---------------------------------------------------------------------------
@@ -359,3 +378,52 @@ def test_lost_cas_blobs_are_not_reachable_via_api(
     storage.put("policies/pol_a/deadbeef.yaml", b"id: rogue\nversion: 99\n")
     # Version lookups go through the manifest only.
     assert client.get(f"{BASE}/pol_a/v99").status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Policy validation (dry-run)
+# ---------------------------------------------------------------------------
+
+
+def test_validate_valid_policy(client: TestClient) -> None:
+    valid_yaml = """
+id: pol_a
+version: 1
+status: active
+rules:
+  - id: rule_1
+    trigger: on_input
+    condition:
+      metric: prompt
+      operator: contains
+      threshold: secret
+    action: block
+"""
+    response = client.post(f"{BASE}/validate", json={"yaml": valid_yaml})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["valid"] is True
+    assert body["errors"] == []
+
+
+def test_validate_invalid_policy(client: TestClient) -> None:
+    invalid_yaml = """
+id: pol_a
+version: 1
+status: active
+rules:
+  - id: rule_1
+    trigger: on_input
+    condition:
+      metric: prompt
+      operator: bad_op
+      threshold: secret
+    action: block
+"""
+    response = client.post(f"{BASE}/validate", json={"yaml": invalid_yaml})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["valid"] is False
+    assert len(body["errors"]) > 0
+    assert "validation failed" in body["errors"][0].lower()
+

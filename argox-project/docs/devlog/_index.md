@@ -8,6 +8,7 @@ for the decisions behind these changes and
 
 | Date | Ticket | Title | PR | Status |
 |---|---|---|---|---|
+| 2026-06-23 | DASH-04 | Policy editor with Monaco (live YAML editing) | #91 | in-review |
 | 2026-06-22 | DASH-03 | Metrics dashboard (cost, latency, success ratio) | #90 | in-review |
 | 2026-06-22 | COL-14 | Chain run records into the WORM audit log | #158 | in-review |
 | 2026-06-22 | COL-13 | Query API extension for run records | #157 | in-review |
