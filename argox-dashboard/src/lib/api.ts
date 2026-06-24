@@ -44,6 +44,53 @@ export interface TraceDetailResponse {
   duration_ms: number | null;
 }
 
+export interface RunToolCall {
+  name: string;
+  duration: number;
+  blocked: boolean;
+  result?: string | null;
+  block_reason?: string | null;
+}
+
+export interface RunApiCallToken {
+  call: number;
+  input: number;
+  output: number;
+  total: number;
+}
+
+export interface RunDetail {
+  run_id: string;
+  trace_id?: string | null;
+  agent_name?: string | null;
+  agent_version?: string | null;
+  timestamp?: string | null;
+  success?: boolean | null;
+  duration_seconds?: number | null;
+  cost_usd?: number | null;
+  model?: string | null;
+  prompt?: string;
+  final_output?: string;
+  tokens?: {
+    input?: number;
+    output?: number;
+    total?: number;
+    by_api_call?: RunApiCallToken[];
+  };
+  tools?: {
+    available?: string[];
+    blocked?: any[];
+    called?: RunToolCall[];
+  };
+  policies?: {
+    input_passed?: boolean;
+    output_passed?: boolean;
+    violations?: string[];
+  };
+  exporter_errors?: string[];
+  phase_timings_ms?: Record<string, number>;
+}
+
 export class APIError extends Error {
   status: number;
   constructor(message: string, status: number) {
@@ -83,6 +130,15 @@ export const api = {
     const res = await fetch(`${API_BASE}/traces/${encodeURIComponent(traceId)}`);
     if (!res.ok) {
       const msg = res.status === 404 ? `Trace ${traceId} not found` : `Failed to fetch trace ${traceId}`;
+      throw new APIError(msg, res.status);
+    }
+    return res.json();
+  },
+
+  async getRunByTrace(traceId: string): Promise<RunDetail> {
+    const res = await fetch(`${API_BASE}/runs/by-trace/${encodeURIComponent(traceId)}`);
+    if (!res.ok) {
+      const msg = res.status === 404 ? `Run not found for trace ${traceId}` : `Failed to fetch run for trace ${traceId}`;
       throw new APIError(msg, res.status);
     }
     return res.json();
