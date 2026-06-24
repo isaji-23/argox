@@ -120,7 +120,7 @@ build_image() {
      az acr repository show -n "$ACR" --image "$repo:$TAG" >/dev/null 2>&1; then
     echo "  $repo:$TAG already in registry; skipping (FORCE_BUILD=1 to rebuild)"
   else
-    az acr build -r "$ACR" -t "$repo:$TAG" "${file_arg[@]}" "$ctx"
+    az acr build -r "$ACR" -t "$repo:$TAG" "${file_arg[@]+"${file_arg[@]}"}" "$ctx"
   fi
 }
 build_image argox-collector "$COLLECTOR_CTX" "$COLLECTOR_DOCKERFILE"
