@@ -50,7 +50,7 @@ export function KeysScreen() {
   // Admin credential, persisted in its own localStorage slot.
   const [adminKey, setAdminKey] = useState(() => getAdminToken() ?? '');
   const [reveal, setReveal] = useState(false);
-  const [credInvalid, setCredInvalid] = useState(false);
+  const [credError, setCredError] = useState<string | null>(null);
 
   // Key list.
   const [keys, setKeys] = useState<ApiKeyView[]>([]);
@@ -67,6 +67,7 @@ export function KeysScreen() {
   // One-time raw secret shown after a successful create.
   const [newSecret, setNewSecret] = useState<ApiKeyCreateResponse | null>(null);
   const [copied, setCopied] = useState(false);
+  const [copyFailed, setCopyFailed] = useState(false);
 
   const hasAdminKey = Boolean(getAdminToken());
 
@@ -80,8 +81,12 @@ export function KeysScreen() {
     setError(null);
     try {
       const res = await api.listKeys();
-      // Newest first; the backend already orders this way, but be defensive.
-      setKeys(res.keys);
+      // Sort newest first. The backend already orders this way, but sorting
+      // client-side keeps the table stable regardless of response order.
+      const sorted = [...res.keys].sort(
+        (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+      );
+      setKeys(sorted);
     } catch (err) {
       setError(err instanceof APIError ? err.message : 'Failed to list API keys');
     } finally {
@@ -105,17 +110,23 @@ export function KeysScreen() {
   }, [fetchKeys]);
 
   const handleSaveCred = () => {
-    if (!setAdminToken(adminKey)) {
-      setCredInvalid(true);
+    // Saving an empty field would silently clear the stored credential and
+    // report success. Clearing is an explicit action — use "Remove" instead.
+    if (!adminKey.trim()) {
+      setCredError('Enter an admin key, or use Remove to clear the stored one.');
       return;
     }
-    setCredInvalid(false);
+    if (!setAdminToken(adminKey)) {
+      setCredError('Invalid key: remove line breaks or control characters and try again.');
+      return;
+    }
+    setCredError(null);
   };
 
   const handleClearCred = () => {
     clearAdminToken();
     setAdminKey('');
-    setCredInvalid(false);
+    setCredError(null);
   };
 
   const toggleScope = (scope: KeyScope) => {
@@ -144,6 +155,7 @@ export function KeysScreen() {
       });
       setNewSecret(res);
       setCopied(false);
+      setCopyFailed(false);
       setName('');
       setScopes(['read']);
       setExpiryIdx(0);
@@ -169,11 +181,17 @@ export function KeysScreen() {
 
   const copySecret = async () => {
     if (!newSecret) return;
+    setCopyFailed(false);
+    // navigator.clipboard is undefined outside a secure context (plain HTTP on
+    // a non-localhost host). Fall back to a clear failure hint rather than
+    // doing nothing — the secret is still selectable in the code block.
     try {
+      if (!navigator.clipboard?.writeText) throw new Error('clipboard unavailable');
       await navigator.clipboard.writeText(newSecret.key);
       setCopied(true);
     } catch {
       setCopied(false);
+      setCopyFailed(true);
     }
   };
 
@@ -194,10 +212,10 @@ export function KeysScreen() {
           {hasAdminKey && <Badge tone="allow">connected</Badge>}
         </div>
         <div className="px-5 py-4 flex flex-col gap-3">
-          {credInvalid && (
+          {credError && (
             <div className="flex items-start gap-2 text-sm text-block-bright bg-block-bg border border-block-border rounded-md px-3 py-2 leading-normal">
               <Icon name="warn" size={15} className="mt-0.5 flex-shrink-0" />
-              <span>Invalid key: remove line breaks or control characters and try again.</span>
+              <span>{credError}</span>
             </div>
           )}
           <div className="flex items-center gap-2">
@@ -205,7 +223,7 @@ export function KeysScreen() {
               <input
                 type={reveal ? 'text' : 'password'}
                 value={adminKey}
-                onChange={(e) => { setAdminKey(e.target.value); setCredInvalid(false); }}
+                onChange={(e) => { setAdminKey(e.target.value); setCredError(null); }}
                 onKeyDown={(e) => { if (e.key === 'Enter') handleSaveCred(); }}
                 placeholder="argox_… (admin scope)"
                 autoComplete="off"
@@ -260,6 +278,11 @@ export function KeysScreen() {
                 {copied ? 'Copied' : 'Copy'}
               </Button>
             </div>
+            {copyFailed && (
+              <div className="text-sm text-block-bright leading-normal">
+                Copy is unavailable here (clipboard needs HTTPS or localhost) — select the key above and copy it manually.
+              </div>
+            )}
             <div className="text-sm text-text-muted leading-normal">
               The Collector stores only a hash — it cannot be retrieved later. If you lose it, revoke and mint a new one.
             </div>
