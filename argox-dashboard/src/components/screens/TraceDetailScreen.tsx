@@ -23,55 +23,75 @@ export function TraceDetailScreen({ traceId, onBack }: TraceDetailScreenProps) {
   const [run, setRun] = useState<RunDetail | null>(null);
   const [loadingRun, setLoadingRun] = useState(false);
   const [runError, setRunError] = useState<string | null>(null);
-
-  const fetchTrace = useCallback(async () => {
-    if (!traceId) {
-      setLoading(false);
-      return;
-    }
-    setLoading(true);
-    setError(null);
-    try {
-      const data = await api.getTrace(traceId);
-      setSpans(data.spans);
-      setTruncated(data.truncated);
-      setDurationMs(data.duration_ms);
-      if (data.spans.length > 0) {
-        setSelectedSpanId(data.spans[0].span_id);
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unknown error');
-    } finally {
-      setLoading(false);
-    }
-  }, [traceId]);
-
-  const fetchRun = useCallback(async () => {
-    if (!traceId) {
-      setRun(null);
-      return;
-    }
-    setLoadingRun(true);
-    setRunError(null);
-    try {
-      const data = await api.getRunByTrace(traceId);
-      setRun(data);
-    } catch (err) {
-      if (err instanceof APIError && err.status === 404) {
-        setRun(null);
-      } else {
-        setRunError(err instanceof Error ? err.message : 'Failed to load run record');
-        setRun(null);
-      }
-    } finally {
-      setLoadingRun(false);
-    }
-  }, [traceId]);
+  const [retryTrigger, setRetryTrigger] = useState(0);
 
   useEffect(() => {
-    fetchTrace();
-    fetchRun();
-  }, [fetchTrace, fetchRun]);
+    let ignore = false;
+
+    const fetchAll = async () => {
+      if (!traceId) {
+        setSpans([]);
+        setRun(null);
+        setLoading(false);
+        setLoadingRun(false);
+        return;
+      }
+
+      setLoading(true);
+      setError(null);
+      try {
+        const data = await api.getTrace(traceId);
+        if (!ignore) {
+          setSpans(data.spans);
+          setTruncated(data.truncated);
+          setDurationMs(data.duration_ms);
+          if (data.spans.length > 0) {
+            setSelectedSpanId(data.spans[0].span_id);
+          }
+        }
+      } catch (err) {
+        if (!ignore) {
+          setError(err instanceof Error ? err.message : 'Unknown error');
+        }
+      } finally {
+        if (!ignore) {
+          setLoading(false);
+        }
+      }
+
+      setLoadingRun(true);
+      setRunError(null);
+      try {
+        const data = await api.getRunByTrace(traceId);
+        if (!ignore) {
+          setRun(data);
+        }
+      } catch (err) {
+        if (!ignore) {
+          if (err instanceof APIError && err.status === 404) {
+            setRun(null);
+          } else {
+            setRunError(err instanceof Error ? err.message : 'Failed to load run record');
+            setRun(null);
+          }
+        }
+      } finally {
+        if (!ignore) {
+          setLoadingRun(false);
+        }
+      }
+    };
+
+    fetchAll();
+
+    return () => {
+      ignore = true;
+    };
+  }, [traceId, retryTrigger]);
+
+  const handleRetry = useCallback(() => {
+    setRetryTrigger(prev => prev + 1);
+  }, []);
 
   const traceSummary = useMemo(() => {
     if (spans.length === 0) return null;
@@ -123,7 +143,7 @@ export function TraceDetailScreen({ traceId, onBack }: TraceDetailScreenProps) {
   if (loading) return <div className="h-full flex items-center justify-center text-text-muted animate-pulse">Loading trace...</div>;
   if (error || !traceSummary) return (
     <div className="p-10">
-      <ErrorState title="Failed to load trace" body={error || 'Trace not found'} onRetry={fetchTrace} />
+      <ErrorState title="Failed to load trace" body={error || 'Trace not found'} onRetry={handleRetry} />
       <Button variant="ghost" className="mt-4" onClick={onBack}>Back to Traces</Button>
     </div>
   );
@@ -280,22 +300,22 @@ export function TraceDetailScreen({ traceId, onBack }: TraceDetailScreenProps) {
                             {run.tokens.by_api_call.map((call, idx) => (
                               <tr key={idx} className="hover:bg-surface-3/30 transition-colors">
                                 <td className="px-3 py-2 font-mono text-text-primary">#{call.call}</td>
-                                <td className="px-3 py-2 font-mono text-text-secondary text-right">{call.input?.toLocaleString()}</td>
-                                <td className="px-3 py-2 font-mono text-text-secondary text-right">{call.output?.toLocaleString()}</td>
-                                <td className="px-3 py-2 font-mono text-text-primary font-semibold text-right">{(call.input + call.output)?.toLocaleString()}</td>
+                                <td className="px-3 py-2 font-mono text-text-secondary text-right">{call.input != null ? call.input.toLocaleString() : '-'}</td>
+                                <td className="px-3 py-2 font-mono text-text-secondary text-right">{call.output != null ? call.output.toLocaleString() : '-'}</td>
+                                <td className="px-3 py-2 font-mono text-text-primary font-semibold text-right">{call.total != null ? call.total.toLocaleString() : '-'}</td>
                               </tr>
                             ))}
                             {run.tokens.by_api_call.length > 1 && (
                               <tr className="bg-surface-3/20 font-bold border-t border-border">
                                 <td className="px-3 py-2 text-text-primary">Total</td>
                                 <td className="px-3 py-2 font-mono text-text-primary text-right">
-                                  {run.tokens.input?.toLocaleString() || run.tokens.by_api_call.reduce((sum, c) => sum + (c.input || 0), 0).toLocaleString()}
+                                  {run.tokens.input != null ? run.tokens.input.toLocaleString() : run.tokens.by_api_call.reduce((sum, c) => sum + (c.input || 0), 0).toLocaleString()}
                                 </td>
                                 <td className="px-3 py-2 font-mono text-text-primary text-right">
-                                  {run.tokens.output?.toLocaleString() || run.tokens.by_api_call.reduce((sum, c) => sum + (c.output || 0), 0).toLocaleString()}
+                                  {run.tokens.output != null ? run.tokens.output.toLocaleString() : run.tokens.by_api_call.reduce((sum, c) => sum + (c.output || 0), 0).toLocaleString()}
                                 </td>
                                 <td className="px-3 py-2 font-mono text-accent text-right">
-                                  {run.tokens.total?.toLocaleString() || run.tokens.by_api_call.reduce((sum, c) => sum + (c.input + c.output || 0), 0).toLocaleString()}
+                                  {run.tokens.total != null ? run.tokens.total.toLocaleString() : run.tokens.by_api_call.reduce((sum, c) => sum + (c.total || 0), 0).toLocaleString()}
                                 </td>
                               </tr>
                             )}
