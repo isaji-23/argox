@@ -1,16 +1,32 @@
-# Local single-command stack for development and the TFM demo (DEPLOY-01).
+# Argox stack: one Compose file for two targets.
 #
-#   docker compose up --build            # Collector + Dashboard + Azurite
-#   docker compose --profile otel up     # ... plus the OTel collector sidecar
+#   Local dev (Azurite blob emulator, no real Azure needed):
+#     cp .env.example .env            # ships with the Azurite dev defaults
+#     docker compose --profile local up --build
 #
-# See README.md in this directory for ports, environment variables and how to
-# seed demo data.
+#   Azure-backed run (real Blob Storage; same images, different .env):
+#     cp .env.example .env            # then set the Azure values, see below
+#     docker compose up --build
+#
+#   Add the OTel inspection sidecar to either:  ... --profile otel up
+#
+# Azure Container Apps:
+#   The default (no-profile) services are authored for ACA import:
+#     az containerapp compose create -g <rg> --environment <env> -f compose.yaml
+#   Azurite carries the `local` profile so it is NOT imported. Import is lossy —
+#   it cannot express the DuckDB persistent volume, the single-replica pin, the
+#   collector's internal ingress, or secret wiring. See README.md ("Deploy to
+#   Azure Container Apps") for the required post-import `az` steps.
 
 name: argox
 
 services:
+  # Azure Blob Storage emulator. LOCAL ONLY: carries the `local` profile so it
+  # never starts for an Azure-backed run or an ACA import. For local use, point
+  # ARGOX_STORAGE_AZURE_CONNECTION_STRING at it (the .env.example default).
   azurite:
     image: mcr.microsoft.com/azure-storage/azurite:3.35.0
+    profiles: ["local"]
     restart: unless-stopped
     # Blob service only: the Collector storage backend needs nothing else.
     # --skipApiVersionCheck: the azure-storage-blob SDK pinned by the
@@ -18,8 +34,7 @@ services:
     # release; the emulator rejects it otherwise (InvalidHeaderValue).
     command: azurite-blob --blobHost 0.0.0.0 --blobPort 10000 --location /data --skipApiVersionCheck
     ports:
-      # Loopback only: the stack has no auth (COL-09), so the blob endpoint
-      # must not be reachable beyond the host.
+      # Loopback only: the emulator holds no real data but stays off the LAN.
       - "127.0.0.1:10000:10000"
     volumes:
       - azurite-data:/data
@@ -36,25 +51,50 @@ services:
     image: argox-collector:local
     restart: unless-stopped
     environment:
-      ARGOX_ENVIRONMENT: local
-      ARGOX_LOG_LEVEL: INFO
+      ARGOX_ENVIRONMENT: ${ARGOX_ENVIRONMENT:-production}
+      ARGOX_LOG_LEVEL: ${ARGOX_LOG_LEVEL:-INFO}
+
+      # -- Blob storage (connection string) --------------------------------
+      # Local: the Azurite well-known dev string (see .env.example).
+      # Azure: a real Storage account string. On ACA, wire this as a secret
+      # instead of a literal (README "Deploy to Azure Container Apps").
       ARGOX_STORAGE_BACKEND: azure
-      # Azurite's well-known development credentials (public, not a secret):
-      # https://learn.microsoft.com/azure/storage/common/storage-use-azurite#well-known-storage-account-and-key
-      ARGOX_STORAGE_AZURE_CONNECTION_STRING: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite:10000/devstoreaccount1;"
-      ARGOX_STORAGE_AZURE_CONTAINER: argox
+      ARGOX_STORAGE_AZURE_CONNECTION_STRING: ${ARGOX_STORAGE_AZURE_CONNECTION_STRING:?set it in .env (Azurite string for local, real Storage string for Azure)}
+      ARGOX_STORAGE_AZURE_CONTAINER: ${ARGOX_STORAGE_AZURE_CONTAINER:-argox}
+
+      # DuckDB index. Lives on a writable mount that must persist (collector-data
+      # locally; an Azure Files mount on ACA). DuckDB allows a single writer, so
+      # the collector must run exactly one replica (COL-15 is multi-replica).
       ARGOX_INDEX_DUCKDB_PATH: /data/index.duckdb
-      # Allow the nginx-served dashboard and the Vite dev server to call the
-      # API directly; same-origin calls through the nginx proxy need neither.
-      ARGOX_CORS_ORIGINS: http://localhost:8080,http://localhost:5173
-    ports:
-      # Loopback only: no auth yet (COL-09), keep the API off the LAN.
-      - "127.0.0.1:${COLLECTOR_PORT:-8000}:8000"
+
+      # -- Authentication (COL-09): ON. Every endpoint except /healthz and
+      # /readyz needs a bearer credential. -------------------------------------
+      ARGOX_AUTH_ENABLED: "true"
+      # Break-glass admin key: mints the first real API key over HTTP. Required
+      # for a usable deployment; keep it secret (ACA secret on Azure).
+      ARGOX_BOOTSTRAP_ADMIN_KEY: ${ARGOX_BOOTSTRAP_ADMIN_KEY:?set a strong value in .env}
+      # OIDC for dashboard users (Microsoft Entra ID). All three must be set
+      # together to enable JWT auth; leave blank to use API keys only.
+      ARGOX_OIDC_ISSUER: ${ARGOX_OIDC_ISSUER:-}
+      ARGOX_OIDC_AUDIENCE: ${ARGOX_OIDC_AUDIENCE:-}
+      ARGOX_OIDC_JWKS_URI: ${ARGOX_OIDC_JWKS_URI:-}
+      ARGOX_OIDC_ADMIN_ROLE: ${ARGOX_OIDC_ADMIN_ROLE:-}
+      ARGOX_OIDC_POLICY_WRITE_ROLE: ${ARGOX_OIDC_POLICY_WRITE_ROLE:-}
+
+      # CORS: only needed when a browser calls the Collector cross-origin. The
+      # dashboard proxies same-origin, so this stays empty unless you hit the
+      # API from the Vite dev server or another host.
+      ARGOX_CORS_ORIGINS: ${ARGOX_CORS_ORIGINS:-}
+    # `expose` (not `ports`) keeps the Collector private: reachable only by the
+    # dashboard over the Compose/ACA network, never published to the host or
+    # given external ingress. Uncomment the loopback mapping below for local
+    # debugging (e.g. seeding via curl) — keep it off for Azure.
+    expose:
+      - "8000"
+    # ports:
+    #   - "127.0.0.1:${COLLECTOR_PORT:-8000}:8000"
     volumes:
       - collector-data:/data
-    depends_on:
-      azurite:
-        condition: service_healthy
     # Healthcheck (GET /healthz) is baked into the image Dockerfile.
 
   dashboard:
@@ -62,10 +102,14 @@ services:
       context: ../../argox-dashboard
     image: argox-dashboard:local
     restart: unless-stopped
+    environment:
+      # nginx proxies /api and /v1 here. Default targets the Compose service;
+      # set to http://collector on ACA (internal ingress, port 80).
+      COLLECTOR_UPSTREAM: ${COLLECTOR_UPSTREAM:-http://collector:8000}
     ports:
-      # Loopback only; override when 8080 is taken on the host:
-      # DASHBOARD_PORT=8088 docker compose up
-      - "127.0.0.1:${DASHBOARD_PORT:-8080}:80"
+      # The only externally published service. Override the host port when 8080
+      # is taken: DASHBOARD_PORT=8088 docker compose up
+      - "${DASHBOARD_BIND:-127.0.0.1}:${DASHBOARD_PORT:-8080}:80"
     depends_on:
       collector:
         condition: service_healthy
