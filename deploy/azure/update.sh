@@ -31,7 +31,10 @@ fi
 RG="${RG:-TFM-Aliando}"
 ACR="${ACR:-argoxacraliando}"
 ACR_SERVER="$ACR.azurecr.io"
-COLLECTOR_CTX="../../argox-project/argox-collector"
+# Collector context is the argox-project/ parent so the image can bundle the
+# sibling argox-core package it imports; its Dockerfile is addressed with -f.
+COLLECTOR_CTX="../../argox-project"
+COLLECTOR_DOCKERFILE="argox-collector/Dockerfile"
 DASHBOARD_CTX="../../argox-dashboard"
 
 log() { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
@@ -72,7 +75,7 @@ case "$CMD" in
 
     build_collector() {
       log "Building argox-collector:$NEWTAG"
-      az acr build -r "$ACR" -t "argox-collector:$NEWTAG" "$COLLECTOR_CTX"
+      az acr build -r "$ACR" -t "argox-collector:$NEWTAG" -f "$COLLECTOR_DOCKERFILE" "$COLLECTOR_CTX"
       log "Rolling collector to $NEWTAG"
       az containerapp update -n collector -g "$RG" --image "$ACR_SERVER/argox-collector:$NEWTAG"
     }

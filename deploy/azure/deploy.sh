@@ -33,8 +33,11 @@ STORAGE="${STORAGE:-argoxstgaliando}"
 TAG="${TAG:-v1}"
 ADMIN_KEY="${ADMIN_KEY:-}"
 
-# Repo-relative build contexts.
-COLLECTOR_CTX="../../argox-project/argox-collector"
+# Repo-relative build contexts. The collector context is the argox-project/
+# parent so the image can bundle the sibling argox-core package it imports; its
+# Dockerfile is addressed with -f (see build_image / COLLECTOR_DOCKERFILE).
+COLLECTOR_CTX="../../argox-project"
+COLLECTOR_DOCKERFILE="argox-collector/Dockerfile"
 DASHBOARD_CTX="../../argox-dashboard"
 
 log() { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
@@ -110,15 +113,17 @@ log "Building images in ACR (cloud build, no local Docker)"
 # Skip a build when the tag already exists, unless FORCE_BUILD=1. ACR builds are
 # unconditional otherwise, so a plain re-run rebuilds both images at $TAG.
 build_image() {
-  local repo="$1" ctx="$2"
+  local repo="$1" ctx="$2" dockerfile="${3:-}"
+  local file_arg=()
+  [[ -n "$dockerfile" ]] && file_arg=(-f "$dockerfile")
   if [[ "${FORCE_BUILD:-0}" != "1" ]] && \
      az acr repository show -n "$ACR" --image "$repo:$TAG" >/dev/null 2>&1; then
     echo "  $repo:$TAG already in registry; skipping (FORCE_BUILD=1 to rebuild)"
   else
-    az acr build -r "$ACR" -t "$repo:$TAG" "$ctx"
+    az acr build -r "$ACR" -t "$repo:$TAG" "${file_arg[@]+"${file_arg[@]}"}" "$ctx"
   fi
 }
-build_image argox-collector "$COLLECTOR_CTX"
+build_image argox-collector "$COLLECTOR_CTX" "$COLLECTOR_DOCKERFILE"
 build_image argox-dashboard "$DASHBOARD_CTX"
 
 ACR_SERVER="$ACR.azurecr.io"

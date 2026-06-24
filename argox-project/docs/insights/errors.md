@@ -8,6 +8,32 @@ and resolves a non-trivial error.
 
 <!-- Add new entries directly below this line, newest first. -->
 
+## 2026-06-24 — Collector image missing argox-core; charts show "No data"  [COL-20]
+- **Symptom:** Dashboard metrics charts all rendered "No data within this
+  window" while KPI cards still showed values. The deployed collector's
+  `/api/v1/metrics/cost` returned `{window_hours, total_cost, trace_count}` with
+  no `timeline`/`top_agents`, so the frontend's `?? []` guards produced empty
+  charts. Rebuilding the collector from current `dev` and rolling it out made the
+  Azure Container Apps revision Unhealthy; logs showed
+  `ModuleNotFoundError: No module named 'argox'` at
+  `routers/policies.py:41` (`from argox.policies.parser import PolicyParser`).
+- **Root cause:** The collector imports the sibling `argox-core` package but
+  never declared it as a dependency, and the Docker build context was the
+  `argox-collector/` subdirectory only, so `argox-core` never entered the image.
+  The previously deployed image worked solely because it predated both the import
+  and the metrics timeline fields. A second failure surfaced during recovery:
+  with DuckDB on Azure Files (single writer), a new collector revision could not
+  acquire the index lock until the old revision was deactivated.
+- **Fix:** PR #178 — declared `argox-core>=0.1.0` in the collector's
+  dependencies; build from the `argox-project/` parent context and install
+  `argox-core` before `argox-collector[azure]`; pointed `COLLECTOR_CTX` at the
+  parent and addressed the Dockerfile with `-f` in `deploy.sh` and `update.sh`.
+  Immediate production recovery: rolled the collector back to the last working
+  tag, then deactivated the stale revision to release the DuckDB lock.
+- **Guard:** `tests/test_app_import.py` imports `argox.policies.parser` and
+  `argox_collector.app`, failing the suite if `argox-core` is missing from the
+  environment before any image is built.
+
 ## 2026-06-10 — NaN attribute values poison metrics and silently drop spans  [COL-04]
 - **Symptom:** Two failure modes found by audit, not in production: (1) an OTLP
   double attribute carrying NaN (or a string `"nan"`) lands in `run_cost`, after
