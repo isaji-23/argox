@@ -5,7 +5,9 @@ import { TracesScreen } from './components/screens/TracesScreen';
 import { TraceDetailScreen } from './components/screens/TraceDetailScreen';
 import { MetricsScreen } from './components/screens/MetricsScreen';
 import { PoliciesScreen } from './components/screens/PoliciesScreen';
+import { AuthDialog } from './components/ui/AuthDialog';
 import { AGENTS } from './data/mockData';
+import { AUTH_REQUIRED_EVENT, TOKEN_CHANGED_EVENT, authBus, getToken } from './lib/auth';
 
 type Route = 'metrics' | 'traces' | 'trace' | 'policies' | 'system';
 
@@ -21,6 +23,39 @@ function App() {
   const [agent, setAgent] = useState('all');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [selectedTraceId, setSelectedTraceId] = useState<string | null>(null);
+
+  // Authentication state.
+  const [authOpen, setAuthOpen] = useState(false);
+  const [authError, setAuthError] = useState(false);
+  const [hasCredential, setHasCredential] = useState(() => Boolean(getToken()));
+  // Bumped on credential change to remount screens and force a refetch.
+  const [reloadKey, setReloadKey] = useState(0);
+
+  // Open the key dialog automatically when a request is rejected (401/403).
+  // Parallel calls (e.g. the three metrics queries) fire several events at
+  // once; only react when the dialog is not already open to avoid churn.
+  useEffect(() => {
+    const onAuthRequired = () => {
+      setAuthOpen((open) => {
+        if (!open) setAuthError(true);
+        return true;
+      });
+    };
+    authBus.addEventListener(AUTH_REQUIRED_EVENT, onAuthRequired);
+    return () => authBus.removeEventListener(AUTH_REQUIRED_EVENT, onAuthRequired);
+  }, []);
+
+  // Keep the header's credential indicator in sync with the stored key,
+  // including changes made in another tab.
+  useEffect(() => {
+    const onTokenChanged = () => setHasCredential(Boolean(getToken()));
+    authBus.addEventListener(TOKEN_CHANGED_EVENT, onTokenChanged);
+    window.addEventListener('storage', onTokenChanged);
+    return () => {
+      authBus.removeEventListener(TOKEN_CHANGED_EVENT, onTokenChanged);
+      window.removeEventListener('storage', onTokenChanged);
+    };
+  }, []);
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
@@ -103,11 +138,23 @@ function App() {
           setAgent={setAgent}
           agents={AGENTS}
           onToggleSidebar={() => setSidebarCollapsed(!sidebarCollapsed)}
+          onOpenAuth={() => { setAuthError(false); setAuthOpen(true); }}
+          hasCredential={hasCredential}
         />
-        <main className="flex-1 overflow-y-auto min-h-0 bg-background">
+        <main key={reloadKey} className="flex-1 overflow-y-auto min-h-0 bg-background">
           {renderScreen()}
         </main>
       </div>
+
+      <AuthDialog
+        open={authOpen}
+        authError={authError}
+        onClose={() => setAuthOpen(false)}
+        onSaved={() => {
+          // hasCredential is updated by the TOKEN_CHANGED_EVENT listener.
+          setReloadKey((k) => k + 1);
+        }}
+      />
     </div>
   );
 }
