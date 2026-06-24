@@ -1,5 +1,5 @@
 import type { components } from '../api/schema';
-import { getToken, signalAuthRequired } from './auth';
+import { getToken, getAdminToken, signalAuthRequired } from './auth';
 
 const API_BASE = '/api/v1';
 
@@ -87,7 +87,74 @@ async function apiFetch<T>(path: string, errorMessage: string): Promise<T> {
   return res.json();
 }
 
+/**
+ * Fetch wrapper for the admin-only key-management endpoints (DASH-06).
+ *
+ * Unlike {@link apiFetch} this attaches the separately stored **admin** key and
+ * does NOT call `signalAuthRequired` on `401`/`403` — that event opens the read
+ * key dialog, which is the wrong prompt here. The key-management screen handles
+ * auth failures inline via the `APIError` status instead. Supports request
+ * bodies and returns `null` for empty (`204`) responses.
+ *
+ * Args:
+ *   path: API path relative to `API_BASE`.
+ *   errorMessage: fallback message for non-auth failures.
+ *   init: optional fetch overrides (method, JSON body).
+ *
+ * Returns:
+ *   The parsed JSON response body, or `null` on a `204 No Content`.
+ */
+async function adminFetch<T>(
+  path: string,
+  errorMessage: string,
+  init: { method?: string; body?: unknown } = {},
+): Promise<T> {
+  const token = getAdminToken();
+  const headers: Record<string, string> = token
+    ? { Authorization: `Bearer ${token}` }
+    : {};
+  if (init.body !== undefined) headers['Content-Type'] = 'application/json';
+
+  const res = await fetch(`${API_BASE}${path}`, {
+    method: init.method ?? 'GET',
+    headers,
+    body: init.body !== undefined ? JSON.stringify(init.body) : undefined,
+  });
+
+  if (!res.ok) {
+    if (res.status === 401 || res.status === 403) {
+      const msg = res.status === 401
+        ? 'Admin authentication required: enter an admin-scoped Collector key.'
+        : 'Access denied: this key lacks the admin scope.';
+      throw new APIError(msg, res.status);
+    }
+    const errBody = await res.json().catch(() => ({} as { detail?: string }));
+    throw new APIError(errBody.detail || errorMessage, res.status);
+  }
+  if (res.status === 204) return null as T;
+  return res.json();
+}
+
 export const api = {
+  async listKeys(): Promise<ApiKeyListResponse> {
+    return adminFetch<ApiKeyListResponse>('/keys', 'Failed to list API keys');
+  },
+
+  async createKey(payload: ApiKeyCreateRequest): Promise<ApiKeyCreateResponse> {
+    return adminFetch<ApiKeyCreateResponse>('/keys', 'Failed to create API key', {
+      method: 'POST',
+      body: payload,
+    });
+  },
+
+  async revokeKey(keyId: string): Promise<void> {
+    await adminFetch<null>(
+      `/keys/${encodeURIComponent(keyId)}`,
+      `Failed to revoke key ${keyId}`,
+      { method: 'DELETE' },
+    );
+  },
+
   async listTraces(params: {
     skip?: number;
     limit?: number;
@@ -275,5 +342,41 @@ export interface PolicyValidateResponse {
   valid: boolean;
   errors: string[];
   policy?: Omit<PolicyResponse, 'content_hash'> | null;
+}
+
+// API key management (DASH-06). Mirrors the Collector's admin-only key CRUD
+// (`/api/v1/keys`); see argox-collector routers/keys.py.
+
+/** The scopes a key may grant. `admin` implies all others. */
+export type KeyScope = 'read' | 'ingest' | 'policy-read' | 'policy-write' | 'admin';
+
+export interface ApiKeyCreateRequest {
+  name: string;
+  scopes: KeyScope[];
+  /** Optional lifetime in seconds; omit for a non-expiring key. */
+  expires_in?: number;
+}
+
+/** Non-secret metadata view of a stored key. */
+export interface ApiKeyView {
+  id: string;
+  name: string;
+  key_prefix: string;
+  scopes: string[];
+  created_at: string;
+  created_by?: string | null;
+  revoked_at?: string | null;
+  revoked: boolean;
+  expires_at?: string | null;
+}
+
+/** Create response: the metadata view plus the one-time raw secret. */
+export interface ApiKeyCreateResponse extends ApiKeyView {
+  key: string;
+}
+
+export interface ApiKeyListResponse {
+  keys: ApiKeyView[];
+  total: number;
 }
 
