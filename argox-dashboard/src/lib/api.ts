@@ -45,6 +45,58 @@ export interface TraceDetailResponse {
   duration_ms: number | null;
 }
 
+export interface RunToolCall {
+  name: string;
+  duration?: number | null;
+  blocked: boolean;
+  result?: string | null;
+  block_reason?: string | null;
+}
+
+export interface RunToolBlocked {
+  name: string;
+  reason?: string | null;
+}
+
+export interface RunApiCallToken {
+  call: number;
+  input?: number | null;
+  output?: number | null;
+  total?: number | null;
+}
+
+export interface RunDetail {
+  run_id: string;
+  trace_id?: string | null;
+  agent_name?: string | null;
+  agent_version?: string | null;
+  timestamp?: string | null;
+  success?: boolean | null;
+  duration_seconds?: number | null;
+  cost_usd?: number | null;
+  model?: string | null;
+  prompt?: string;
+  final_output?: string;
+  tokens?: {
+    input?: number;
+    output?: number;
+    total?: number;
+    by_api_call?: RunApiCallToken[];
+  };
+  tools?: {
+    available?: string[];
+    blocked?: RunToolBlocked[];
+    called?: RunToolCall[];
+  };
+  policies?: {
+    input_passed?: boolean;
+    output_passed?: boolean;
+    violations?: string[];
+  };
+  exporter_errors?: string[];
+  phase_timings_ms?: Record<string, number>;
+}
+
 export class APIError extends Error {
   status: number;
   constructor(message: string, status: number) {
@@ -190,6 +242,22 @@ export const api = {
       }
       throw err;
     }
+  },
+
+  async getRunByTrace(traceId: string): Promise<RunDetail> {
+    const res = await fetch(`${API_BASE}/runs/by-trace/${encodeURIComponent(traceId)}`);
+    if (!res.ok) {
+      let detail = '';
+      try {
+        const errBody = await res.json();
+        detail = errBody.detail || '';
+      } catch {}
+      const msg = res.status === 404
+        ? `Run not found for trace ${traceId}`
+        : (detail || `Failed to fetch run for trace ${traceId}`);
+      throw new APIError(msg, res.status);
+    }
+    return res.json();
   },
 
   async getCostMetrics(windowHours: number = 24): Promise<CostMetricsResponse> {
