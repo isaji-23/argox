@@ -26,15 +26,35 @@ export function getToken(): string | null {
   return localStorage.getItem(STORAGE_KEY);
 }
 
-/** Persists an API key (trimmed) or clears it when the value is empty. */
-export function setToken(token: string): void {
+/**
+ * Returns true when `token` is safe to send in an `Authorization` header.
+ *
+ * The browser `Headers` constructor throws a `TypeError` on control characters
+ * (e.g. a stray CR/LF from a bad paste), which would escape the `APIError`
+ * flow. Reject any control character up front so the UI can complain cleanly.
+ * An empty string is valid (it clears the stored key).
+ */
+export function isValidToken(token: string): boolean {
+  // eslint-disable-next-line no-control-regex
+  return !/[\x00-\x1F\x7F]/.test(token.trim());
+}
+
+/**
+ * Persists an API key (trimmed) or clears it when the value is empty.
+ *
+ * Returns false without storing anything when the value contains control
+ * characters; otherwise stores it and returns true.
+ */
+export function setToken(token: string): boolean {
   const trimmed = token.trim();
+  if (!isValidToken(trimmed)) return false;
   if (trimmed) {
     localStorage.setItem(STORAGE_KEY, trimmed);
   } else {
     localStorage.removeItem(STORAGE_KEY);
   }
   authBus.dispatchEvent(new Event(TOKEN_CHANGED_EVENT));
+  return true;
 }
 
 /** Removes the stored API key. */

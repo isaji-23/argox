@@ -21,6 +21,7 @@ interface AuthDialogProps {
 export function AuthDialog({ open, authError, onClose, onSaved }: AuthDialogProps) {
   const [value, setValue] = useState('');
   const [reveal, setReveal] = useState(false);
+  const [invalid, setInvalid] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   // Seed the field with the stored key (if any) each time the dialog opens.
@@ -28,6 +29,7 @@ export function AuthDialog({ open, authError, onClose, onSaved }: AuthDialogProp
     if (open) {
       setValue(getToken() ?? '');
       setReveal(false);
+      setInvalid(false);
       // Focus after the element mounts.
       requestAnimationFrame(() => inputRef.current?.focus());
     }
@@ -46,7 +48,10 @@ export function AuthDialog({ open, authError, onClose, onSaved }: AuthDialogProp
   if (!open) return null;
 
   const handleSave = () => {
-    setToken(value);
+    if (!setToken(value)) {
+      setInvalid(true);
+      return;
+    }
     onSaved();
     onClose();
   };
@@ -83,10 +88,16 @@ export function AuthDialog({ open, authError, onClose, onSaved }: AuthDialogProp
         </div>
 
         <div className="px-5 py-4 flex flex-col gap-3">
-          {authError && (
+          {authError && !invalid && (
             <div className="flex items-start gap-2 text-sm text-block-bright bg-block-bg border border-block-border rounded-md px-3 py-2 leading-normal">
               <Icon name="warn" size={15} className="mt-0.5 flex-shrink-0" />
               <span>The Collector rejected the request. Enter a valid key with the <span className="font-mono">read</span> scope.</span>
+            </div>
+          )}
+          {invalid && (
+            <div className="flex items-start gap-2 text-sm text-block-bright bg-block-bg border border-block-border rounded-md px-3 py-2 leading-normal">
+              <Icon name="warn" size={15} className="mt-0.5 flex-shrink-0" />
+              <span>Invalid key: remove line breaks or control characters and try again.</span>
             </div>
           )}
 
@@ -96,7 +107,7 @@ export function AuthDialog({ open, authError, onClose, onSaved }: AuthDialogProp
               ref={inputRef}
               type={reveal ? 'text' : 'password'}
               value={value}
-              onChange={(e) => setValue(e.target.value)}
+              onChange={(e) => { setValue(e.target.value); setInvalid(false); }}
               onKeyDown={(e) => { if (e.key === 'Enter') handleSave(); }}
               placeholder="argox_…"
               autoComplete="off"
