@@ -183,6 +183,13 @@ class ArgoxManager:
             # Promoted by the Collector into the queryable agent name; set early so
             # it is present even if the run raises before completion.
             span.set_attribute(ARGOX_AGENT_NAME, metrics.agent_name)
+            # Link the run to its trace so the Collector's by-trace join
+            # (runs.trace_id = spans.trace_id) resolves; this id matches what the
+            # OTLP span exporter ships for the same span. Guarded because a
+            # sampled-out / non-recording span carries a zero trace id.
+            span_ctx = span.get_span_context()
+            if span_ctx.trace_id:
+                metrics.trace_id = format(span_ctx.trace_id, "032x")
             try:
                 # 1. Process input
                 with self._phase(metrics, "processors_input"):
