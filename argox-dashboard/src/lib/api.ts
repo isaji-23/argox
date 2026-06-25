@@ -35,7 +35,7 @@ export interface SpanDetail {
   policy_decision: string | null;
   run_cost: number | null;
   run_success: boolean | null;
-  attributes: Record<string, any>;
+  attributes: Record<string, unknown>;
 }
 
 export interface TraceDetailResponse {
