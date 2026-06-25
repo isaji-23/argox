@@ -37,6 +37,7 @@ try:
 
     import argox
     from argox.core import init_telemetry
+    from argox.exporters import HttpRunExporter
     from argox.observability import ConsoleSpanLogger, OTLPSpanExporter
     from argox_openai import ArgoxOpenAIPlugin
 except ModuleNotFoundError as exc:  # pragma: no cover - demo guard
@@ -105,6 +106,26 @@ def _build_exporters() -> list:
     return [ConsoleSpanLogger(), OTLPSpanExporter(endpoint=endpoint, headers=headers or None)]
 
 
+def _build_run_exporter() -> "HttpRunExporter":
+    """Post the run summary (prompt, final output, tool calls, tokens) to the
+    Collector's ``/v1/runs`` so the dashboard Run Record screen has data.
+
+    The OTLP path above only ships spans; the Run Record is backed by a separate
+    ``AgentRunMetrics`` payload that ``@argox.monitor`` hands to its registered
+    exporters. ``ARGOX_COLLECTOR_ENDPOINT`` points at the OTLP ``/v1/traces``
+    path, so strip that suffix to get the Collector base; ``HttpRunExporter``
+    appends ``/v1/runs`` itself. ``durable=True`` requests synchronous
+    persistence so the record is committed before this short-lived script exits.
+    """
+    endpoint = os.environ.get("ARGOX_COLLECTOR_ENDPOINT")
+    if not endpoint:
+        raise SystemExit("ARGOX_COLLECTOR_ENDPOINT unset (run this via demo.sh).")
+    base = endpoint.removesuffix("/v1/traces")
+    key = os.environ.get("ARGOX_COLLECTOR_API_KEY")
+    print(f"[runs] posting run records to {base}/v1/runs")
+    return HttpRunExporter(endpoint=base, api_key=key, durable=True)
+
+
 # Keep the provider so we can force_flush the BatchSpanProcessor before exit;
 # a short-lived script would otherwise drop the pending OTLP batch.
 _tracer_provider = init_telemetry(exporters=_build_exporters())
@@ -117,7 +138,11 @@ agent = Agent(
 )
 
 
-@argox.monitor(plugin=ArgoxOpenAIPlugin(), agent=agent)
+@argox.monitor(
+    plugin=ArgoxOpenAIPlugin(),
+    agent=agent,
+    exporters=[_build_run_exporter()],
+)
 async def run_agent(agent: Agent, prompt: str):
     """The instrumented agent run. The decorator injects the monitored agent."""
     return await Runner.run(agent, prompt)

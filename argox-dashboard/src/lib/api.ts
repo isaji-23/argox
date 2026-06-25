@@ -187,6 +187,52 @@ async function adminFetch<T>(
   return res.json();
 }
 
+/**
+ * Fetch wrapper for the policy endpoints (DASH-07).
+ *
+ * Mirrors {@link apiFetch}'s auth handling — it attaches the stored read key,
+ * which also carries the `policy-read`/`policy-write` scopes — but additionally
+ * supports request bodies, a custom `Accept` (the YAML view), and returns the
+ * raw `Response` so callers can read `.json()` or `.text()`. Policy calls used
+ * bare `fetch` with no `Authorization` header, so every one of them returned
+ * `401` whenever Collector auth was enabled (it only worked with auth disabled).
+ *
+ * Args:
+ *   path: API path relative to `API_BASE`.
+ *   errorMessage: fallback message for non-auth failures.
+ *   init: optional fetch overrides (method, JSON body, Accept header).
+ */
+async function policyFetch(
+  path: string,
+  errorMessage: string,
+  init: { method?: string; body?: unknown; accept?: string } = {},
+): Promise<Response> {
+  const token = getToken();
+  const headers: Record<string, string> = {};
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+  if (init.accept) headers['Accept'] = init.accept;
+  if (init.body !== undefined) headers['Content-Type'] = 'application/json';
+
+  const res = await fetch(`${API_BASE}${path}`, {
+    method: init.method ?? 'GET',
+    headers,
+    body: init.body !== undefined ? JSON.stringify(init.body) : undefined,
+  });
+
+  if (!res.ok) {
+    if (res.status === 401 || res.status === 403) {
+      signalAuthRequired();
+      const msg = res.status === 401
+        ? 'Authentication required: enter a Collector API key.'
+        : 'Access denied: this key lacks the policy scope.';
+      throw new APIError(msg, res.status);
+    }
+    const errBody = await res.json().catch(() => ({} as { detail?: string }));
+    throw new APIError(errBody.detail || errorMessage, res.status);
+  }
+  return res;
+}
+
 export const api = {
   async listKeys(): Promise<ApiKeyListResponse> {
     return adminFetch<ApiKeyListResponse>('/keys', 'Failed to list API keys');
@@ -264,64 +310,57 @@ export const api = {
   },
 
   async listPolicies(): Promise<PolicyListResponse> {
-    const res = await fetch(`${API_BASE}/policies`);
-    if (!res.ok) throw new APIError('Failed to fetch policies', res.status);
+    const res = await policyFetch('/policies', 'Failed to fetch policies');
     return res.json();
   },
 
   async getPolicy(id: string): Promise<PolicyResponse> {
-    const res = await fetch(`${API_BASE}/policies/${encodeURIComponent(id)}`);
-    if (!res.ok) throw new APIError(`Failed to fetch policy ${id}`, res.status);
+    const res = await policyFetch(
+      `/policies/${encodeURIComponent(id)}`,
+      `Failed to fetch policy ${id}`,
+    );
     return res.json();
   },
 
   async getPolicyVersion(id: string, version: number): Promise<PolicyResponse> {
-    const res = await fetch(`${API_BASE}/policies/${encodeURIComponent(id)}/v${version}`);
-    if (!res.ok) throw new APIError(`Failed to fetch policy ${id} v${version}`, res.status);
+    const res = await policyFetch(
+      `/policies/${encodeURIComponent(id)}/v${version}`,
+      `Failed to fetch policy ${id} v${version}`,
+    );
     return res.json();
   },
 
   async getPolicyVersionYaml(id: string, version: number): Promise<string> {
-    const res = await fetch(`${API_BASE}/policies/${encodeURIComponent(id)}/v${version}`, {
-      headers: { 'Accept': 'application/x-yaml' }
-    });
-    if (!res.ok) throw new APIError(`Failed to fetch policy ${id} v${version} YAML`, res.status);
+    const res = await policyFetch(
+      `/policies/${encodeURIComponent(id)}/v${version}`,
+      `Failed to fetch policy ${id} v${version} YAML`,
+      { accept: 'application/x-yaml' },
+    );
     return res.text();
   },
 
   async createPolicy(policy: { id: string; status: 'active' | 'draft' | 'archived'; rules: PolicyRule[]; created_by?: string }): Promise<PolicyResponse> {
-    const res = await fetch(`${API_BASE}/policies`, {
+    const res = await policyFetch('/policies', 'Failed to create policy', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(policy)
+      body: policy,
     });
-    if (!res.ok) {
-      const errBody = await res.json().catch(() => ({}));
-      throw new APIError(errBody.detail || 'Failed to create policy', res.status);
-    }
     return res.json();
   },
 
   async updatePolicy(id: string, policy: { status: 'active' | 'draft' | 'archived'; rules: PolicyRule[]; created_by?: string }): Promise<PolicyResponse> {
-    const res = await fetch(`${API_BASE}/policies/${encodeURIComponent(id)}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(policy)
-    });
-    if (!res.ok) {
-      const errBody = await res.json().catch(() => ({}));
-      throw new APIError(errBody.detail || 'Failed to update policy', res.status);
-    }
+    const res = await policyFetch(
+      `/policies/${encodeURIComponent(id)}`,
+      'Failed to update policy',
+      { method: 'PUT', body: policy },
+    );
     return res.json();
   },
 
   async validatePolicy(yamlContent: string): Promise<PolicyValidateResponse> {
-    const res = await fetch(`${API_BASE}/policies/validate`, {
+    const res = await policyFetch('/policies/validate', 'Failed to validate policy', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ yaml: yamlContent })
+      body: { yaml: yamlContent },
     });
-    if (!res.ok) throw new APIError('Failed to validate policy', res.status);
     return res.json();
   }
 };
