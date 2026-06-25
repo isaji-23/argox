@@ -1,37 +1,35 @@
-import React from 'react';
-import { cn } from '../../lib/utils';
+// Top header: sidebar toggle, route breadcrumbs, time controls (Metrics/Traces
+// only), API-key indicator, theme toggle, avatar.
+import { Fragment } from 'react';
 import { Icon } from '../shared/Icon';
 import { IconButton } from '../ui/Button';
 import { Tooltip } from '../ui/Tooltip';
-import { EnvAgentSelector } from '../ui/EnvAgentSelector';
 import { TimeRangePicker } from '../ui/TimeRangePicker';
+import { EnvAgentSelector } from '../ui/EnvAgentSelector';
+import type { TimeRange } from '../../lib/timeRange';
 
-interface Breadcrumb {
+export interface Crumb {
   label: string;
   mono?: boolean;
   onClick?: () => void;
 }
 
 interface HeaderProps {
-  title?: string;
-  crumbs?: Breadcrumb[];
+  crumbs: Crumb[];
   theme: 'dark' | 'light';
-  setTheme: (theme: 'dark' | 'light') => void;
-  timeRange: string;
-  setTimeRange: (range: string) => void;
+  setTheme: (t: 'dark' | 'light') => void;
+  timeRange: TimeRange;
+  setTimeRange: (t: TimeRange) => void;
   env: string;
-  setEnv: (env: string) => void;
+  setEnv: (v: string) => void;
   agent: string;
-  setAgent: (agent: string) => void;
-  agents: string[];
-  onToggleSidebar: () => void;
-  onOpenAuth: () => void;
-  hasCredential: boolean;
+  setAgent: (v: string) => void;
   showTimeControls?: boolean;
+  hasCredential: boolean;
+  onOpenAuth: () => void;
 }
 
 export function Header({
-  title,
   crumbs,
   theme,
   setTheme,
@@ -41,78 +39,101 @@ export function Header({
   setEnv,
   agent,
   setAgent,
-  agents,
-  onToggleSidebar,
-  onOpenAuth,
+  showTimeControls = true,
   hasCredential,
-  showTimeControls = true
+  onOpenAuth,
 }: HeaderProps) {
   return (
-    <header className="h-[56px] flex-shrink-0 flex items-center gap-3.5 px-4 border-b border-border bg-surface/80 backdrop-blur-md sticky top-0 z-40">
-      <IconButton name="menu" label="Toggle sidebar" onClick={onToggleSidebar} />
-
-      <div className="flex items-center gap-2 min-w-0">
-        {crumbs ? crumbs.map((c, i) => (
-          <React.Fragment key={i}>
-            {i > 0 && <Icon name="chevronRight" size={13} className="text-text-faint" />}
+    <header
+      style={{
+        height: 56,
+        flex: '0 0 auto',
+        display: 'flex',
+        alignItems: 'center',
+        gap: 14,
+        padding: '0 18px',
+        borderBottom: '1px solid var(--border)',
+        background: 'color-mix(in srgb, var(--bg-surface) 82%, transparent)',
+        backdropFilter: 'blur(10px)',
+        position: 'sticky',
+        top: 0,
+        zIndex: 40,
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+        {crumbs.map((c, i) => (
+          <Fragment key={i}>
+            {i > 0 && <Icon name="chevronRight" size={13} style={{ color: 'var(--text-faint)' }} />}
             <span
               onClick={c.onClick}
-              className={cn(
-                "text-md tracking-tight whitespace-nowrap overflow-hidden text-ellipsis max-w-[320px]",
-                i === crumbs.length - 1 ? "font-semibold text-text-primary" : "font-medium text-text-muted",
-                c.mono ? "font-mono" : "font-ui",
-                c.onClick && "cursor-pointer"
-              )}
+              style={{
+                fontSize: 'var(--fs-md)',
+                fontWeight: i === crumbs.length - 1 ? 600 : 500,
+                color: i === crumbs.length - 1 ? 'var(--text-primary)' : 'var(--text-muted)',
+                fontFamily: c.mono ? 'var(--font-mono)' : 'var(--font-ui)',
+                letterSpacing: '-0.01em',
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                maxWidth: 320,
+                cursor: c.onClick ? 'pointer' : 'default',
+              }}
             >
               {c.label}
             </span>
-          </React.Fragment>
-        )) : (
-          <span className="text-md font-semibold tracking-tight text-text-primary">
-            {title}
-          </span>
-        )}
+          </Fragment>
+        ))}
       </div>
 
-      <div className="flex-1" />
+      <div style={{ flex: 1 }} />
 
       {showTimeControls && (
         <>
-          <EnvAgentSelector
-            env={env}
-            setEnv={setEnv}
-            agent={agent}
-            setAgent={setAgent}
-            agents={agents}
-          />
+          <EnvAgentSelector env={env} setEnv={setEnv} agent={agent} setAgent={setAgent} />
           <TimeRangePicker value={timeRange} onChange={setTimeRange} />
         </>
       )}
 
-      <div className="w-px h-6 bg-border mx-1" />
-
-      <Tooltip label={hasCredential ? 'API key set' : 'Set API key'}>
-        <IconButton
-          name="key"
-          label="API key"
-          onClick={onOpenAuth}
-          className={hasCredential ? 'text-allow' : undefined}
-        />
+      <Tooltip label={hasCredential ? 'API key set' : 'No API key — click to add'}>
+        <IconButton name={hasCredential ? 'eye' : 'eyeOff'} label="API key" active={hasCredential} onClick={onOpenAuth} />
       </Tooltip>
+
+      <div style={{ width: 1, height: 24, background: 'var(--border)' }} />
 
       <Tooltip label={theme === 'dark' ? 'Switch to light' : 'Switch to dark'}>
-        <IconButton
-          name={theme === 'dark' ? 'sun' : 'moon'}
-          label="Theme"
-          onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
-        />
+        <IconButton name={theme === 'dark' ? 'sun' : 'moon'} label="Theme" onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')} />
       </Tooltip>
 
-      <button className="flex items-center gap-2 p-1 pr-1.5 rounded-full hover:bg-surface-3 transition-colors border border-transparent">
-        <span className="w-7 h-7 rounded-full flex items-center justify-center bg-gradient-to-br from-peacock-cyan to-peacock-indigo text-black font-bold text-sm">
+      <button
+        type="button"
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 9,
+          padding: '4px 6px 4px 4px',
+          background: 'transparent',
+          border: '1px solid transparent',
+          borderRadius: 'var(--r-full)',
+        }}
+        onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--bg-surface-3)')}
+        onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+      >
+        <span
+          style={{
+            width: 28,
+            height: 28,
+            borderRadius: 999,
+            display: 'grid',
+            placeItems: 'center',
+            background: 'linear-gradient(135deg, var(--peacock-cyan), var(--peacock-indigo))',
+            color: '#04121A',
+            fontWeight: 700,
+            fontSize: 'var(--fs-sm)',
+          }}
+        >
           PN
         </span>
-        <Icon name="chevronDown" size={13} className="text-text-muted" />
+        <Icon name="chevronDown" size={13} style={{ color: 'var(--text-muted)' }} />
       </button>
     </header>
   );

@@ -1,483 +1,270 @@
-import { useState, useEffect } from 'react';
+// Metrics dashboard: cost / latency / success over the selected window.
+// Three read-scope calls run in parallel and feed the five charts + KPI row.
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useShell } from '../../App';
 import {
-  AreaChart, Area, BarChart, Bar,
-  XAxis, YAxis, CartesianGrid, Tooltip, Legend,
-  ResponsiveContainer, ReferenceLine
-} from 'recharts';
-import { api } from '../../lib/api';
-import type { CostMetricsResponse, LatencyMetricsResponse, SuccessMetricsResponse } from '../../lib/api';
+  api,
+  type CostMetricsResponse,
+  type LatencyMetricsResponse,
+  type SuccessMetricsResponse,
+} from '../../lib/api';
+import { rangeToHours, rangeLabel } from '../../lib/timeRange';
+import { fmtUsd, fmtNum, fmtMs } from '../../lib/utils';
 import { Panel, PanelHeader } from '../ui/Panel';
-import { Skeleton, ErrorState } from '../ui/States';
+import { Button } from '../ui/Button';
+import { Badge } from '../ui/Badge';
+import { Icon, type IconName } from '../shared/Icon';
+import { ChartSkeleton, ErrorState } from '../ui/States';
+import { StackedTimeChart, Histogram, SuccessChart, HBarChart, ChartLegend, MODEL_COLORS, type StackPoint, type HistogramBin } from '../charts';
 
-interface MetricsScreenProps {
-  timeRange: string;
+function bucketLabel(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
 }
 
-const MODEL_COLORS = [
-  'var(--peacock-cyan)',
-  'var(--peacock-indigo)',
-  'var(--gold)',
-  'var(--peacock-teal)',
-  'var(--bronze)',
-];
+function KpiCard({
+  label,
+  value,
+  icon,
+  tone,
+  loading,
+}: {
+  label: string;
+  value: ReactNode;
+  icon: IconName;
+  tone?: 'block';
+  loading?: boolean;
+}) {
+  const blocked = tone === 'block';
+  return (
+    <div
+      style={{
+        padding: '13px 15px',
+        borderRadius: 'var(--r-lg)',
+        background: 'var(--bg-surface)',
+        border: '1px solid ' + (blocked ? 'var(--block-border)' : 'var(--border)'),
+        borderLeft: blocked ? '2.5px solid var(--block-edge)' : '1px solid var(--border)',
+        boxShadow: 'var(--shadow-sm)',
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 9, color: blocked ? 'var(--block-bright)' : 'var(--text-muted)' }}>
+        <Icon name={icon} size={14} />
+        <span style={{ fontSize: 'var(--fs-2xs)', fontWeight: 600, letterSpacing: '0.05em', textTransform: 'uppercase' }}>{label}</span>
+      </div>
+      <span
+        className="tnum"
+        style={{
+          fontSize: 'var(--fs-2xl)',
+          fontWeight: 600,
+          fontFamily: 'var(--font-display)',
+          letterSpacing: '-0.02em',
+          color: blocked ? 'var(--block-ink)' : 'var(--text-primary)',
+          lineHeight: 1,
+        }}
+      >
+        {loading ? '—' : value}
+      </span>
+    </div>
+  );
+}
 
-export function MetricsScreen({ timeRange }: MetricsScreenProps) {
-  const [costData, setCostData] = useState<CostMetricsResponse | null>(null);
-  const [latencyData, setLatencyData] = useState<LatencyMetricsResponse | null>(null);
-  const [successData, setSuccessData] = useState<SuccessMetricsResponse | null>(null);
+function ChartPanel({
+  title,
+  subtitle,
+  icon,
+  right,
+  loading,
+  error,
+  onRetry,
+  children,
+  height = 188,
+}: {
+  title: string;
+  subtitle: string;
+  icon: IconName;
+  right?: ReactNode;
+  loading: boolean;
+  error: boolean;
+  onRetry: () => void;
+  children: ReactNode;
+  height?: number;
+}) {
+  return (
+    <Panel style={{ minWidth: 0 }}>
+      <PanelHeader title={title} subtitle={subtitle} icon={icon} right={right} />
+      <div style={{ marginTop: 14 }}>
+        {error ? (
+          <ErrorState title="Query failed" body="collector: request failed" onRetry={onRetry} />
+        ) : loading ? (
+          <ChartSkeleton height={height} />
+        ) : (
+          children
+        )}
+      </div>
+    </Panel>
+  );
+}
 
+export function MetricsScreen() {
+  const { timeRange, reloadKey } = useShell();
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState(false);
+  const [cost, setCost] = useState<CostMetricsResponse | null>(null);
+  const [latency, setLatency] = useState<LatencyMetricsResponse | null>(null);
+  const [success, setSuccess] = useState<SuccessMetricsResponse | null>(null);
 
-  const fetchData = async () => {
+  const load = useCallback(() => {
+    const hours = rangeToHours(timeRange);
     setLoading(true);
-    setError(null);
-
-    const rangeMap: Record<string, number> = {
-      '1h': 1,
-      '24h': 24,
-      '7d': 168,
-      '30d': 720,
-    };
-    const windowHours = rangeMap[timeRange] || 24;
-
-    try {
-      const [costRes, latencyRes, successRes] = await Promise.all([
-        api.getCostMetrics(windowHours),
-        api.getLatencyMetrics(windowHours),
-        api.getSuccessMetrics(windowHours),
-      ]);
-      setCostData(costRes);
-      setLatencyData(latencyRes);
-      setSuccessData(successRes);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to fetch metrics');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    fetchData();
+    setError(false);
+    Promise.all([api.getCostMetrics(hours), api.getLatencyMetrics(hours), api.getSuccessMetrics(hours)])
+      .then(([c, l, s]) => {
+        setCost(c);
+        setLatency(l);
+        setSuccess(s);
+      })
+      .catch(() => setError(true))
+      .finally(() => setLoading(false));
   }, [timeRange]);
 
-  if (error) {
-    return (
-      <div className="flex h-full items-center justify-center p-6 bg-background">
-        <ErrorState
-          title="Metrics Fetch Error"
-          body={error}
-          onRetry={fetchData}
-        />
-      </div>
-    );
-  }
+  useEffect(() => {
+    load();
+  }, [load, reloadKey]);
 
-  if (loading || !costData || !latencyData || !successData) {
-    return (
-      <div className="p-6 space-y-6 max-w-[1600px] mx-auto bg-background">
-        {/* KPI Grid Skeletons */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          {[1, 2, 3].map((i) => (
-            <Panel key={i} pad>
-              <Skeleton h={16} w={80} className="mb-2" />
-              <Skeleton h={32} w={120} className="mb-1" />
-              <Skeleton h={14} w={160} />
-            </Panel>
-          ))}
-        </div>
-
-        {/* Charts Grid Skeletons */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {[1, 2, 3, 4].map((i) => (
-            <Panel key={i} title="Loading Chart...">
-              <div className="h-[250px] flex items-center justify-center">
-                <Skeleton h="100%" w="100%" />
-              </div>
-            </Panel>
-          ))}
-          <Panel title="Loading Chart..." className="lg:col-span-2">
-            <div className="h-[250px] flex items-center justify-center">
-              <Skeleton h="100%" w="100%" />
-            </div>
-          </Panel>
-        </div>
-      </div>
-    );
-  }
-
-  // --- Transform Stacked Cost Timeline ---
-  // Array fields are defaulted to `[]` so a partial response (e.g. a Collector
-  // version predating one of these fields) renders an empty chart instead of
-  // crashing the whole screen on `.forEach`/`.map` of `undefined`.
-  const costTimelineMap: Record<string, any> = {};
-  const modelsSet = new Set<string>();
-  (costData.timeline ?? []).forEach((pt) => {
-    const label = new Date(pt.bucket).toLocaleString([], {
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-    });
-    if (!costTimelineMap[pt.bucket]) {
-      costTimelineMap[pt.bucket] = { name: label, bucket: pt.bucket };
+  // --- derive chart series ---
+  const { costData, costKeys } = useMemo(() => {
+    const rows = cost?.timeline ?? [];
+    const buckets: string[] = [];
+    const models = new Set<string>();
+    const byBucket = new Map<string, StackPoint>();
+    for (const r of rows) {
+      models.add(r.model);
+      if (!byBucket.has(r.bucket)) {
+        byBucket.set(r.bucket, { label: bucketLabel(r.bucket) });
+        buckets.push(r.bucket);
+      }
+      const point = byBucket.get(r.bucket)!;
+      point[r.model] = ((point[r.model] as number) || 0) + r.cost;
     }
-    costTimelineMap[pt.bucket][pt.model] = pt.cost;
-    modelsSet.add(pt.model);
-  });
-  const formattedCostTimeline = Object.values(costTimelineMap).sort((a: any, b: any) =>
-    new Date(a.bucket).getTime() - new Date(b.bucket).getTime()
+    const keys = [...models];
+    const data = buckets.map((b) => {
+      const p = byBucket.get(b)!;
+      for (const k of keys) if (p[k] === undefined) p[k] = 0;
+      return p;
+    });
+    return { costData: data, costKeys: keys };
+  }, [cost]);
+
+  const { histData, markers } = useMemo(() => {
+    const bins = latency?.histogram ?? [];
+    const data: HistogramBin[] = bins.map((b) => ({ label: fmtMs(b.bin_max), count: b.count }));
+    const pct = latency?.percentiles ?? {
+      p50: latency?.avg_latency_ms ?? 0,
+      p95: latency?.p95_latency_ms ?? 0,
+      p99: (latency?.p95_latency_ms ?? 0) * 1.2,
+    };
+    const idxFor = (ms: number) => {
+      for (let i = 0; i < bins.length; i++) if (ms <= bins[i].bin_max) return i;
+      return Math.max(0, bins.length - 1);
+    };
+    return { histData: data, markers: { p50: idxFor(pct.p50), p95: idxFor(pct.p95), p99: idxFor(pct.p99) } };
+  }, [latency]);
+
+  const successData: StackPoint[] = useMemo(
+    () =>
+      (success?.timeline ?? []).map((t) => ({
+        label: bucketLabel(t.bucket),
+        success: t.successful_runs,
+        error: Math.max(t.total_runs - t.successful_runs, 0),
+        blocked: 0,
+      })),
+    [success],
   );
-  const modelsList = Array.from(modelsSet);
 
-  // --- Transform Latency Histogram ---
-  const formattedHistogram = (latencyData.histogram ?? []).map((bin) => ({
-    name: `${Math.round(bin.bin_min)}-${Math.round(bin.bin_max)}ms`,
-    count: bin.count,
-    bin_min: bin.bin_min,
-    bin_max: bin.bin_max,
-  }));
+  const topAgents = useMemo(() => (cost?.top_agents ?? []).map((a) => ({ agent: a.agent_name, spend: a.spend })), [cost]);
+  const blockedTools = useMemo(
+    () => (success?.top_blocked_tools ?? []).map((t) => ({ tool: t.tool_name, count: t.blocked_count })),
+    [success],
+  );
+  const totalBlocks = blockedTools.reduce((s, t) => s + t.count, 0);
 
-  const findBinIdx = (val: number) => {
-    if (!formattedHistogram.length) return null;
-    const idx = (latencyData.histogram ?? []).findIndex(
-      (bin) => val >= bin.bin_min && val <= bin.bin_max
-    );
-    return idx !== -1 ? idx : null;
-  };
-
-  const percentiles = latencyData.percentiles ?? { p50: 0, p95: 0, p99: 0 };
-  const p50BinIdx = findBinIdx(percentiles.p50);
-  const p95BinIdx = findBinIdx(percentiles.p95);
-  const p99BinIdx = findBinIdx(percentiles.p99);
-
-  // --- Transform Success Rate Timeline ---
-  const formattedSuccessTimeline = (successData.timeline ?? []).map((pt) => ({
-    name: new Date(pt.bucket).toLocaleString([], {
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-    }),
-    bucket: pt.bucket,
-    rate: pt.success_rate !== null ? parseFloat((pt.success_rate * 100).toFixed(1)) : null,
-    total: pt.total_runs,
-  }));
-
-  // --- Transform Top Agents ---
-  const formattedAgents = (costData.top_agents ?? []).map((pt) => ({
-    name: pt.agent_name,
-    spend: parseFloat(pt.spend.toFixed(4)),
-  }));
-
-  // --- Transform Blocked Tools ---
-  const formattedBlockedTools = (successData.top_blocked_tools ?? []).map((pt) => ({
-    name: pt.tool_name,
-    count: pt.blocked_count,
-  }));
+  const successRate = success?.success_rate != null ? (success.success_rate * 100).toFixed(1) + '%' : '—';
+  const p95 = latency?.percentiles?.p95 ?? latency?.p95_latency_ms ?? 0;
 
   return (
-    <div className="p-6 space-y-6 max-w-[1600px] mx-auto bg-background animate-fade-in">
-      {/* Definitions of gradients used in AreaCharts */}
-      <svg className="absolute w-0 h-0" width="0" height="0">
-        <defs>
-          <linearGradient id="successGrad" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="5%" stopColor="var(--allow)" stopOpacity={0.25} />
-            <stop offset="95%" stopColor="var(--allow)" stopOpacity={0} />
-          </linearGradient>
-        </defs>
-      </svg>
-
-      {/* KPI Cards Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <Panel pad className="relative overflow-hidden group hover:border-strong transition-all">
-          <PanelHeader
-            title="Total Spend"
-            subtitle="Combined cost of LLM inference calls"
-            icon="layers"
-          />
-          <div className="mt-4 flex items-baseline gap-2">
-            <span className="text-3xl font-bold tracking-tight text-text-primary">
-              ${costData.total_cost.toFixed(4)}
-            </span>
-          </div>
-          <div className="mt-1.5 text-xs text-text-muted">
-            Across {costData.trace_count} active traces
-          </div>
-        </Panel>
-
-        <Panel pad className="relative overflow-hidden group hover:border-strong transition-all">
-          <PanelHeader
-            title="Median Latency"
-            subtitle="P50 duration of root runs"
-            icon="activity"
-          />
-          <div className="mt-4 flex items-baseline gap-2">
-            <span className="text-3xl font-bold tracking-tight text-text-primary">
-              {latencyData.trace_count === 0
-                ? 'N/A'
-                : percentiles.p50 >= 1000
-                ? (percentiles.p50 / 1000).toFixed(2) + 's'
-                : Math.round(percentiles.p50) + 'ms'}
-            </span>
-          </div>
-          <div className="mt-1.5 text-xs text-text-muted">
-            P95: {latencyData.trace_count === 0
-              ? 'N/A'
-              : latencyData.p95_latency_ms >= 1000
-              ? (latencyData.p95_latency_ms / 1000).toFixed(2) + 's'
-              : Math.round(latencyData.p95_latency_ms) + 'ms'}
-          </div>
-        </Panel>
-
-        <Panel pad className="relative overflow-hidden group hover:border-strong transition-all">
-          <PanelHeader
-            title="Success Rate"
-            subtitle="Overall ratio of runs completing without failure"
-            icon="check"
-          />
-          <div className="mt-4 flex items-baseline gap-2">
-            <span className="text-3xl font-bold tracking-tight text-text-primary">
-              {successData.success_rate !== null
-                ? (successData.success_rate * 100).toFixed(1) + '%'
-                : 'N/A'}
-            </span>
-          </div>
-          <div className="mt-1.5 text-xs text-text-muted">
-            {successData.successful_runs} / {successData.total_runs} runs successful
-          </div>
-        </Panel>
+    <div className="ax-fade-in" style={{ padding: '18px 22px 40px', maxWidth: 1320, margin: '0 auto' }}>
+      <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: 16 }}>
+        <div>
+          <h1 style={{ margin: 0, fontSize: 'var(--fs-xl)', fontWeight: 600, letterSpacing: '-0.015em' }}>Metrics</h1>
+          <p style={{ margin: '3px 0 0', fontSize: 'var(--fs-sm)', color: 'var(--text-muted)' }}>
+            Cost, latency and policy enforcement across all agents · {rangeLabel(timeRange).toLowerCase()}
+          </p>
+        </div>
+        <Button variant="secondary" size="sm" icon="refresh" onClick={load}>
+          Refresh
+        </Button>
       </div>
 
-      {/* 2-Column Responsive Charts Grid */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Chart 1: Stacked Cost by Model */}
-        <Panel title="Total Cost Stacked by Model" pad>
-          <div className="h-[280px] w-full">
-            {formattedCostTimeline.length === 0 ? (
-              <div className="h-full flex items-center justify-center text-text-muted text-sm">
-                No model cost data within this window
-              </div>
-            ) : (
-              <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={formattedCostTimeline} margin={{ left: -10, right: 10, top: 10, bottom: 0 }}>
-                  <CartesianGrid stroke="var(--chart-grid)" strokeDasharray="3 3" />
-                  <XAxis dataKey="name" stroke="var(--text-muted)" fontSize={11} />
-                  <YAxis
-                    stroke="var(--text-muted)"
-                    fontSize={11}
-                    tickFormatter={(val) => `$${val.toFixed(2)}`}
-                  />
-                  <Tooltip
-                    contentStyle={{
-                      backgroundColor: 'var(--bg-overlay)',
-                      borderColor: 'var(--border)',
-                      borderRadius: 'var(--r-md)',
-                      fontSize: '12px',
-                    }}
-                    labelStyle={{ fontWeight: 'bold', color: 'var(--text-primary)' }}
-                  />
-                  <Legend verticalAlign="bottom" height={36} iconType="circle" />
-                  {modelsList.map((model, idx) => (
-                    <Area
-                      key={model}
-                      type="monotone"
-                      dataKey={model}
-                      stackId="1"
-                      stroke={MODEL_COLORS[idx % MODEL_COLORS.length]}
-                      fill={MODEL_COLORS[idx % MODEL_COLORS.length]}
-                      fillOpacity={0.4}
-                    />
-                  ))}
-                </AreaChart>
-              </ResponsiveContainer>
-            )}
-          </div>
-        </Panel>
+      {/* KPIs */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 12, marginBottom: 14 }}>
+        <KpiCard label="Total cost" value={fmtUsd(cost?.total_cost ?? 0)} icon="dollar" loading={loading} />
+        <KpiCard label="Requests" value={fmtNum(cost?.trace_count ?? success?.total_runs ?? 0)} icon="spark" loading={loading} />
+        <KpiCard label="Success rate" value={successRate} icon="check" loading={loading} />
+        <KpiCard label="P95 latency" value={fmtMs(p95)} icon="gauge" loading={loading} />
+        <KpiCard label="Policy blocks" value={fmtNum(totalBlocks)} icon="ban" tone="block" loading={loading} />
+      </div>
 
-        {/* Chart 2: Success Rate over time */}
-        <Panel title="Success Ratio Over Time" pad>
-          <div className="h-[280px] w-full">
-            {formattedSuccessTimeline.length === 0 ? (
-              <div className="h-full flex items-center justify-center text-text-muted text-sm">
-                No runs data within this window
-              </div>
-            ) : (
-              <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={formattedSuccessTimeline} margin={{ left: -10, right: 10, top: 10, bottom: 0 }}>
-                  <CartesianGrid stroke="var(--chart-grid)" strokeDasharray="3 3" />
-                  <XAxis dataKey="name" stroke="var(--text-muted)" fontSize={11} />
-                  <YAxis
-                    stroke="var(--text-muted)"
-                    fontSize={11}
-                    tickFormatter={(val) => `${val}%`}
-                    domain={[0, 100]}
-                  />
-                  <Tooltip
-                    contentStyle={{
-                      backgroundColor: 'var(--bg-overlay)',
-                      borderColor: 'var(--border)',
-                      borderRadius: 'var(--r-md)',
-                      fontSize: '12px',
-                    }}
-                    labelStyle={{ fontWeight: 'bold', color: 'var(--text-primary)' }}
-                  />
-                  <Area
-                    type="monotone"
-                    dataKey="rate"
-                    name="Success Rate"
-                    stroke="var(--allow)"
-                    fill="url(#successGrad)"
-                    strokeWidth={2}
-                    connectNulls
-                  />
-                </AreaChart>
-              </ResponsiveContainer>
-            )}
-          </div>
-        </Panel>
+      {/* Cost by model — full width */}
+      <div style={{ marginBottom: 14 }}>
+        <ChartPanel
+          title="Total cost by model"
+          subtitle="Stacked spend per time bucket"
+          icon="dollar"
+          loading={loading}
+          error={error}
+          onRetry={load}
+          height={220}
+          right={<ChartLegend items={costKeys.map((k, i) => ({ label: k, color: MODEL_COLORS[k] || ['var(--span-llm)', 'var(--span-tool)', 'var(--span-processor)', 'var(--gold)'][i % 4] }))} />}
+        >
+          <StackedTimeChart data={costData} keys={costKeys} colors={MODEL_COLORS} height={220} valuePrefix="$" />
+        </ChartPanel>
+      </div>
 
-        {/* Chart 3: Latency Distribution (Histogram) */}
-        <Panel title="Latency Distribution (Root Runs)" pad>
-          <div className="h-[280px] w-full">
-            {formattedHistogram.length === 0 ? (
-              <div className="h-full flex items-center justify-center text-text-muted text-sm">
-                No run latency data within this window
-              </div>
-            ) : (
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={formattedHistogram} margin={{ left: -10, right: 10, top: 10, bottom: 0 }}>
-                  <CartesianGrid stroke="var(--chart-grid)" strokeDasharray="3 3" />
-                  <XAxis dataKey="name" stroke="var(--text-muted)" fontSize={10} />
-                  <YAxis stroke="var(--text-muted)" fontSize={11} />
-                  <Tooltip
-                    contentStyle={{
-                      backgroundColor: 'var(--bg-overlay)',
-                      borderColor: 'var(--border)',
-                      borderRadius: 'var(--r-md)',
-                      fontSize: '12px',
-                    }}
-                    labelStyle={{ fontWeight: 'bold', color: 'var(--text-primary)' }}
-                  />
-                  <Bar
-                    dataKey="count"
-                    name="Run Count"
-                    fill="var(--peacock-indigo)"
-                    radius={[4, 4, 0, 0]}
-                  />
-                  {p50BinIdx !== null && formattedHistogram[p50BinIdx] && (
-                    <ReferenceLine
-                      x={formattedHistogram[p50BinIdx].name}
-                      stroke="var(--peacock-teal)"
-                      strokeWidth={1.5}
-                      strokeDasharray="3 3"
-                      label={{ value: 'P50', fill: 'var(--peacock-teal)', fontSize: 10, position: 'top' }}
-                    />
-                  )}
-                  {p95BinIdx !== null && formattedHistogram[p95BinIdx] && (
-                    <ReferenceLine
-                      x={formattedHistogram[p95BinIdx].name}
-                      stroke="var(--gold)"
-                      strokeWidth={1.5}
-                      strokeDasharray="3 3"
-                      label={{ value: 'P95', fill: 'var(--gold)', fontSize: 10, position: 'top' }}
-                    />
-                  )}
-                  {p99BinIdx !== null && formattedHistogram[p99BinIdx] && (
-                    <ReferenceLine
-                      x={formattedHistogram[p99BinIdx].name}
-                      stroke="var(--block)"
-                      strokeWidth={1.5}
-                      strokeDasharray="3 3"
-                      label={{ value: 'P99', fill: 'var(--block)', fontSize: 10, position: 'top' }}
-                    />
-                  )}
-                </BarChart>
-              </ResponsiveContainer>
-            )}
-          </div>
-        </Panel>
+      {/* Latency + success */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1.25fr 1fr', gap: 14, marginBottom: 14 }}>
+        <ChartPanel title="Latency distribution" subtitle="Request duration with percentile markers" icon="gauge" loading={loading} error={error} onRetry={load}>
+          <Histogram data={histData} markers={markers} />
+        </ChartPanel>
+        <ChartPanel
+          title="Success ratio"
+          subtitle="Successful vs error runs over time"
+          icon="check"
+          loading={loading}
+          error={error}
+          onRetry={load}
+          right={<ChartLegend items={[{ label: 'Success', color: 'var(--allow)' }, { label: 'Error', color: 'var(--text-faint)' }]} />}
+        >
+          <SuccessChart data={successData} />
+        </ChartPanel>
+      </div>
 
-        {/* Chart 4: Top Agents by Spend */}
-        <Panel title="Top Agents by Spend" pad>
-          <div className="h-[280px] w-full">
-            {formattedAgents.length === 0 ? (
-              <div className="h-full flex items-center justify-center text-text-muted text-sm">
-                No agent spend data within this window
-              </div>
-            ) : (
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart
-                  data={formattedAgents}
-                  layout="vertical"
-                  margin={{ left: 20, right: 10, top: 10, bottom: 0 }}
-                >
-                  <CartesianGrid stroke="var(--chart-grid)" strokeDasharray="3 3" />
-                  <XAxis
-                    type="number"
-                    stroke="var(--text-muted)"
-                    fontSize={11}
-                    tickFormatter={(val) => `$${val.toFixed(2)}`}
-                  />
-                  <YAxis type="category" dataKey="name" stroke="var(--text-muted)" fontSize={11} />
-                  <Tooltip
-                    contentStyle={{
-                      backgroundColor: 'var(--bg-overlay)',
-                      borderColor: 'var(--border)',
-                      borderRadius: 'var(--r-md)',
-                      fontSize: '12px',
-                    }}
-                    labelStyle={{ fontWeight: 'bold', color: 'var(--text-primary)' }}
-                  />
-                  <Bar
-                    dataKey="spend"
-                    name="Spend (USD)"
-                    fill="var(--peacock-cyan)"
-                    radius={[0, 4, 4, 0]}
-                  />
-                </BarChart>
-              </ResponsiveContainer>
-            )}
-          </div>
-        </Panel>
-
-        {/* Chart 5: Top Blocked Tools */}
-        <Panel title="Top Blocked Tools (Policy Violations)" className="lg:col-span-2" pad>
-          <div className="h-[280px] w-full">
-            {formattedBlockedTools.length === 0 ? (
-              <div className="h-full flex items-center justify-center text-text-muted text-sm">
-                No tool block operations occurred within this window
-              </div>
-            ) : (
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart
-                  data={formattedBlockedTools}
-                  layout="vertical"
-                  margin={{ left: 20, right: 10, top: 10, bottom: 0 }}
-                >
-                  <CartesianGrid stroke="var(--chart-grid)" strokeDasharray="3 3" />
-                  <XAxis type="number" stroke="var(--text-muted)" fontSize={11} />
-                  <YAxis type="category" dataKey="name" stroke="var(--text-muted)" fontSize={11} />
-                  <Tooltip
-                    contentStyle={{
-                      backgroundColor: 'var(--bg-overlay)',
-                      borderColor: 'var(--border)',
-                      borderRadius: 'var(--r-md)',
-                      fontSize: '12px',
-                    }}
-                    labelStyle={{ fontWeight: 'bold', color: 'var(--text-primary)' }}
-                  />
-                  <Bar
-                    dataKey="count"
-                    name="Blocks Count"
-                    fill="var(--block)"
-                    radius={[0, 4, 4, 0]}
-                  />
-                </BarChart>
-              </ResponsiveContainer>
-            )}
-          </div>
-        </Panel>
+      {/* Top agents + blocked tools */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+        <ChartPanel title="Top agents by spend" subtitle="Highest-cost agents this period" icon="bolt" loading={loading} error={error} onRetry={load}>
+          <HBarChart data={topAgents} labelKey="agent" valueKey="spend" color="var(--accent)" valueFmt={(v) => '$' + v.toFixed(0)} />
+        </ChartPanel>
+        <ChartPanel
+          title="Top blocked tools"
+          subtitle="Most-denied tool calls by policy"
+          icon="ban"
+          loading={loading}
+          error={error}
+          onRetry={load}
+          right={<Badge tone="block" mono>{fmtNum(totalBlocks)} blocks</Badge>}
+        >
+          <HBarChart data={blockedTools} labelKey="tool" valueKey="count" blockTone valueFmt={fmtNum} />
+        </ChartPanel>
       </div>
     </div>
   );
