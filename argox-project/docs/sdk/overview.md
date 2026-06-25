@@ -195,7 +195,10 @@ run-summary ingest path (COL-11) accepts full run content the spans omit:
 each as an immutable blob (`runs/{YYYY-MM-DD}/{run_id}.json`) and projects a
 queryable summary into a DuckDB `runs` table whose indexed `trace_id` joins a
 span back to its run (see ADR-0007; the SDK exporter that posts these is the
-EXP-09 follow-up). The `runs.cost_usd` column, left NULL at ingest, is
+EXP-09 follow-up). The join key is supplied by the SDK: `ArgoxManager` stamps
+`AgentRunMetrics.trace_id` from the `argox.agent.run` root span so the posted
+record carries the same trace id its spans do (EXP-10) — without it
+`by-trace` resolves nothing. The `runs.cost_usd` column, left NULL at ingest, is
 backfilled (COL-17) via a separate `UPDATE` from the run's `model` and token
 totals — falling back to the model its spans carry (`gen_ai.request.model`)
 joined by `trace_id` — priced against a committed snapshot of the LiteLLM price
