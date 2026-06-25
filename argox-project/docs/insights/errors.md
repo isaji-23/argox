@@ -8,6 +8,21 @@ and resolves a non-trivial error.
 
 <!-- Add new entries directly below this line, newest first. -->
 
+## 2026-06-25 — Dashboard Policies screen 401 under Collector auth  [DASH-07]
+- **Symptom:** `GET /api/v1/policies` returned `401 ()` in the deployed
+  dashboard while traces/runs/metrics loaded fine with the same key. Worked only
+  with auth disabled.
+- **Root cause:** the policy methods in `argox-dashboard/src/lib/api.ts` used a
+  bare `fetch()` with no `Authorization` header — unlike `apiFetch`, which all
+  other reads go through. No credential reached the Collector, so it was a 401
+  (missing credential), not a 403 (scope). A second, distinct gap: `policy-read`
+  is its own scope, separate from `read`, and the demo key was minted without it.
+- **Fix:** route every policy read/write through a new `policyFetch` wrapper that
+  attaches the stored read key (and supports bodies, a custom `Accept`, and the
+  401/403 handling). Mint the demo key with `policy-read` in `demo.sh`.
+- **Guard:** `pnpm run build` type-checks the client; the wrapper is the single
+  auth-bearing path so a future policy call cannot silently drop the header.
+
 ## 2026-06-24 — Collector image missing argox-core; charts show "No data"  [COL-20]
 - **Symptom:** Dashboard metrics charts all rendered "No data within this
   window" while KPI cards still showed values. The deployed collector's
