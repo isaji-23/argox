@@ -1,7 +1,7 @@
 # [DOC-01] Write docs/compliance/ai-act-mapping.md
 
 - **Date:** 2026-06-23
-- **PR:** #98  ·  **Branch:** docs/DOC-01-ai-act-mapping
+- **PR:** #165  ·  **Branch:** docs/DOC-01-ai-act-mapping
 - **Status:** in-review
 
 ## What changed
