@@ -8,6 +8,7 @@ for the decisions behind these changes and
 
 | Date | Ticket | Title | PR | Status |
 |---|---|---|---|---|
+| 2026-06-25 | DX-03 | Write PLUGIN_GUIDE.md for community plugin authors | n/a | in-progress |
 | 2026-06-24 | COL-20 | Bundle argox-core into the collector image | #178 | in-review |
 | 2026-06-24 | DASH-06 | API key management UI in the dashboard | #173 | in-review |
 | 2026-06-24 | DASH | Authenticate dashboard API requests | #171 | in-review |
