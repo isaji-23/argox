@@ -8,6 +8,25 @@ and resolves a non-trivial error.
 
 <!-- Add new entries directly below this line, newest first. -->
 
+## 2026-06-25 — Run Record always "No run record available" / by-trace 404  [EXP-10]
+- **Symptom:** `GET /api/v1/runs/by-trace/<trace_id>` returned `404 (Not Found)`
+  for every trace, including freshly ingested ones; the dashboard Run Record
+  panel showed "No run record available — Wire HttpRunExporter…". Worked with
+  the local Collector when auth was disabled, which masked the real cause.
+- **Root cause:** the Collector resolves by-trace purely on `runs.trace_id`
+  (`SELECT … FROM runs WHERE trace_id = ?`), but the run payload never carried a
+  trace id. `AgentRunMetrics` had no `trace_id` field and `to_dict()` omitted it,
+  so `HttpRunExporter` POSTed runs with `trace_id = NULL` — stored unlinked,
+  never matched. The "SDK exporter sets it" assumption in the runs router was
+  never fulfilled.
+- **Fix:** stamp `metrics.trace_id` in `ArgoxManager.run` from the active
+  `argox.agent.run` root span (`format(span.get_span_context().trace_id,
+  "032x")`, guarded against a zero id) and serialize it in `to_dict()`. Same
+  32-hex lowercase id the OTLP span exporter ships, so it joins.
+- **Guard:** `tests/test_run_root_attributes.py::test_run_metrics_trace_id_matches_span`
+  asserts the run's `trace_id` equals its span's and round-trips through
+  `to_dict()`.
+
 ## 2026-06-24 — Collector image missing argox-core; charts show "No data"  [COL-20]
 - **Symptom:** Dashboard metrics charts all rendered "No data within this
   window" while KPI cards still showed values. The deployed collector's
