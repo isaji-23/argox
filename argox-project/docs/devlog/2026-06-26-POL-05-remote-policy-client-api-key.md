@@ -16,6 +16,13 @@
   warning, mirroring `HttpRunExporter`.
 - Tests: new `TestRemotePolicyClientAuth` covering header presence/absence,
   header propagation into the client, and the HTTPS/plaintext warning.
+- `OTLPSpanExporter` gains a matching `api_key` convenience argument
+  (`argox-core/src/argox/observability/otlp.py`): it injects
+  `Authorization: Bearer <api_key>` into the upstream exporter's headers (an
+  explicit `Authorization` header wins), and warns over a non-HTTPS endpoint,
+  resolving the effective endpoint from the `endpoint` argument or the
+  `OTEL_EXPORTER_OTLP_*` env vars. This homogenizes auth across all three SDK
+  clients that reach authenticated Collector endpoints.
 
 ## Why
 - The Collector's `GET /api/v1/policies/bundle` requires the `policy-read` scope
@@ -26,9 +33,6 @@
   existing `api_key` convention on `HttpRunExporter` (EXP-09).
 
 ## Notes / follow-ups
-- `OTLPSpanExporter` still has no convenience `api_key` argument; its
-  `/v1/traces` ingest (`ingest` scope) must be authenticated via the OTel-native
-  `headers=` kwarg or `OTEL_EXPORTER_OTLP_HEADERS`. Left as a deliberate gap to
-  avoid wrapping the upstream exporter.
-- Work was done directly on `dev` (uncommitted at doc time); move to a
-  `fix/POL-05-...` branch before opening the PR.
+- All three SDK clients reaching authenticated Collector endpoints
+  (`HttpRunExporter`, `RemotePolicyClient`, `OTLPSpanExporter`) now expose an
+  `api_key` argument; auth wiring is homogeneous.

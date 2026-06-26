@@ -226,16 +226,16 @@ revocable API key as `Authorization: Bearer argox_…` (ingest needs the
 dashboard users present an OIDC JWT whose role claim drives policy-write/admin
 RBAC. Keys are stored hashed in the index DB and managed via admin-only CRUD
 or the `argox-collector keys` CLI; see `docs/collector/auth.md`. The SDK clients
-that talk to authenticated endpoints accept the key directly: `HttpRunExporter`
-and `RemotePolicyClient` both take an `api_key` constructor argument and send it
-as `Authorization: Bearer …` on every request (POL-05), warning when a key is
-configured over a non-HTTPS endpoint. `OTLPSpanExporter` has no convenience
-argument — it is a thin re-export of the upstream OTel exporter, so authenticate
-its `/v1/traces` ingest with the native `headers={"Authorization": …}` kwarg or
-the `OTEL_EXPORTER_OTLP_HEADERS` environment variable.
+that talk to authenticated endpoints accept the key directly: `HttpRunExporter`,
+`RemotePolicyClient` and `OTLPSpanExporter` all take an `api_key` constructor
+argument and send it as `Authorization: Bearer …` on every request (POL-05),
+warning when a key is configured over a non-HTTPS endpoint. For
+`OTLPSpanExporter` the argument is a thin convenience over the upstream OTel
+exporter — equivalent to passing `headers={"Authorization": …}` or setting
+`OTEL_EXPORTER_OTLP_HEADERS`; an explicit `Authorization` header wins over
+`api_key`.
 
-**Not yet:** no convenience `api_key` argument on `OTLPSpanExporter` (use the
-OTel-native header/env path above); no real `SsePolicyClient` (only
+**Not yet:** no real `SsePolicyClient` (only
 the contract + in-process cache),
 and the SDK itself does not write to the audit log yet (it is a Collector-side
 API) nor render a dashboard (only the `metrics` object and OTel spans ready to
