@@ -600,3 +600,78 @@ class TestRemotePolicyClientDiskFallback:
         assert client.policy_cache_dir is None
 
 
+class TestRemotePolicyClientAuth:
+    """Test API key authorization for policy fetches."""
+
+    def test_auth_headers_with_api_key(self, endpoint_url: str) -> None:
+        """A configured api_key yields a Bearer Authorization header."""
+        client = RemotePolicyClient(endpoint_url=endpoint_url, api_key="argox_secret")
+
+        assert client.api_key == "argox_secret"
+        assert client._auth_headers() == {"Authorization": "Bearer argox_secret"}
+
+    def test_auth_headers_without_api_key(self, endpoint_url: str) -> None:
+        """No api_key yields no Authorization header (auth disabled path)."""
+        client = RemotePolicyClient(endpoint_url=endpoint_url)
+
+        assert client.api_key is None
+        assert client._auth_headers() == {}
+
+    @pytest.mark.asyncio
+    async def test_start_passes_auth_headers_to_client(
+        self, endpoint_url: str
+    ) -> None:
+        """start() instantiates the HTTP client with the Authorization header."""
+        client = RemotePolicyClient(
+            endpoint_url=endpoint_url,
+            refresh_interval_s=1,
+            api_key="argox_secret",
+        )
+
+        mock_response = MagicMock()
+        mock_response.text = SAMPLE_POLICY_YAML
+        mock_response.status_code = 200
+
+        with patch("httpx.AsyncClient") as mock_client_class:
+            mock_instance = AsyncMock()
+            mock_instance.get = AsyncMock(return_value=mock_response)
+            type(mock_instance).is_closed = PropertyMock(return_value=False)
+            mock_client_class.return_value = mock_instance
+
+            await client.start()
+            await client.stop()
+
+        _, kwargs = mock_client_class.call_args
+        assert kwargs["headers"] == {"Authorization": "Bearer argox_secret"}
+
+    def test_warns_on_api_key_over_plaintext(self) -> None:
+        """A non-HTTPS endpoint with an api_key logs a plaintext warning."""
+        with patch("argox.policies.remote_client.logger") as mock_logger:
+            RemotePolicyClient(
+                endpoint_url="http://collector.example.com/policy",
+                api_key="argox_secret",
+            )
+
+        assert mock_logger.warning.called
+
+    def test_no_warning_on_https_endpoint(self) -> None:
+        """An HTTPS endpoint with an api_key does not warn."""
+        with patch("argox.policies.remote_client.logger") as mock_logger:
+            RemotePolicyClient(
+                endpoint_url="https://collector.example.com/policy",
+                api_key="argox_secret",
+            )
+
+        assert not mock_logger.warning.called
+
+    def test_no_warning_on_loopback_http_endpoint(self) -> None:
+        """A plain-HTTP loopback endpoint with an api_key does not warn (no leak)."""
+        with patch("argox.policies.remote_client.logger") as mock_logger:
+            RemotePolicyClient(
+                endpoint_url="http://127.0.0.1:8000/api/v1/policies/bundle",
+                api_key="argox_secret",
+            )
+
+        assert not mock_logger.warning.called
+
+

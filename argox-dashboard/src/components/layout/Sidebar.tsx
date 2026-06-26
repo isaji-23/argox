@@ -1,127 +1,190 @@
-import { cn } from '../../lib/utils';
-import { Icon } from '../shared/Icon';
+// Persistent left sidebar: brand, nav groups (Observe / Manage), collector
+// health footer. Collapsible to a 60px icon-only rail.
+import { NavLink } from 'react-router-dom';
 import { Logo } from '../shared/Logo';
+import { Icon, type IconName } from '../shared/Icon';
 import { Tooltip } from '../ui/Tooltip';
 
-export const NAV_ITEMS = [
-  { id: 'metrics',  label: 'Metrics',  icon: 'metrics' },
-  { id: 'traces',   label: 'Traces',   icon: 'traces' },
-  { id: 'policies', label: 'Policies', icon: 'policies' },
-];
+interface NavItem {
+  to: string;
+  label: string;
+  icon: IconName;
+}
 
-export const MANAGE_ITEMS = [
-  { id: 'keys', label: 'API keys', icon: 'key' },
+const GROUPS: { title: string; items: NavItem[] }[] = [
+  {
+    title: 'Observe',
+    items: [
+      { to: '/metrics', label: 'Metrics', icon: 'metrics' },
+      { to: '/traces', label: 'Traces', icon: 'traces' },
+      { to: '/policies', label: 'Policies', icon: 'policies' },
+    ],
+  },
+  {
+    title: 'Manage',
+    items: [{ to: '/keys', label: 'API keys', icon: 'keys' }],
+  },
 ];
 
 interface SidebarProps {
-  route: string;
-  setRoute: (route: string) => void;
   collapsed: boolean;
+  onToggle: () => void;
 }
 
-export function Sidebar({ route, setRoute, collapsed }: SidebarProps) {
+export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   return (
-    <aside
-      className={cn(
-        "bg-surface border-r border-border flex flex-col transition-[width] duration-240 h-full overflow-hidden",
-        collapsed ? "w-[60px]" : "w-[220px]"
-      )}
-    >
-      <div className={cn(
-        "h-[56px] flex items-center border-b border-border flex-shrink-0",
-        collapsed ? "justify-center px-0" : "justify-start px-4"
-      )}>
-        <Logo withWord={!collapsed} size={26} />
-      </div>
+    <div style={{ position: 'relative', flex: '0 0 auto', height: '100%' }}>
+      <aside
+        style={{
+          width: collapsed ? 60 : 220,
+          flex: `0 0 ${collapsed ? 60 : 220}px`,
+          background: 'var(--bg-surface)',
+          borderRight: '1px solid var(--border)',
+          display: 'flex',
+          flexDirection: 'column',
+          transition: 'width var(--transition-slow), flex-basis var(--transition-slow)',
+          height: '100%',
+          overflow: 'hidden',
+        }}
+      >
+        <div
+          style={{
+            height: 56,
+            display: 'flex',
+            alignItems: 'center',
+            padding: collapsed ? 0 : '0 16px',
+            justifyContent: collapsed ? 'center' : 'flex-start',
+            borderBottom: '1px solid var(--border)',
+            flex: '0 0 auto',
+          }}
+        >
+          <Logo withWord={!collapsed} size={26} />
+        </div>
 
-      <nav className={cn(
-        "flex flex-col gap-1 p-3",
-        collapsed ? "px-2.5" : "px-3"
-      )}>
-        {!collapsed && (
-          <div className="px-2 py-1 text-2xs font-semibold tracking-widest uppercase text-text-faint mb-1">
-            Observe
-          </div>
-        )}
-        {NAV_ITEMS.map((n) => {
-          const active = route === n.id;
-          return (
-            <Tooltip key={n.id} label={n.label} side="right">
-              <button
-                onClick={() => setRoute(n.id)}
-                className={cn(
-                  "flex items-center gap-3 w-full rounded-md font-medium text-base relative transition-all group",
-                  collapsed ? "h-10 justify-center p-0" : "p-2 justify-start",
-                  active
-                    ? "text-accent bg-accent-surface border-accent-border border"
-                    : "text-text-secondary bg-transparent border-transparent hover:bg-surface-3 hover:text-text-primary"
-                )}
-              >
-                {active && !collapsed && (
-                  <span className="absolute -left-3 top-2 bottom-2 w-[2.5px] rounded-r-sm bg-accent" />
-                )}
-                <Icon name={n.icon} size={17} />
-                {!collapsed && <span>{n.label}</span>}
-              </button>
-            </Tooltip>
-          );
-        })}
+        <nav style={{ padding: collapsed ? '12px 10px' : '12px 12px', display: 'flex', flexDirection: 'column', gap: 3, flex: 1, overflowY: 'auto' }}>
+          {GROUPS.map((group) => (
+            <div key={group.title} style={{ display: 'flex', flexDirection: 'column', gap: 3, marginBottom: 6, alignItems: collapsed ? 'center' : 'stretch' }}>
+              {!collapsed && (
+                <div
+                  style={{
+                    padding: '6px 8px 4px',
+                    fontSize: 'var(--fs-2xs)',
+                    fontWeight: 600,
+                    letterSpacing: '0.07em',
+                    textTransform: 'uppercase',
+                    color: 'var(--text-faint)',
+                  }}
+                >
+                  {group.title}
+                </div>
+              )}
+              {group.items.map((n) => {
+                const link = (
+                  <NavLink to={n.to} style={{ width: collapsed ? 'auto' : '100%' }}>
+                    {({ isActive }) => (
+                      <span
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 11,
+                          width: collapsed ? 40 : '100%',
+                          padding: collapsed ? 0 : '8px 10px',
+                          height: collapsed ? 40 : 'auto',
+                          flex: '0 0 auto',
+                          justifyContent: collapsed ? 'center' : 'flex-start',
+                          fontSize: 'var(--fs-base)',
+                          fontWeight: 520,
+                          position: 'relative',
+                          color: isActive ? 'var(--accent)' : 'var(--text-secondary)',
+                          background: isActive ? 'var(--accent-surface)' : 'transparent',
+                          border: '1px solid ' + (isActive ? 'var(--accent-border)' : 'transparent'),
+                          borderRadius: 'var(--r-md)',
+                          transition: 'all var(--transition)',
+                        }}
+                        onMouseEnter={(e) => {
+                          if (!isActive) {
+                            e.currentTarget.style.background = 'var(--bg-surface-3)';
+                            e.currentTarget.style.color = 'var(--text-primary)';
+                          }
+                        }}
+                        onMouseLeave={(e) => {
+                          if (!isActive) {
+                            e.currentTarget.style.background = 'transparent';
+                            e.currentTarget.style.color = 'var(--text-secondary)';
+                          }
+                        }}
+                      >
+                        {isActive && !collapsed && (
+                          <span style={{ position: 'absolute', left: -12, top: 8, bottom: 8, width: 2.5, borderRadius: 2, background: 'var(--accent)' }} />
+                        )}
+                        <Icon name={n.icon} size={17} />
+                        {!collapsed && n.label}
+                      </span>
+                    )}
+                  </NavLink>
+                );
+                // Tooltip only adds value when the label is hidden (collapsed rail).
+                return collapsed ? (
+                  <Tooltip key={n.to} label={n.label} side="right">{link}</Tooltip>
+                ) : (
+                  <span key={n.to} style={{ display: 'flex' }}>{link}</span>
+                );
+              })}
+            </div>
+          ))}
+        </nav>
 
-        {!collapsed && (
-          <div className="px-2 py-1 mt-3 text-2xs font-semibold tracking-widest uppercase text-text-faint mb-1">
-            Manage
-          </div>
-        )}
-        {MANAGE_ITEMS.map((n) => {
-          const active = route === n.id;
-          return (
-            <Tooltip key={n.id} label={n.label} side="right">
-              <button
-                onClick={() => setRoute(n.id)}
-                className={cn(
-                  "flex items-center gap-3 w-full rounded-md font-medium text-base relative transition-all group",
-                  collapsed ? "h-10 justify-center p-0" : "p-2 justify-start",
-                  active
-                    ? "text-accent bg-accent-surface border-accent-border border"
-                    : "text-text-secondary bg-transparent border-transparent hover:bg-surface-3 hover:text-text-primary"
-                )}
-              >
-                {active && !collapsed && (
-                  <span className="absolute -left-3 top-2 bottom-2 w-[2.5px] rounded-r-sm bg-accent" />
-                )}
-                <Icon name={n.icon} size={17} />
-                {!collapsed && <span>{n.label}</span>}
-              </button>
-            </Tooltip>
-          );
-        })}
-      </nav>
+        <div style={{ padding: collapsed ? '10px' : '12px', borderTop: '1px solid var(--border)', flex: '0 0 auto' }}>
+          {!collapsed ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 6px' }}>
+              <span style={{ width: 7, height: 7, borderRadius: 999, background: 'var(--allow)', boxShadow: '0 0 0 3px var(--allow-surface)' }} />
+              <span style={{ fontSize: 'var(--fs-2xs)', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>collector · healthy</span>
+            </div>
+          ) : (
+            <div style={{ display: 'grid', placeItems: 'center' }}>
+              <span style={{ width: 7, height: 7, borderRadius: 999, background: 'var(--allow)', boxShadow: '0 0 0 3px var(--allow-surface)' }} />
+            </div>
+          )}
+        </div>
+      </aside>
 
-      <div className="mt-auto p-3 border-t border-border">
-        <Tooltip label="Design system" side="right">
-          <button
-            onClick={() => setRoute('system')}
-            className={cn(
-              "flex items-center gap-3 w-full rounded-md font-medium text-base transition-all",
-              collapsed ? "h-10 justify-center p-0" : "p-2 justify-start",
-              route === 'system'
-                ? "text-accent bg-accent-surface border-accent-border border"
-                : "text-text-muted bg-transparent hover:bg-surface-3 hover:text-text-primary"
-            )}
-          >
-            <Icon name="system" size={17} />
-            {!collapsed && <span>Design system</span>}
-          </button>
-        </Tooltip>
-        {!collapsed && (
-          <div className="flex items-center gap-2 px-2 pt-2.5 mt-1">
-            <span className="w-1.5 h-1.5 rounded-full bg-allow shadow-[0_0_0_3px_var(--allow-surface)]" />
-            <span className="text-2xs text-text-muted font-mono uppercase tracking-tight">
-              collector · healthy
-            </span>
-          </div>
-        )}
-      </div>
-    </aside>
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+        style={{
+          position: 'absolute',
+          top: '50%',
+          right: -12,
+          transform: 'translateY(-50%)',
+          zIndex: 50,
+          width: 24,
+          height: 24,
+          boxSizing: 'border-box',
+          borderRadius: 999,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: 0,
+          lineHeight: 0,
+          background: 'var(--bg-surface)',
+          border: '1px solid var(--border)',
+          color: 'var(--text-muted)',
+          boxShadow: 'var(--shadow-sm)',
+          cursor: 'pointer',
+          transition: 'all var(--transition)',
+        }}
+        onMouseEnter={(e) => {
+          e.currentTarget.style.background = 'var(--bg-surface-3)';
+          e.currentTarget.style.color = 'var(--text-primary)';
+        }}
+        onMouseLeave={(e) => {
+          e.currentTarget.style.background = 'var(--bg-surface)';
+          e.currentTarget.style.color = 'var(--text-muted)';
+        }}
+      >
+        <Icon name={collapsed ? 'chevronRight' : 'chevronLeft'} size={14} />
+      </button>
+    </div>
   );
 }

@@ -1,12 +1,16 @@
-import React from 'react';
-import { cn } from '../../lib/utils';
-import { Icon } from '../shared/Icon';
+// Button + IconButton primitives (peacock design system).
+import type { ButtonHTMLAttributes, CSSProperties, ReactNode } from 'react';
+import { Icon, type IconName } from '../shared/Icon';
 
-interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
-  variant?: 'primary' | 'secondary' | 'ghost' | 'outline' | 'danger' | 'accentSoft';
-  size?: 'sm' | 'md' | 'lg';
-  icon?: string;
-  iconRight?: string;
+type Variant = 'primary' | 'secondary' | 'ghost' | 'outline' | 'danger' | 'accentSoft';
+type Size = 'sm' | 'md' | 'lg';
+
+interface ButtonProps extends Omit<ButtonHTMLAttributes<HTMLButtonElement>, 'type'> {
+  children?: ReactNode;
+  variant?: Variant;
+  size?: Size;
+  icon?: IconName;
+  iconRight?: IconName;
   full?: boolean;
   active?: boolean;
 }
@@ -19,37 +23,57 @@ export function Button({
   iconRight,
   full,
   active,
+  style,
   className,
-  ...props
+  ...rest
 }: ButtonProps) {
-  const variants = {
-    primary: "bg-accent text-accent-fg border-accent shadow-[0_1px_0_rgba(255,255,255,0.12)_inset]",
-    secondary: "bg-surface-3 text-text-primary border-border-strong",
-    ghost: cn(
-      "border-transparent",
-      active ? "bg-surface-3 text-text-primary border-border" : "bg-transparent text-text-secondary"
-    ),
-    outline: "bg-transparent text-text-primary border-border-strong",
-    danger: "bg-block-bg text-block-bright border-block-border",
-    accentSoft: "bg-accent-surface text-accent border-accent-border",
+  const pad = size === 'sm' ? '5px 10px' : size === 'lg' ? '10px 18px' : '7px 13px';
+  const fs = size === 'sm' ? 'var(--fs-sm)' : size === 'lg' ? 'var(--fs-md)' : 'var(--fs-base)';
+  const base: CSSProperties = {
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 7,
+    padding: pad,
+    fontSize: fs,
+    fontWeight: 550,
+    fontFamily: 'var(--font-ui)',
+    borderRadius: 'var(--r-md)',
+    border: '1px solid transparent',
+    lineHeight: 1,
+    transition:
+      'background var(--transition), border-color var(--transition), color var(--transition), box-shadow var(--transition), transform var(--transition)',
+    width: full ? '100%' : undefined,
+    whiteSpace: 'nowrap',
+    userSelect: 'none',
   };
-
-  const sizes = {
-    sm: "px-2.5 py-1.5 text-sm gap-1.5",
-    md: "px-3 py-2 text-base gap-2",
-    lg: "px-4.5 py-2.5 text-md gap-2",
+  const variants: Record<Variant, CSSProperties> = {
+    primary: {
+      background: 'var(--accent)',
+      color: 'var(--accent-fg)',
+      borderColor: 'var(--accent)',
+      boxShadow: '0 1px 0 rgba(255,255,255,0.12) inset',
+    },
+    secondary: {
+      background: 'var(--bg-surface-3)',
+      color: 'var(--text-primary)',
+      borderColor: 'var(--border-strong)',
+    },
+    ghost: {
+      background: active ? 'var(--bg-surface-3)' : 'transparent',
+      color: active ? 'var(--text-primary)' : 'var(--text-secondary)',
+      borderColor: active ? 'var(--border)' : 'transparent',
+    },
+    outline: { background: 'transparent', color: 'var(--text-primary)', borderColor: 'var(--border-strong)' },
+    danger: { background: 'var(--block-bg)', color: 'var(--block-bright)', borderColor: 'var(--block-border)' },
+    accentSoft: { background: 'var(--accent-surface)', color: 'var(--accent)', borderColor: 'var(--accent-border)' },
   };
-
   return (
     <button
-      className={cn(
-        "inline-flex items-center justify-center font-semibold font-ui rounded-md border transition-all select-none whitespace-nowrap leading-none",
-        variants[variant],
-        sizes[size],
-        full && "w-full",
-        className
-      )}
-      {...props}
+      type="button"
+      {...rest}
+      className={className}
+      style={{ ...base, ...variants[variant], ...style }}
     >
       {icon && <Icon name={icon} size={size === 'sm' ? 14 : 15} />}
       {children}
@@ -58,24 +82,33 @@ export function Button({
   );
 }
 
-interface IconButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
-  name: string;
+interface IconButtonProps extends Omit<ButtonHTMLAttributes<HTMLButtonElement>, 'type'> {
+  name: IconName | string;
   size?: number;
-  label: string;
+  label?: string;
   active?: boolean;
 }
 
-export function IconButton({ name, size = 16, label, active, className, ...props }: IconButtonProps) {
+export function IconButton({ name, size = 16, label, active, style, ...rest }: IconButtonProps) {
   return (
     <button
+      type="button"
+      {...rest}
       title={label}
       aria-label={label}
-      className={cn(
-        "inline-flex items-center justify-center w-8 h-8 rounded-md transition-all border",
-        active ? "bg-surface-3 text-text-primary border-border" : "bg-transparent text-text-secondary border-transparent",
-        className
-      )}
-      {...props}
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        width: 32,
+        height: 32,
+        borderRadius: 'var(--r-md)',
+        background: active ? 'var(--bg-surface-3)' : 'transparent',
+        color: active ? 'var(--text-primary)' : 'var(--text-secondary)',
+        border: '1px solid ' + (active ? 'var(--border)' : 'transparent'),
+        transition: 'all var(--transition)',
+        ...style,
+      }}
     >
       <Icon name={name} size={size} />
     </button>

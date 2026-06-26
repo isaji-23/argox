@@ -1,101 +1,85 @@
-import React, { useState } from 'react';
-import { cn } from '../../lib/utils';
-import { Icon } from '../shared/Icon';
+// Panel / PanelHeader / SectionLabel — titled card surfaces.
+import type { CSSProperties, ReactNode } from 'react';
+import { Icon, type IconName } from '../shared/Icon';
 
 interface PanelProps {
-  children: React.ReactNode;
-  title?: string;
-  icon?: string;
-  accent?: 'accent' | 'danger' | 'success' | 'warning' | 'none';
-  collapsible?: boolean;
-  defaultCollapsed?: boolean;
-  className?: string;
+  children: ReactNode;
+  style?: CSSProperties;
   pad?: boolean;
+  className?: string;
 }
 
-export function Panel({ 
-  children, 
-  title, 
-  icon, 
-  accent = 'none', 
-  collapsible = false, 
-  defaultCollapsed = false,
-  className, 
-  pad = true 
-}: PanelProps) {
-  const [isCollapsed, setIsCollapsed] = useState(defaultCollapsed);
-
-  const accents = {
-    none: "",
-    accent: "border-l-2 border-l-accent",
-    danger: "border-l-2 border-l-block-edge",
-    success: "border-l-2 border-l-allow-border",
-    warning: "border-l-2 border-l-warn-border",
-  };
-
+export function Panel({ children, style, pad = true, className = '' }: PanelProps) {
   return (
     <div
-      className={cn(
-        "bg-surface border border-border rounded-lg shadow-sm overflow-hidden flex flex-col transition-all",
-        accents[accent],
-        className
-      )}
+      className={className}
+      style={{
+        background: 'var(--bg-surface)',
+        border: '1px solid var(--border)',
+        borderRadius: 'var(--r-lg)',
+        padding: pad ? 'var(--sp-5)' : 0,
+        boxShadow: 'var(--shadow-sm)',
+        ...style,
+      }}
     >
-      {title && (
-        <div 
-          className={cn(
-            "flex items-center justify-between px-4 py-2.5 border-b border-border bg-surface-2/50",
-            collapsible && "cursor-pointer hover:bg-surface-3 transition-colors"
-          )}
-          onClick={() => collapsible && setIsCollapsed(!isCollapsed)}
-        >
-          <div className="flex items-center gap-2">
-            {icon && <Icon name={icon} size={14} className="text-text-muted" />}
-            <span className="text-xs font-bold uppercase tracking-widest text-text-muted">{title}</span>
-          </div>
-          {collapsible && (
-            <Icon 
-              name={isCollapsed ? "chevronDown" : "chevronUp"} 
-              size={14} 
-              className="text-text-faint" 
-            />
-          )}
-        </div>
-      )}
-      {!isCollapsed && (
-        <div className={cn("flex-1 overflow-hidden flex flex-col", pad && "p-4")}>
-          {children}
-        </div>
-      )}
+      {children}
     </div>
   );
 }
 
 interface PanelHeaderProps {
-  title: string;
-  subtitle?: string;
-  icon?: string;
-  right?: React.ReactNode;
-  className?: string;
+  title: ReactNode;
+  subtitle?: ReactNode;
+  icon?: IconName;
+  right?: ReactNode;
 }
 
-export function PanelHeader({ title, subtitle, icon, right, className }: PanelHeaderProps) {
+export function PanelHeader({ title, subtitle, icon, right }: PanelHeaderProps) {
   return (
-    <div className={cn("flex items-start justify-between gap-3 mb-1", className)}>
-      <div className="flex items-center gap-2.5 min-w-0">
-        {icon && <Icon name={icon} size={16} className="text-text-muted" />}
-        <div className="min-w-0">
-          <div className="text-md font-semibold text-text-primary tracking-tight leading-tight">
+    <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, marginBottom: 4 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 9, minWidth: 0 }}>
+        {icon && (
+          <span style={{ color: 'var(--text-muted)' }}>
+            <Icon name={icon} size={16} />
+          </span>
+        )}
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontSize: 'var(--fs-md)', fontWeight: 600, color: 'var(--text-primary)', letterSpacing: '-0.01em' }}>
             {title}
           </div>
-          {subtitle && (
-            <div className="text-sm text-text-muted mt-0.5 leading-snug">
-              {subtitle}
-            </div>
-          )}
+          {subtitle && <div style={{ fontSize: 'var(--fs-sm)', color: 'var(--text-muted)', marginTop: 1 }}>{subtitle}</div>}
         </div>
       </div>
       {right}
+    </div>
+  );
+}
+
+interface SectionLabelProps {
+  children: ReactNode;
+  icon?: IconName;
+  color?: string;
+}
+
+export function SectionLabel({ children, icon, color }: SectionLabelProps) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 8 }}>
+      {icon && (
+        <span style={{ color: color || 'var(--text-muted)', display: 'flex' }}>
+          <Icon name={icon} size={14} />
+        </span>
+      )}
+      <span
+        style={{
+          fontSize: 'var(--fs-xs)',
+          fontWeight: 600,
+          letterSpacing: '0.05em',
+          textTransform: 'uppercase',
+          color: 'var(--text-secondary)',
+        }}
+      >
+        {children}
+      </span>
     </div>
   );
 }
