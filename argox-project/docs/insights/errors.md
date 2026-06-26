@@ -8,6 +8,66 @@ and resolves a non-trivial error.
 
 <!-- Add new entries directly below this line, newest first. -->
 
+## 2026-06-25 — Dashboard Policies screen 401 under Collector auth  [DASH-07]
+- **Symptom:** `GET /api/v1/policies` returned `401 ()` in the deployed
+  dashboard while traces/runs/metrics loaded fine with the same key. Worked only
+  with auth disabled.
+- **Root cause:** the policy methods in `argox-dashboard/src/lib/api.ts` used a
+  bare `fetch()` with no `Authorization` header — unlike `apiFetch`, which all
+  other reads go through. No credential reached the Collector, so it was a 401
+  (missing credential), not a 403 (scope). A second, distinct gap: `policy-read`
+  is its own scope, separate from `read`, and the demo key was minted without it.
+- **Fix:** route every policy read/write through a new `policyFetch` wrapper that
+  attaches the stored read key (and supports bodies, a custom `Accept`, and the
+  401/403 handling). Mint the demo key with `policy-read` in `demo.sh`.
+- **Guard:** `pnpm run build` type-checks the client; the wrapper is the single
+  auth-bearing path so a future policy call cannot silently drop the header.
+
+## 2026-06-25 — Run Record always "No run record available" / by-trace 404  [EXP-10]
+- **Symptom:** `GET /api/v1/runs/by-trace/<trace_id>` returned `404 (Not Found)`
+  for every trace, including freshly ingested ones; the dashboard Run Record
+  panel showed "No run record available — Wire HttpRunExporter…". Worked with
+  the local Collector when auth was disabled, which masked the real cause.
+- **Root cause:** the Collector resolves by-trace purely on `runs.trace_id`
+  (`SELECT … FROM runs WHERE trace_id = ?`), but the run payload never carried a
+  trace id. `AgentRunMetrics` had no `trace_id` field and `to_dict()` omitted it,
+  so `HttpRunExporter` POSTed runs with `trace_id = NULL` — stored unlinked,
+  never matched. The "SDK exporter sets it" assumption in the runs router was
+  never fulfilled.
+- **Fix:** stamp `metrics.trace_id` in `ArgoxManager.run` from the active
+  `argox.agent.run` root span (`format(span.get_span_context().trace_id,
+  "032x")`, guarded against a zero id) and serialize it in `to_dict()`. Same
+  32-hex lowercase id the OTLP span exporter ships, so it joins.
+- **Guard:** `tests/test_run_root_attributes.py::test_run_metrics_trace_id_matches_span`
+  asserts the run's `trace_id` equals its span's and round-trips through
+  `to_dict()`.
+
+## 2026-06-24 — Collector image missing argox-core; charts show "No data"  [COL-20]
+- **Symptom:** Dashboard metrics charts all rendered "No data within this
+  window" while KPI cards still showed values. The deployed collector's
+  `/api/v1/metrics/cost` returned `{window_hours, total_cost, trace_count}` with
+  no `timeline`/`top_agents`, so the frontend's `?? []` guards produced empty
+  charts. Rebuilding the collector from current `dev` and rolling it out made the
+  Azure Container Apps revision Unhealthy; logs showed
+  `ModuleNotFoundError: No module named 'argox'` at
+  `routers/policies.py:41` (`from argox.policies.parser import PolicyParser`).
+- **Root cause:** The collector imports the sibling `argox-core` package but
+  never declared it as a dependency, and the Docker build context was the
+  `argox-collector/` subdirectory only, so `argox-core` never entered the image.
+  The previously deployed image worked solely because it predated both the import
+  and the metrics timeline fields. A second failure surfaced during recovery:
+  with DuckDB on Azure Files (single writer), a new collector revision could not
+  acquire the index lock until the old revision was deactivated.
+- **Fix:** PR #178 — declared `argox-core>=0.1.0` in the collector's
+  dependencies; build from the `argox-project/` parent context and install
+  `argox-core` before `argox-collector[azure]`; pointed `COLLECTOR_CTX` at the
+  parent and addressed the Dockerfile with `-f` in `deploy.sh` and `update.sh`.
+  Immediate production recovery: rolled the collector back to the last working
+  tag, then deactivated the stale revision to release the DuckDB lock.
+- **Guard:** `tests/test_app_import.py` imports `argox.policies.parser` and
+  `argox_collector.app`, failing the suite if `argox-core` is missing from the
+  environment before any image is built.
+
 ## 2026-06-10 — NaN attribute values poison metrics and silently drop spans  [COL-04]
 - **Symptom:** Two failure modes found by audit, not in production: (1) an OTLP
   double attribute carrying NaN (or a string `"nan"`) lands in `run_cost`, after

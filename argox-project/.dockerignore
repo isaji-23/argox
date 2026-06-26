@@ -1,0 +1,47 @@
+# Build-context root for the collector image (see argox-collector/Dockerfile,
+# built with context `argox-project/` and `-f argox-collector/Dockerfile`).
+#
+# Docker/BuildKit reads .dockerignore only from the context ROOT, so this file —
+# not argox-collector/.dockerignore — governs what the cloud build (az acr build)
+# uploads. Only argox-core/ and argox-collector/ sources are needed; everything
+# else, MOST IMPORTANTLY local secrets in .env, must stay out of the context.
+
+# Local secrets and environment files
+.env
+.env.*
+**/.env
+**/.env.*
+
+# VCS metadata
+.git
+.gitignore
+
+# Python caches and build artifacts
+**/__pycache__
+**/*.py[cod]
+**/.pytest_cache
+**/.mypy_cache
+**/.ruff_cache
+**/*.egg-info
+**/build
+**/dist
+
+# Virtual environments
+**/.venv
+**/venv
+**/env
+
+# Local data and runtime output
+**/var
+.benchmarks
+benchmarks
+
+# Sibling packages not needed by the collector image
+argox-exporters
+argox-plugins
+examples
+docs
+
+# Docs and tests are never copied into the image
+**/*.md
+**/tests

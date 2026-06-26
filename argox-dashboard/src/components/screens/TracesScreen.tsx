@@ -1,281 +1,251 @@
-import { useState, useEffect } from 'react';
-import { cn } from '../../lib/utils';
-import { Icon } from '../shared/Icon';
-import { Button } from '../ui/Button';
-import { StatusDot } from '../ui/Badge';
-import { DecisionBadge } from '../shared/DecisionBadge';
+// Traces list: searchable, filterable, paginated table backed by GET /traces.
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { useShell } from '../../App';
+import { api, type TraceSummary } from '../../lib/api';
+import { rangeToHours, rangeLabel } from '../../lib/timeRange';
+import { fmtMs, fmtUsd, fmtNum } from '../../lib/utils';
 import { Panel } from '../ui/Panel';
-import { ErrorState } from '../ui/States';
+import { Button } from '../ui/Button';
+import { Badge, DecisionBadge, StatusDot } from '../ui/Badge';
+import { Icon } from '../shared/Icon';
 import { SearchInput } from '../ui/SearchInput';
 import { Select } from '../ui/Select';
-import { DataTable } from '../ui/DataTable';
-import type { Column } from '../ui/DataTable';
-import { api, type TraceSummary } from '../../lib/api';
-import { AGENTS, TIME_RANGES } from '../../data/mockData';
+import { DataTable, type Column, type SortState } from '../ui/DataTable';
+import { ErrorState } from '../ui/States';
 
-interface TracesScreenProps {
-  timeRange: string;
-  agent: string;
-  onOpenTrace: (trace: { id: string }) => void;
+const PAGE_SIZE = 10;
+
+// Frontend sort key -> Collector `sort` field.
+const SORT_FIELD: Record<string, string> = {
+  start_time: 'start_time',
+  total_duration_ms: 'duration',
+  total_cost: 'cost',
+  span_count: 'spans',
+};
+
+function FilterSelect({ label, value, options, onChange }: { label: string; value: string; options: { value: string; label: string }[]; onChange: (v: string) => void }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', border: '1px solid var(--border-strong)', borderRadius: 'var(--r-md)', background: 'var(--bg-surface-3)' }}>
+      <span style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-muted)', padding: '0 2px 0 10px', whiteSpace: 'nowrap' }}>{label}</span>
+      <Select value={value} options={options} onChange={onChange} minWidth={96} size="sm" />
+    </div>
+  );
 }
 
-export function TracesScreen({ timeRange, agent, onOpenTrace }: TracesScreenProps) {
+export function TracesScreen() {
+  const { timeRange, agent, reloadKey } = useShell();
+  const navigate = useNavigate();
+
   const [traces, setTraces] = useState<TraceSummary[]>([]);
   const [total, setTotal] = useState(0);
-  const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
-  const [sort, setSort] = useState<{ key: string; dir: 'asc' | 'desc' }>({ key: 'start_time', dir: 'desc' });
+  const [sort, setSort] = useState<SortState>({ key: 'start_time', dir: 'desc' });
   const [query, setQuery] = useState('');
   const [debouncedQuery, setDebouncedQuery] = useState('');
-  const [filterStatus, setFilterStatus] = useState('all');
-  const [filterDecision, setFilterDecision] = useState('all');
-  const [filterAgent, setFilterAgent] = useState(agent);
-  const [error, setError] = useState<string | null>(null);
-  const pageSize = 10;
+  const [fStatus, setFStatus] = useState('all');
+  const [fDecision, setFDecision] = useState('all');
+  const [fAgent, setFAgent] = useState('all');
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(false);
 
-  useEffect(() => {
-    setFilterAgent(agent);
-  }, [agent]);
+  useEffect(() => setFAgent(agent === 'all' ? 'all' : agent), [agent]);
 
-  // Debounce search query
+  // Debounce the trace-id search (300ms).
   useEffect(() => {
-    const handler = setTimeout(() => {
-      setDebouncedQuery(query);
-    }, 300);
-    return () => clearTimeout(handler);
+    const t = setTimeout(() => setDebouncedQuery(query), 300);
+    return () => clearTimeout(t);
   }, [query]);
 
-  const fetchTraces = async () => {
+  // Reset to first page on any filter/search/sort/range change.
+  useEffect(() => setPage(1), [debouncedQuery, fStatus, fDecision, fAgent, sort, timeRange]);
+
+  const load = useCallback(() => {
     setLoading(true);
-    setError(null);
-
-    // Map frontend sort keys to backend fields
-    const sortMap: Record<string, string> = {
-      start_time: 'start_time',
-      total_duration_ms: 'duration',
-      total_cost: 'cost',
-      span_count: 'spans'
-    };
-    const backendSort = sortMap[sort.key] ? `${sortMap[sort.key]}:${sort.dir}` : undefined;
-
-    try {
-      const rangeMap: Record<string, number> = {
-        '1h': 1,
-        '24h': 24,
-        '7d': 168,
-        '30d': 720,
-      };
-      const windowHours = rangeMap[timeRange] || 24;
-
-      const data = await api.listTraces({
-        skip: (page - 1) * pageSize,
-        limit: pageSize,
+    setError(false);
+    api
+      .listTraces({
+        skip: (page - 1) * PAGE_SIZE,
+        limit: PAGE_SIZE,
         trace_id: debouncedQuery || undefined,
-        agent_name: filterAgent,
-        status: filterStatus,
-        decision: filterDecision,
-        sort: backendSort,
-        window_hours: windowHours,
-      });
-      setTraces(data.items);
-      setTotal(data.total);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unknown error');
-    } finally {
-      setLoading(false);
-    }
-  };
+        agent_name: fAgent,
+        status: fStatus,
+        decision: fDecision,
+        sort: `${SORT_FIELD[sort.key] ?? 'start_time'}:${sort.dir}`,
+        window_hours: rangeToHours(timeRange),
+      })
+      .then((res) => {
+        setTraces(res.items);
+        setTotal(res.total);
+      })
+      .catch(() => setError(true))
+      .finally(() => setLoading(false));
+  }, [page, debouncedQuery, fAgent, fStatus, fDecision, sort, timeRange]);
 
   useEffect(() => {
-    fetchTraces();
-  }, [page, debouncedQuery, filterStatus, filterDecision, filterAgent, sort, timeRange]);
+    load();
+  }, [load, reloadKey]);
 
-  useEffect(() => {
-    setPage(1);
-  }, [debouncedQuery, filterStatus, filterDecision, filterAgent, sort, timeRange]);
+  const onSort = (key: string) =>
+    setSort((s) => ({ key, dir: s.key === key && s.dir === 'desc' ? 'asc' : 'desc' }));
 
-  const fmtMs = (ms: number) => ms >= 1000 ? (ms / 1000).toFixed(2) + 's' : Math.round(ms) + 'ms';
-  const fmtDate = (iso: string) => {
-    const d = new Date(iso);
-    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  const filtersActive = fStatus !== 'all' || fDecision !== 'all' || fAgent !== 'all' || query !== '';
+  const clearFilters = () => {
+    setQuery('');
+    setFStatus('all');
+    setFDecision('all');
+    setFAgent('all');
   };
 
-  const columns: Column<TraceSummary>[] = [
-    {
-      key: 'trace_id',
-      label: 'Trace',
-      width: '1.5fr',
-      sortable: false,
-      render: (r) => (
-        <div className="flex items-center gap-2.5 min-w-0">
-          <StatusDot status={r.status || 'ok'} />
-          <div className="min-w-0">
-            <div className={cn(
-              "font-mono text-sm font-semibold truncate",
-              r.decision === 'block' ? "text-block-bright" : "text-text-primary"
-            )}>
-              {(r.trace_id || '').slice(0, 8)}...
-            </div>
-            <div className="font-mono text-2xs text-text-faint truncate uppercase">
-              {r.trace_id}
+  const columns: Column<TraceSummary>[] = useMemo(
+    () => [
+      {
+        key: 'trace_id',
+        label: 'Trace ID',
+        width: '1.6fr',
+        render: (r) => (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 9, minWidth: 0 }}>
+            <StatusDot status={r.status} />
+            <div style={{ minWidth: 0 }}>
+              <div
+                style={{
+                  fontFamily: 'var(--font-mono)',
+                  fontSize: 'var(--fs-sm)',
+                  fontWeight: 550,
+                  color: r.status === 'error' ? 'var(--block-ink)' : 'var(--text-primary)',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {r.trace_id}
+              </div>
+              <div style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-2xs)', color: 'var(--text-faint)' }}>{r.agent_version}</div>
             </div>
           </div>
-        </div>
-      )
-    },
-    {
-      key: 'agent_name',
-      label: 'Agent',
-      width: '1fr',
-      sortable: false,
-      render: (r) => (
-        <span className="inline-flex items-center gap-1.5 text-sm text-text-secondary font-mono">
-          <Icon name="bolt" size={12} className="text-text-faint" />
-          {r.agent_name || 'unknown'}
-        </span>
-      )
-    },
-    {
-      key: 'start_time',
-      label: 'Started',
-      width: '0.9fr',
-      sortable: true,
-      render: (r) => (
-        <span className="text-xs text-text-muted font-mono">{r.start_time ? fmtDate(r.start_time) : '-'}</span>
-      )
-    },
-    {
-      key: 'total_duration_ms',
-      label: 'Duration',
-      width: '0.8fr',
-      align: 'right',
-      sortable: true,
-      render: (r) => (
-        <span className="text-sm font-mono text-text-secondary tabular-nums">
-          {fmtMs(r.total_duration_ms || 0)}
-        </span>
-      )
-    },
-    {
-      key: 'span_count',
-      label: 'Spans',
-      width: '0.55fr',
-      align: 'right',
-      sortable: true,
-      render: (r) => (
-        <span className="text-sm font-mono text-text-muted tabular-nums">
-          {r.span_count}
-        </span>
-      )
-    },
-    {
-      key: 'total_cost',
-      label: 'Cost',
-      width: '0.7fr',
-      align: 'right',
-      sortable: true,
-      render: (r) => (
-        <span className="text-sm font-mono text-text-secondary tabular-nums">
-          ${r.total_cost?.toFixed(4) || '0.0000'}
-        </span>
-      )
-    },
-    {
-      key: 'decision',
-      label: 'Policy',
-      width: '0.85fr',
-      align: 'right',
-      sortable: false,
-      render: (r) => <DecisionBadge decision={r.decision || 'allow'} size="sm" />
-    },
-  ];
+        ),
+      },
+      {
+        key: 'agent_name',
+        label: 'Agent',
+        width: '1fr',
+        render: (r) => (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 'var(--fs-sm)', color: 'var(--text-secondary)', fontFamily: 'var(--font-mono)' }}>
+            <Icon name="bolt" size={12} style={{ color: 'var(--text-faint)' }} />
+            {r.agent_name}
+          </span>
+        ),
+      },
+      {
+        key: 'start_time',
+        label: 'Started',
+        width: '1fr',
+        sortable: true,
+        render: (r) => (
+          <span style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
+            {new Date(r.start_time).toLocaleString('en-US', { hour12: false })}
+          </span>
+        ),
+      },
+      {
+        key: 'total_duration_ms',
+        label: 'Duration',
+        width: '0.8fr',
+        sortable: true,
+        render: (r) => (
+          <span className="tnum" style={{ fontSize: 'var(--fs-sm)', fontFamily: 'var(--font-mono)', color: 'var(--text-secondary)' }}>
+            {fmtMs(r.total_duration_ms)}
+          </span>
+        ),
+      },
+      {
+        key: 'span_count',
+        label: 'Spans',
+        width: '0.55fr',
+        sortable: true,
+        render: (r) => (
+          <span className="tnum" style={{ fontSize: 'var(--fs-sm)', fontFamily: 'var(--font-mono)', color: 'var(--text-muted)' }}>
+            {r.span_count}
+          </span>
+        ),
+      },
+      {
+        key: 'total_cost',
+        label: 'Cost',
+        width: '0.7fr',
+        sortable: true,
+        render: (r) => (
+          <span className="tnum" style={{ fontSize: 'var(--fs-sm)', fontFamily: 'var(--font-mono)', color: 'var(--text-secondary)' }}>
+            {fmtUsd(r.total_cost)}
+          </span>
+        ),
+      },
+      {
+        key: 'decision',
+        label: 'Policy',
+        width: '0.85fr',
+        render: (r) => <DecisionBadge decision={r.decision} size="sm" />,
+      },
+      {
+        key: 'status',
+        label: 'Result',
+        width: '0.7fr',
+        render: (r) => (
+          <Badge tone={r.status === 'error' ? 'error' : 'allow'}>
+            {r.status === 'error' ? 'Error' : 'Success'}
+          </Badge>
+        ),
+      },
+    ],
+    [],
+  );
 
   return (
-    <div className="ax-fade-in p-6 pt-5 pb-10 max-w-[1320px] mx-auto">
-      <div className="flex items-end justify-between mb-4">
+    <div className="ax-fade-in" style={{ padding: '18px 22px 40px', maxWidth: 1320, margin: '0 auto' }}>
+      <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: 16 }}>
         <div>
-          <h1 className="m-0 text-xl font-semibold tracking-tight">Traces</h1>
-          <p className="m-0 mt-0.5 text-sm text-text-muted">
-            {total.toLocaleString()} traces · {TIME_RANGES.find((t) => t.value === timeRange)?.label.toLowerCase()}
+          <h1 style={{ margin: 0, fontSize: 'var(--fs-xl)', fontWeight: 600, letterSpacing: '-0.015em' }}>Traces</h1>
+          <p style={{ margin: '3px 0 0', fontSize: 'var(--fs-sm)', color: 'var(--text-muted)' }}>
+            {fmtNum(total)} traces · {rangeLabel(timeRange).toLowerCase()}
           </p>
         </div>
-        <div className="flex gap-2">
-          <Button variant="secondary" size="sm" icon="refresh" onClick={fetchTraces} className={loading ? "opacity-50 pointer-events-none" : ""}>
-            {loading ? 'Refreshing...' : 'Refresh'}
-          </Button>
-        </div>
+        <Button variant="secondary" size="sm" icon="refresh" onClick={load}>
+          Refresh
+        </Button>
       </div>
 
       {/* Filter bar */}
-      <div className="flex items-center gap-2.5 mb-3.5 flex-wrap">
-        <SearchInput
-          value={query}
-          onChange={setQuery}
-          placeholder="Search trace_id…"
-          width={280}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14, flexWrap: 'wrap' }}>
+        <SearchInput value={query} onChange={setQuery} placeholder="Search trace_id…" width={280} />
+        <div style={{ width: 1, height: 22, background: 'var(--border)' }} />
+        <FilterSelect
+          label="Agent"
+          value={fAgent}
+          onChange={setFAgent}
+          options={[{ value: 'all', label: 'All' }, ...(fAgent !== 'all' ? [{ value: fAgent, label: fAgent }] : [])]}
         />
-        <div className="w-px h-[22px] bg-border mx-1" />
-        
-        <div className="flex items-center bg-surface-3 border border-border-strong rounded-md overflow-hidden">
-          <span className="text-xs text-text-muted pl-2.5 pr-0.5 whitespace-nowrap">Agent</span>
-          <Select
-            value={filterAgent}
-            onChange={setFilterAgent}
-            options={[{ value: 'all', label: 'All' }, ...AGENTS.map((a) => ({ value: a, label: a }))]}
-            minWidth={100}
-            size="sm"
-            className="border-none rounded-none"
-          />
-        </div>
-
-        <div className="flex items-center bg-surface-3 border border-border-strong rounded-md overflow-hidden">
-          <span className="text-xs text-text-muted pl-2.5 pr-0.5 whitespace-nowrap">Status</span>
-          <Select
-            value={filterStatus}
-            onChange={setFilterStatus}
-            options={[{ value: 'all', label: 'All' }, { value: 'ok', label: 'OK' }, { value: 'error', label: 'Error' }]}
-            minWidth={80}
-            size="sm"
-            className="border-none rounded-none"
-          />
-        </div>
-
-        <div className="flex items-center bg-surface-3 border border-border-strong rounded-md overflow-hidden">
-          <span className="text-xs text-text-muted pl-2.5 pr-0.5 whitespace-nowrap">Decision</span>
-          <Select
-            value={filterDecision}
-            onChange={setFilterDecision}
-            options={[{ value: 'all', label: 'All' }, { value: 'allow', label: 'Allow' }, { value: 'warn', label: 'Warn' }, { value: 'block', label: 'Block' }]}
-            minWidth={90}
-            size="sm"
-            className="border-none rounded-none"
-          />
-        </div>
-
-        {(filterStatus !== 'all' || filterDecision !== 'all' || filterAgent !== 'all' || query) && (
-          <Button
-            variant="ghost"
-            size="sm"
-            icon="x"
-            onClick={() => {
-              setQuery('');
-              setFilterStatus('all');
-              setFilterDecision('all');
-              setFilterAgent('all');
-            }}
-          >
+        <FilterSelect
+          label="Status"
+          value={fStatus}
+          onChange={setFStatus}
+          options={[{ value: 'all', label: 'All' }, { value: 'ok', label: 'OK' }, { value: 'error', label: 'Error' }]}
+        />
+        <FilterSelect
+          label="Decision"
+          value={fDecision}
+          onChange={setFDecision}
+          options={[{ value: 'all', label: 'All' }, { value: 'allow', label: 'Allow' }, { value: 'warn', label: 'Warn' }, { value: 'block', label: 'Block' }]}
+        />
+        {filtersActive && (
+          <Button variant="ghost" size="sm" icon="x" onClick={clearFilters}>
             Clear
           </Button>
         )}
       </div>
 
       {error ? (
-        <Panel className="border-block-border">
-          <ErrorState
-            title="Failed to query traces"
-            body={error}
-            onRetry={fetchTraces}
-          />
+        <Panel>
+          <ErrorState title="Failed to query traces" body="collector.query: request failed" onRetry={load} />
         </Panel>
       ) : (
         <DataTable
@@ -283,14 +253,15 @@ export function TracesScreen({ timeRange, agent, onOpenTrace }: TracesScreenProp
           rows={traces}
           loading={loading}
           page={page}
-          pageSize={pageSize}
+          pageSize={PAGE_SIZE}
           total={total}
           onPage={setPage}
           sort={sort}
-          onSort={(key) => setSort((s) => ({ key, dir: s.key === key && s.dir === 'desc' ? 'asc' : 'desc' }))}
-          onRowClick={(r) => onOpenTrace({ id: r.trace_id })}
+          onSort={onSort}
+          onRowClick={(r) => navigate(`/traces/${encodeURIComponent(r.trace_id)}`)}
           rowKey={(r) => r.trace_id}
-          rowAccent={(r) => r.decision === 'block'}
+          rowAccent={(r) => r.status === 'error'}
+          empty={{ icon: 'traces', title: 'No traces match these filters', body: 'Try widening the time range or clearing the status / decision filters.' }}
         />
       )}
     </div>

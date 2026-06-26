@@ -1,17 +1,17 @@
+// Argox eye-mark — peacock iridescent radial gradient with a bronze ring.
 import { useId } from 'react';
-import { cn } from '../../lib/utils';
 
 interface LogoProps {
   size?: number;
   withWord?: boolean;
-  className?: string;
 }
 
-export function Logo({ size = 26, withWord = true, className }: LogoProps) {
-  const id = useId();
+export function Logo({ size = 26, withWord = true }: LogoProps) {
+  // Stable, render-pure gradient id (colons stripped so url(#id) stays valid).
+  const id = 'lg' + useId().replace(/:/g, '');
   return (
-    <div className={cn("flex items-center gap-2.5", className)}>
-      <svg width={size} height={size} viewBox="0 0 40 40" fill="none" className="block">
+    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+      <svg width={size} height={size} viewBox="0 0 40 40" fill="none" style={{ display: 'block' }}>
         <defs>
           <radialGradient id={id} cx="50%" cy="50%" r="60%">
             <stop offset="0%" stopColor="var(--peacock-cyan-bright)" />
@@ -25,22 +25,22 @@ export function Logo({ size = 26, withWord = true, className }: LogoProps) {
           stroke={`url(#${id})`}
           strokeWidth="2.4"
           fill="none"
-          className="opacity-90"
+          opacity="0.9"
         />
-        <circle
-          cx="20"
-          cy="20"
-          r="8.6"
-          stroke="var(--bronze)"
-          strokeWidth="1.5"
-          fill="none"
-          className="opacity-70"
-        />
+        <circle cx="20" cy="20" r="8.6" stroke="var(--bronze)" strokeWidth="1.5" fill="none" opacity="0.7" />
         <circle cx="20" cy="20" r="5" fill={`url(#${id})`} />
         <circle cx="20" cy="20" r="2" fill="var(--bg-base)" />
       </svg>
       {withWord && (
-        <span className="font-display font-bold text-lg tracking-tight text-text-primary">
+        <span
+          style={{
+            fontFamily: 'var(--font-display)',
+            fontWeight: 700,
+            fontSize: 17,
+            letterSpacing: '-0.01em',
+            color: 'var(--text-primary)',
+          }}
+        >
           Argox
         </span>
       )}
