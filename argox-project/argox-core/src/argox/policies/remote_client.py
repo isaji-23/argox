@@ -74,6 +74,7 @@ class RemotePolicyClient(PolicyClient):
     Attributes:
         endpoint_url: URL of the remote Collector API policy endpoint.
         refresh_interval_s: Polling interval in seconds.
+        api_key: Optional Bearer token sent on every fetch (None when auth is off).
         cache: In-process cache storing compiled policy rules.
         parser: YAML policy parser.
         _client: httpx.AsyncClient for making policy fetch requests.
@@ -85,6 +86,7 @@ class RemotePolicyClient(PolicyClient):
         endpoint_url: str,
         refresh_interval_s: int = 60,
         policy_cache_dir: Optional[Union[str, Path]] = None,
+        api_key: Optional[str] = None,
     ) -> None:
         """
         Initialize the RemotePolicyClient.
@@ -95,14 +97,25 @@ class RemotePolicyClient(PolicyClient):
             policy_cache_dir: Directory for disk-based policy fallback. If provided,
                 fetched policies are written to this directory and loaded on cold-start
                 (disk fallback for issue #40). Defaults to None (memory-only).
+            api_key: Optional Bearer token sent on every policy fetch. Required when
+                the Collector's policy endpoint enforces the ``policy-read`` scope
+                (auth enabled). Defaults to None (no Authorization header).
         """
         self.endpoint_url: str = endpoint_url
         self.refresh_interval_s: int = refresh_interval_s
         self.policy_cache_dir: Optional[Path] = Path(policy_cache_dir) if policy_cache_dir else None
+        self.api_key: Optional[str] = api_key
         self.cache: PolicyCache = PolicyCache()
         self.parser: PolicyParser = PolicyParser()
         self._client: Optional[httpx.AsyncClient] = None
         self._task: Optional[asyncio.Task[None]] = None
+
+        if self.api_key and not self.endpoint_url.lower().startswith("https://"):
+            logger.warning(
+                "RemotePolicyClient: API key is provided but the endpoint (%s) does "
+                "not use HTTPS. The key will travel in plaintext over the network.",
+                self.endpoint_url,
+            )
 
         # Ensure policy cache directory exists if configured (prepare for disk writes)
         if self.policy_cache_dir is not None:
@@ -111,6 +124,12 @@ class RemotePolicyClient(PolicyClient):
         # Load policy from disk on cold-start if available (issue #40 fallback)
         if self.policy_cache_dir is not None:
             self._load_policy_from_disk()
+
+    def _auth_headers(self) -> dict[str, str]:
+        """Return the Authorization header for policy fetches, empty if unset."""
+        if self.api_key:
+            return {"Authorization": f"Bearer {self.api_key}"}
+        return {}
 
     def _load_policy_from_disk(self) -> None:
         """
@@ -190,7 +209,9 @@ class RemotePolicyClient(PolicyClient):
         if self._task is None or self._task.done():
             # Recreate HTTP client if it was closed
             if self._client is None or self._client.is_closed:
-                self._client = httpx.AsyncClient(timeout=10.0)
+                self._client = httpx.AsyncClient(
+                    timeout=10.0, headers=self._auth_headers()
+                )
 
             # Eager fetch before starting the polling loop
             try:
