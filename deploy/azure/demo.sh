@@ -43,15 +43,18 @@ FQDN="$(az containerapp show -n dashboard -g "$RG" \
 BASE="https://$FQDN"
 echo "  $BASE"
 
-# --- 2. demo API key (ingest + read) --------------------------------------
-# Reuse ARGOX_COLLECTOR_API_KEY if already provided; otherwise mint one.
+# --- 2. demo API key (ingest + read + policy-read) -------------------------
+# Reuse ARGOX_COLLECTOR_API_KEY if already provided; otherwise mint one. The
+# same key drives both the agent (ingest) and the dashboard UI, so it also
+# needs policy-read: the Policies screen calls GET /api/v1/policies, which
+# requires the distinct policy-read scope (read alone returns 401).
 API_KEY="${ARGOX_COLLECTOR_API_KEY:-}"
 if [[ -z "$API_KEY" ]]; then
-  log "Minting demo API key (scopes: read, ingest)"
+  log "Minting demo API key (scopes: read, ingest, policy-read)"
   API_KEY="$(curl -fsS -X POST "$BASE/api/v1/keys" \
     -H "Authorization: Bearer $ADMIN_KEY" \
     -H 'Content-Type: application/json' \
-    -d '{"name":"demo","scopes":["read","ingest"]}' \
+    -d '{"name":"demo","scopes":["read","ingest","policy-read"]}' \
     | "$PY" -c 'import sys,json; print(json.load(sys.stdin)["key"])')"
   [[ -n "$API_KEY" ]] || die "key mint failed (check ADMIN_KEY)."
   echo "  minted (raw key shown once, not stored)"

@@ -1,41 +1,42 @@
-import { Select } from '../ui/Select';
+// Combined environment + agent selector (two joined Selects).
+// Deliberately NOT wrapped in an `overflow-hidden` container so the portal
+// menus position correctly (FRONTEND_SPEC §5).
+import { Select, type SelectOption } from './Select';
 
 interface EnvAgentSelectorProps {
   env: string;
-  setEnv: (env: string) => void;
+  setEnv: (v: string) => void;
   agent: string;
-  setAgent: (agent: string) => void;
-  agents: string[];
+  setAgent: (v: string) => void;
+  agents?: string[];
 }
 
-export function EnvAgentSelector({ env, setEnv, agent, setAgent, agents }: EnvAgentSelectorProps) {
-  const agentOptions = [
-    { value: 'all', label: 'All agents' },
-    ...agents.map((a) => ({ value: a, label: a }))
-  ];
+const ENV_OPTIONS: SelectOption[] = [
+  { value: 'production', label: 'production' },
+  { value: 'staging', label: 'staging' },
+  { value: 'dev', label: 'dev' },
+];
 
+export function EnvAgentSelector({ env, setEnv, agent, setAgent, agents = [] }: EnvAgentSelectorProps) {
+  const agentOptions: SelectOption[] = [
+    { value: 'all', label: 'All agents' },
+    ...agents.map((a) => ({ value: a, label: a })),
+  ];
   return (
-    <div className="flex items-center gap-px bg-surface-3 border border-border-strong rounded-md overflow-hidden">
-      <div className="border-r border-border">
-        <Select
-          value={env}
-          onChange={setEnv}
-          icon="database"
-          minWidth={110}
-          size="sm"
-          options={['production', 'staging', 'dev']}
-          className="border-none rounded-none"
-        />
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 1,
+        background: 'var(--bg-surface-3)',
+        border: '1px solid var(--border-strong)',
+        borderRadius: 'var(--r-md)',
+      }}
+    >
+      <div style={{ borderRight: '1px solid var(--border)' }}>
+        <Select value={env} onChange={setEnv} icon="database" minWidth={120} size="sm" options={ENV_OPTIONS} />
       </div>
-      <Select
-        value={agent}
-        onChange={setAgent}
-        icon="bolt"
-        minWidth={140}
-        size="sm"
-        options={agentOptions}
-        className="border-none rounded-none"
-      />
+      <Select value={agent} onChange={setAgent} icon="bolt" minWidth={150} size="sm" options={agentOptions} />
     </div>
   );
 }
