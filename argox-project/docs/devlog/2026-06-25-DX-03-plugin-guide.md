@@ -1,8 +1,8 @@
 # [DX-03] Write PLUGIN_GUIDE.md for community plugin authors
 
 - **Date:** 2026-06-25
-- **PR:** n/a  ·  **Branch:** docs/DX-03-plugin-guide
-- **Status:** in-progress
+- **PR:** #181  ·  **Branch:** docs/DX-03-plugin-guide
+- **Status:** in-review
 
 ## What changed
 - `argox-project/docs/sdk/plugin-guide.md`:
