@@ -1,8 +1,8 @@
 # [DX-04] Write EXPORTER_GUIDE.md for custom exporter authors
 
 - **Date:** 2026-06-25
-- **PR:** n/a  ·  **Branch:** docs/DX-04-exporter-guide
-- **Status:** in-progress
+- **PR:** #182  ·  **Branch:** docs/DX-04-exporter-guide
+- **Status:** in-review
 
 ## What changed
 - `argox-project/docs/sdk/exporter-guide.md`:
