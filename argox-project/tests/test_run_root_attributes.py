@@ -16,6 +16,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
 from argox.core.context import RunContext
 from argox.core.manager import ArgoxManager
 from argox.core.state import AgentRunMetrics, ApiCallRecord
+from argox.interfaces.exporter import ExporterBase
 from argox.interfaces.plugin import ArgoxPlugin
 from argox.interfaces.policy import PolicyClient, PolicyResult
 from argox.semconv.attributes import (
@@ -118,6 +119,14 @@ class _BlockOutputPolicy(PolicyClient):
         return PolicyResult.block(reason="output blocked", rule_id="R2")
 
 
+class _CapturingExporter(ExporterBase):
+    def __init__(self) -> None:
+        self.exports: list[AgentRunMetrics] = []
+
+    def export(self, metrics: AgentRunMetrics) -> None:
+        self.exports.append(metrics)
+
+
 async def _fake_runner(agent: Any, prompt: str) -> _FakeResponse:
     return _FakeResponse(text=f"echo: {prompt}")
 
@@ -162,3 +171,25 @@ async def test_blocked_run_records_success_false(span_exporter: InMemorySpanExpo
     span = _find_run_span(span_exporter)
     assert span.attributes[ARGOX_AGENT_NAME] == "triage-bot"
     assert span.attributes[ARGOX_RUN_SUCCESS] is False
+
+
+@pytest.mark.asyncio
+async def test_run_metrics_trace_id_matches_span(span_exporter: InMemorySpanExporter):
+    """The run's trace_id is stamped from the root span so the Collector's
+    by-trace join (runs.trace_id = spans.trace_id) resolves it. Without this the
+    run is stored unlinked and GET /v1/runs/by-trace/{trace_id} returns 404."""
+    exp = _CapturingExporter()
+    mgr = _make_manager()
+    mgr.register_exporter(exp)
+
+    await mgr.run(_FakeAgent(), "hello", "fake", _fake_runner)
+
+    span = _find_run_span(span_exporter)
+    expected = format(span.context.trace_id, "032x")
+    assert len(exp.exports) == 1
+    metrics = exp.exports[0]
+    assert metrics.trace_id == expected
+    assert metrics.to_dict()["trace_id"] == expected
+    # 32-char lowercase hex, matching the OTLP span id format the Collector stores.
+    assert len(metrics.trace_id) == 32
+    assert metrics.trace_id == metrics.trace_id.lower()

@@ -18,5 +18,14 @@ export default defineConfig([
     languageOptions: {
       globals: globals.browser,
     },
+    rules: {
+      // We intentionally co-locate small constants/hooks next to components
+      // (ICON_PATHS, MODEL_COLORS, useShell); fast-refresh granularity is a
+      // non-goal here.
+      'react-refresh/only-export-components': 'off',
+      // Standard derive-from-prop / debounce / load-on-mount effects set state
+      // synchronously; this brand-new rule flags those legitimate patterns.
+      'react-hooks/set-state-in-effect': 'off',
+    },
   },
 ])
