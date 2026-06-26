@@ -16,6 +16,8 @@ for the decisions behind these changes and
 | 2026-06-24 | DASH | Authenticate dashboard API requests | #171 | in-review |
 | 2026-06-24 | DASH-05 | Render run-record content in the dashboard | #108 | in-review |
 | 2026-06-23 | DASH-04 | Policy editor with Monaco (live YAML editing) | #91 | in-review |
+| 2026-06-23 | DX-02 | Implement plugin auto-discovery via importlib.metadata | #166 | in-review |
+| 2026-06-23 | DOC-01 | Write docs/compliance/ai-act-mapping.md | #165 | in-review |
 | 2026-06-22 | DASH-03 | Metrics dashboard (cost, latency, success ratio) | #90 | in-review |
 | 2026-06-22 | COL-14 | Chain run records into the WORM audit log | #158 | in-review |
 | 2026-06-22 | COL-13 | Query API extension for run records | #157 | in-review |

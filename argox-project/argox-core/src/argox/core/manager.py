@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import logging
 import time
 from contextlib import contextmanager
 from typing import Any, Awaitable, Callable, Iterator
+
+logger = logging.getLogger(__name__)
 
 from opentelemetry import trace
 from opentelemetry.trace import Span, Status, StatusCode
@@ -77,6 +80,7 @@ class ArgoxManager:
         self._exporters: list[ExporterBase] = []
         self._processors: list[tuple[ArgoxProcessor, bool]] = []
         self._phase_timings_enabled = enable_phase_timings
+        self._discover_plugins()
 
     @contextmanager
     def _phase(self, metrics: AgentRunMetrics, name: str) -> Iterator[None]:
@@ -98,6 +102,25 @@ class ArgoxManager:
     # ------------------------------------------------------------------
     # Registration
     # ------------------------------------------------------------------
+
+    def _discover_plugins(self) -> None:
+        """Discover and auto-register all installed plugins under ``argox.plugins``."""
+        from importlib.metadata import entry_points
+
+        try:
+            eps = entry_points(group="argox.plugins")
+        except TypeError:  # pragma: no cover - Python <3.10 fallback
+            eps = entry_points().get("argox.plugins", [])
+
+        for ep in eps:
+            try:
+                plugin_cls = ep.load()
+                plugin_instance = plugin_cls()
+                self.register_plugin(plugin_instance)
+                logger.debug("Auto-registered plugin: %s", plugin_instance.name)
+            except Exception as e:
+                # Do not crash the manager if a plugin fails to load (e.g., missing dependencies)
+                logger.warning("Failed to auto-register plugin '%s': %s", ep.name, e)
 
     def register_plugin(self, plugin: ArgoxPlugin) -> None:
         """Register a framework plugin by its name."""
