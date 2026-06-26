@@ -1,0 +1,420 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Argox — Azure Deployment Guide</title>
+<style>
+  :root {
+    --ink: #16181d;
+    --muted: #5c6370;
+    --line: #e6e8ec;
+    --bg: #fbfbfc;
+    --card: #ffffff;
+    --accent: #2f6df0;
+    --accent-soft: #eaf1fe;
+    --warn: #b25b00;
+    --warn-soft: #fff4e5;
+    --good: #1a7f4b;
+    --code-bg: #0f1320;
+    --code-ink: #e7ecf5;
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font: 16px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  header.hero {
+    border-bottom: 1px solid var(--line);
+    background:
+      radial-gradient(1200px 300px at 15% -40%, var(--accent-soft), transparent 60%),
+      var(--card);
+    padding: 56px 24px 40px;
+  }
+  .wrap { max-width: 920px; margin: 0 auto; }
+  .eyebrow {
+    font: 600 12px/1 var(--mono);
+    letter-spacing: .14em; text-transform: uppercase; color: var(--accent);
+    margin: 0 0 14px;
+  }
+  h1 { font-size: 2.5rem; line-height: 1.1; margin: 0 0 12px; letter-spacing: -.02em; }
+  .lede { font-size: 1.12rem; color: var(--muted); max-width: 60ch; margin: 0; }
+  nav.toc {
+    position: sticky; top: 0; z-index: 5;
+    background: rgba(251,251,252,.86); backdrop-filter: blur(8px);
+    border-bottom: 1px solid var(--line);
+    padding: 12px 24px;
+  }
+  nav.toc ul { list-style: none; display: flex; flex-wrap: wrap; gap: 6px 18px; margin: 0 auto; max-width: 920px; padding: 0; }
+  nav.toc a { color: var(--muted); text-decoration: none; font-size: .9rem; font-weight: 500; }
+  nav.toc a:hover { color: var(--accent); }
+  main { padding: 8px 24px 80px; }
+  section { padding: 40px 0; border-bottom: 1px solid var(--line); }
+  section:last-child { border-bottom: 0; }
+  h2 { font-size: 1.5rem; letter-spacing: -.01em; margin: 0 0 6px; }
+  h2 .num { font: 600 .9rem var(--mono); color: var(--accent); margin-right: 10px; }
+  h3 { font-size: 1.06rem; margin: 28px 0 8px; }
+  p { margin: 12px 0; }
+  a { color: var(--accent); }
+  code { font: .88em var(--mono); background: #eef0f4; padding: .12em .4em; border-radius: 5px; }
+  pre {
+    background: var(--code-bg); color: var(--code-ink);
+    border-radius: 12px; padding: 18px 20px; overflow-x: auto;
+    font: .86rem/1.6 var(--mono); margin: 16px 0;
+  }
+  pre code { background: none; padding: 0; color: inherit; }
+  .tok { color: #8aa0c6; }       /* comments */
+  .cmd { color: #7ee0a8; }       /* command names */
+  table { width: 100%; border-collapse: collapse; margin: 18px 0; font-size: .94rem; }
+  th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-size: .78rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+  tr td:first-child { white-space: nowrap; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; margin: 18px 0; }
+  .card {
+    background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+    padding: 16px 18px;
+  }
+  .card h4 { margin: 0 0 4px; font-size: .98rem; }
+  .card p { margin: 0; font-size: .9rem; color: var(--muted); }
+  .pill { display: inline-block; font: 600 .7rem var(--mono); padding: 2px 8px; border-radius: 999px; letter-spacing: .04em; }
+  .pill.int { background: #eef0f4; color: var(--muted); }
+  .pill.ext { background: var(--accent-soft); color: var(--accent); }
+  .callout { border-radius: 12px; padding: 14px 18px; margin: 18px 0; border: 1px solid; font-size: .95rem; }
+  .callout.warn { background: var(--warn-soft); border-color: #f4d8af; }
+  .callout.warn strong { color: var(--warn); }
+  .callout.note { background: var(--accent-soft); border-color: #cfe0fd; }
+  .callout.good { background: #e9f7ef; border-color: #bfe6cf; }
+  .callout.good strong { color: var(--good); }
+  figure { margin: 24px 0; }
+  figcaption { font-size: .82rem; color: var(--muted); text-align: center; margin-top: 8px; }
+  .diagram { width: 100%; height: auto; background: var(--card); border: 1px solid var(--line); border-radius: 14px; }
+  ol.flow { counter-reset: step; list-style: none; padding: 0; }
+  ol.flow li { position: relative; padding: 0 0 18px 46px; }
+  ol.flow li::before {
+    counter-increment: step; content: counter(step);
+    position: absolute; left: 0; top: 0;
+    width: 30px; height: 30px; border-radius: 50%;
+    background: var(--accent); color: #fff; font: 600 .9rem var(--mono);
+    display: grid; place-items: center;
+  }
+  ol.flow li:not(:last-child)::after {
+    content: ""; position: absolute; left: 14px; top: 32px; bottom: 0; width: 2px; background: var(--line);
+  }
+  footer { color: var(--muted); font-size: .85rem; padding: 32px 24px; text-align: center; }
+  .kbd { font: .82em var(--mono); border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 6px; padding: 1px 6px; background: #fff; }
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="wrap">
+    <p class="eyebrow">Argox · Observability Collector</p>
+    <h1>Deploying Argox to Azure</h1>
+    <p class="lede">Everything required to run the full stack — Collector, Dashboard,
+      Blob Storage and a persistent DuckDB index — on Azure Container Apps, with
+      authentication on and the API kept private.</p>
+  </div>
+</header>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">Overview</a></li>
+    <li><a href="#architecture">Architecture</a></li>
+    <li><a href="#resources">Resources</a></li>
+    <li><a href="#storage">Storage &amp; DuckDB</a></li>
+    <li><a href="#config">Configuration</a></li>
+    <li><a href="#flow">Deploy flow</a></li>
+    <li><a href="#update">Updating</a></li>
+    <li><a href="#security">Security</a></li>
+  </ul>
+</nav>
+
+<main class="wrap">
+
+  <section id="overview">
+    <h2><span class="num">01</span>What gets deployed</h2>
+    <p>Argox is a two-service stack. The <strong>Collector</strong> ingests
+      OpenTelemetry traces, stores span payloads in <strong>Azure Blob
+      Storage</strong>, and keeps a query index in an embedded <strong>DuckDB</strong>
+      file. The <strong>Dashboard</strong> is a static single-page app served by
+      nginx, which also reverse-proxies the API so the browser stays same-origin.</p>
+    <p>On Azure both run as <strong>Azure Container Apps</strong> in one
+      environment. The Dashboard is the only public endpoint; the Collector runs
+      on internal ingress and is reachable only from inside the environment.
+      Authentication (COL-09) is enabled — every endpoint except the health
+      probes requires a bearer credential.</p>
+    <div class="callout note">
+      <strong>Two files, two jobs.</strong> This page is the conceptual reference.
+      For the exact, ordered commands, follow <code>azure-deploy-steps.md</code>
+      in this folder.
+    </div>
+  </section>
+
+  <section id="architecture">
+    <h2><span class="num">02</span>Architecture</h2>
+    <figure>
+      <svg class="diagram" viewBox="0 0 900 430" role="img" aria-label="Argox Azure architecture diagram">
+        <defs>
+          <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+            <path d="M0,0 L8,3 L0,6 Z" fill="#2f6df0"></path>
+          </marker>
+          <style>
+            .box { fill:#fff; stroke:#d8dde6; stroke-width:1.5; rx:12; }
+            .lbl { font:600 14px ui-monospace,monospace; fill:#16181d; }
+            .sub { font:11px ui-monospace,monospace; fill:#5c6370; }
+            .env { fill:#f5f8ff; stroke:#cfe0fd; stroke-width:1.5; stroke-dasharray:5 4; }
+            .flow { stroke:#2f6df0; stroke-width:2; fill:none; marker-end:url(#arrow); }
+            .note { font:11px -apple-system,sans-serif; fill:#5c6370; }
+          </style>
+        </defs>
+
+        <!-- browser -->
+        <rect class="box" x="30" y="180" width="140" height="70" rx="12"></rect>
+        <text class="lbl" x="100" y="210" text-anchor="middle">Browser</text>
+        <text class="sub" x="100" y="228" text-anchor="middle">user</text>
+
+        <!-- ACA environment -->
+        <rect class="env" x="220" y="40" width="430" height="350" rx="16"></rect>
+        <text class="sub" x="240" y="64">Azure Container Apps environment</text>
+
+        <!-- dashboard -->
+        <rect class="box" x="250" y="150" width="160" height="120" rx="12"></rect>
+        <text class="lbl" x="330" y="182" text-anchor="middle">Dashboard</text>
+        <text class="sub" x="330" y="200" text-anchor="middle">nginx + SPA</text>
+        <text class="sub" x="330" y="222" text-anchor="middle">external ingress</text>
+        <text class="sub" x="330" y="240" text-anchor="middle">proxies /api /v1</text>
+
+        <!-- collector -->
+        <rect class="box" x="460" y="150" width="160" height="120" rx="12"></rect>
+        <text class="lbl" x="540" y="182" text-anchor="middle">Collector</text>
+        <text class="sub" x="540" y="200" text-anchor="middle">FastAPI · auth on</text>
+        <text class="sub" x="540" y="222" text-anchor="middle">internal ingress</text>
+        <text class="sub" x="540" y="240" text-anchor="middle">1 replica</text>
+
+        <!-- storage account -->
+        <rect class="box" x="700" y="90" width="170" height="80" rx="12"></rect>
+        <text class="lbl" x="785" y="120" text-anchor="middle">Blob Storage</text>
+        <text class="sub" x="785" y="138" text-anchor="middle">container: argox</text>
+        <text class="sub" x="785" y="154" text-anchor="middle">span payloads</text>
+
+        <rect class="box" x="700" y="250" width="170" height="80" rx="12"></rect>
+        <text class="lbl" x="785" y="280" text-anchor="middle">Azure Files</text>
+        <text class="sub" x="785" y="298" text-anchor="middle">share: argox-index</text>
+        <text class="sub" x="785" y="314" text-anchor="middle">DuckDB → /data</text>
+
+        <!-- flows -->
+        <path class="flow" d="M170,210 L248,210"></path>
+        <text class="note" x="178" y="200">HTTPS</text>
+        <path class="flow" d="M412,210 L458,210"></path>
+        <text class="note" x="408" y="200">http://collector</text>
+        <path class="flow" d="M622,195 L698,140"></path>
+        <text class="note" x="628" y="170">conn string</text>
+        <path class="flow" d="M622,235 L698,285"></path>
+        <text class="note" x="628" y="262">SMB mount</text>
+      </svg>
+      <figcaption>The browser only ever reaches the Dashboard. nginx proxies the
+        API to the Collector's internal ingress; the Collector talks to Blob
+        Storage and mounts the DuckDB index from an Azure Files share.</figcaption>
+    </figure>
+  </section>
+
+  <section id="resources">
+    <h2><span class="num">03</span>Azure resources</h2>
+    <table>
+      <thead><tr><th>Resource</th><th>Purpose</th><th>Notes</th></tr></thead>
+      <tbody>
+        <tr><td>Resource group</td><td>Holds everything</td><td>Single teardown unit</td></tr>
+        <tr><td>Container Registry (ACR)</td><td>Hosts the two images</td><td>Build in-cloud with <code>az acr build</code></td></tr>
+        <tr><td>Storage account</td><td>Blob container <code>argox</code> + file share <code>argox-index</code></td><td>One account serves both</td></tr>
+        <tr><td>Container Apps environment</td><td>Runs both apps; owns the storage definition</td><td>Includes a Log Analytics workspace</td></tr>
+        <tr><td>Collector app <span class="pill int">internal</span></td><td>Ingest + query API</td><td>1 replica, <code>/data</code> mounted</td></tr>
+        <tr><td>Dashboard app <span class="pill ext">external</span></td><td>Public UI + API proxy</td><td>Only public endpoint</td></tr>
+        <tr><td>Entra app registration <em>(optional)</em></td><td>Dashboard SSO (OIDC)</td><td>Skip for API-key-only</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section id="storage">
+    <h2><span class="num">04</span>Storage &amp; the DuckDB persistent volume</h2>
+    <p>Argox writes to <em>two</em> kinds of storage, and they are deliberately
+      different:</p>
+    <div class="grid">
+      <div class="card">
+        <h4>Blob Storage — span payloads</h4>
+        <p>The Collector streams trace batches and policy blobs into the
+          <code>argox</code> container via a connection string. This is durable
+          object storage; nothing special is needed beyond the account.</p>
+      </div>
+      <div class="card">
+        <h4>Azure Files — DuckDB index</h4>
+        <p>The query index is a single DuckDB file at
+          <code>/data/index.duckdb</code>. A container's local disk is ephemeral,
+          so the file must live on a mounted Azure Files share to survive
+          restarts and new revisions.</p>
+      </div>
+    </div>
+
+    <h3>How the volume is created and mounted</h3>
+    <p>Mounting Azure Files on a Container App is a three-part move: create the
+      share, register it with the <em>environment</em>, then reference it from
+      the Collector app's template.</p>
+
+    <p><strong>① Create the share</strong> (5 GiB is generous for an index):</p>
+    <pre><span class="cmd">az</span> storage share-rm create -g $RG --storage-account $STORAGE \
+  -n argox-index --quota 5</pre>
+
+    <p><strong>② Register it with the ACA environment</strong> — this names the
+      storage so apps can mount it (SMB, no VNet required):</p>
+    <pre><span class="cmd">az</span> containerapp env storage set -g $RG -n $ENV \
+  --storage-name argox-index \
+  --storage-type AzureFile \
+  --azure-file-account-name $STORAGE \
+  --azure-file-account-key $STG_KEY \
+  --azure-file-share-name argox-index \
+  --access-mode ReadWrite</pre>
+
+    <p><strong>③ Mount it on the Collector</strong> by editing the app YAML
+      (there is no single CLI flag for this):</p>
+    <pre><span class="tok"># az containerapp show -n collector -g $RG -o yaml &gt; collector.yaml</span>
+    template:
+      containers:
+      - name: collector
+        <span class="tok"># ...</span>
+        volumeMounts:
+        - volumeName: index-vol
+          mountPath: /data          <span class="tok"># ARGOX_INDEX_DUCKDB_PATH lives here</span>
+      volumes:
+      - name: index-vol
+        storageName: argox-index    <span class="tok"># the env storage from ②</span>
+        storageType: AzureFile
+<span class="tok"># az containerapp update -n collector -g $RG --yaml collector.yaml</span></pre>
+
+    <div class="callout warn">
+      <strong>Single writer only.</strong> DuckDB allows exactly one writer.
+      The Collector must run with <code>--min-replicas 1 --max-replicas 1</code>.
+      Raising the replica count puts concurrent writers on the same shared file
+      and will corrupt the index. Multi-replica indexing is tracked as COL-15.
+    </div>
+    <div class="callout good">
+      <strong>Verify it persists.</strong> After some traffic,
+      <code>az containerapp exec -n collector -g $RG --command "ls -la /data"</code>
+      should show <code>index.duckdb</code> — and it should still be there after
+      deploying a new revision.
+    </div>
+  </section>
+
+  <section id="config">
+    <h2><span class="num">05</span>Configuration</h2>
+    <p>All Collector settings are <code>ARGOX_*</code> environment variables.
+      Secrets (connection string, admin key) are stored as Container App secrets
+      and referenced with <code>secretref:</code>.</p>
+    <table>
+      <thead><tr><th>Variable</th><th>Value</th><th>Why</th></tr></thead>
+      <tbody>
+        <tr><td>ARGOX_STORAGE_BACKEND</td><td><code>azure</code></td><td>Use Blob Storage</td></tr>
+        <tr><td>ARGOX_STORAGE_AZURE_CONNECTION_STRING</td><td><code>secretref:storage-conn</code></td><td>Blob auth (connection string)</td></tr>
+        <tr><td>ARGOX_STORAGE_AZURE_CONTAINER</td><td><code>argox</code></td><td>Blob container</td></tr>
+        <tr><td>ARGOX_INDEX_DUCKDB_PATH</td><td><code>/data/index.duckdb</code></td><td>On the Azure Files mount</td></tr>
+        <tr><td>ARGOX_AUTH_ENABLED</td><td><code>true</code></td><td>Gate every endpoint</td></tr>
+        <tr><td>ARGOX_BOOTSTRAP_ADMIN_KEY</td><td><code>secretref:admin-key</code></td><td>Break-glass; mints the first API key</td></tr>
+        <tr><td>ARGOX_OIDC_ISSUER / _AUDIENCE / _JWKS_URI</td><td>Entra values <em>(optional)</em></td><td>Dashboard SSO</td></tr>
+        <tr><td>COLLECTOR_UPSTREAM <em>(dashboard)</em></td><td><code>http://collector</code></td><td>nginx proxy target (internal ingress, port 80)</td></tr>
+      </tbody>
+    </table>
+    <div class="callout note">
+      <strong>Managed Identity is not supported yet.</strong> The storage backend
+      only authenticates via <code>from_connection_string</code>. Until it learns
+      <code>DefaultAzureCredential</code>, the connection string (kept as a
+      secret) is the only path to Blob Storage.
+    </div>
+  </section>
+
+  <section id="flow">
+    <h2><span class="num">06</span>Deploy flow at a glance</h2>
+    <ol class="flow">
+      <li><strong>Prereqs</strong> — <code>az login</code>, add the
+        <code>containerapp</code> extension, register providers.</li>
+      <li><strong>Resource group</strong> in your region.</li>
+      <li><strong>Registry + images</strong> — <code>az acr build</code> the
+        Collector and Dashboard.</li>
+      <li><strong>Storage</strong> — account, blob container <code>argox</code>,
+        file share <code>argox-index</code>.</li>
+      <li><strong>ACA environment</strong> + register the Files share with it.</li>
+      <li><strong>Collector app</strong> — internal ingress, 1 replica, secrets,
+        then mount <code>/data</code>.</li>
+      <li><strong>Dashboard app</strong> — external ingress, set
+        <code>COLLECTOR_UPSTREAM</code>.</li>
+      <li><strong>Smoke test</strong> — mint a key, ingest the seed trace, open
+        the public URL.</li>
+    </ol>
+    <p>Each step is a runnable command in
+      <code>azure-deploy-steps.md</code>.</p>
+  </section>
+
+  <section id="update">
+    <h2><span class="num">07</span>Updating after changes</h2>
+    <p>Container Apps is revision-based: every change creates a new immutable
+      revision and traffic shifts to it once healthy. Mounts, secrets and env
+      vars belong to the app template, so they <strong>carry over</strong> — you
+      only re-specify what changed. Always push a <strong>fresh tag</strong>
+      (never reuse <code>latest</code>) so revisions and rollbacks stay traceable.</p>
+    <div class="grid">
+      <div class="card">
+        <h4>Code change</h4>
+        <p>Rebuild the image with a new tag, then
+          <code>az containerapp update --image …:v2</code>. Rolls a new revision.</p>
+      </div>
+      <div class="card">
+        <h4>Config / secret</h4>
+        <p><code>--set-env-vars</code> or <code>secret set</code> + an
+          <code>update</code> to bump a revision. No rebuild needed.</p>
+      </div>
+      <div class="card">
+        <h4>Volume / template</h4>
+        <p>Re-export YAML, edit, <code>update --yaml</code>.</p>
+      </div>
+      <div class="card">
+        <h4>Rollback</h4>
+        <p>Re-deploy the previous tag: <code>update --image …:v1</code>. Immutable
+          tags make this trivial.</p>
+      </div>
+    </div>
+    <pre><span class="tok"># Code change: rebuild + roll</span>
+<span class="cmd">az</span> acr build -r $ACR -t argox-collector:v2 ../../argox-project/argox-collector
+<span class="cmd">az</span> containerapp update -n collector -g $RG --image $ACR.azurecr.io/argox-collector:v2</pre>
+    <div class="callout warn">
+      <strong>DuckDB during the swap.</strong> The new Collector replica starts
+      while the old one may still run, so two processes can briefly hold the same
+      DuckDB file. The file lock serializes them (the new one retries until the
+      old revision is gone). For a clean swap, deactivate the old revision first:
+      <code>az containerapp revision deactivate -n collector -g $RG --revision &lt;old&gt;</code>.
+      The Dashboard is stateless and updates with zero downtime.
+    </div>
+  </section>
+
+  <section id="security">
+    <h2><span class="num">08</span>Security checklist</h2>
+    <table>
+      <tbody>
+        <tr><td>✔</td><td>Collector on <strong>internal</strong> ingress — never expose the API publicly; it has no rate limiting.</td></tr>
+        <tr><td>✔</td><td>Auth on (<code>ARGOX_AUTH_ENABLED=true</code>); rotate the bootstrap admin key after minting real keys.</td></tr>
+        <tr><td>✔</td><td>Secrets via Container App secrets / Key Vault references — never as literal env values.</td></tr>
+        <tr><td>✔</td><td>TLS is automatic on the external Dashboard ingress.</td></tr>
+        <tr><td>✔</td><td>Dashboard SSO via Entra ID (optional) for human users; API keys for machine ingest.</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+</main>
+
+<footer>
+  Argox deployment reference · pair with <span class="kbd">azure-deploy-steps.md</span> · grounded in Azure Container Apps docs.
+</footer>
+
+</body>
+</html>

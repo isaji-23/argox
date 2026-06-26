@@ -8,8 +8,16 @@ for the decisions behind these changes and
 
 | Date | Ticket | Title | PR | Status |
 |---|---|---|---|---|
+| 2026-06-26 | POL-05 | Authenticate RemotePolicyClient policy fetches with an API key | — | in-review |
+| 2026-06-25 | DASH-07 | Authenticate dashboard policy requests; post demo run records | #186 | in-review |
+| 2026-06-25 | EXP-10 | Link run records to their trace for by-trace lookup | #185 | in-review |
+| 2026-06-24 | COL-20 | Bundle argox-core into the collector image | #178 | in-review |
+| 2026-06-24 | DASH-06 | API key management UI in the dashboard | #173 | in-review |
+| 2026-06-24 | DASH | Authenticate dashboard API requests | #171 | in-review |
+| 2026-06-24 | DASH-05 | Render run-record content in the dashboard | #108 | in-review |
+| 2026-06-23 | DASH-04 | Policy editor with Monaco (live YAML editing) | #91 | in-review |
 | 2026-06-23 | DX-02 | Implement plugin auto-discovery via importlib.metadata | #166 | in-review |
-| 2026-06-23 | DOC-01 | Write docs/compliance/ai-act-mapping.md | #98 | in-review |
+| 2026-06-23 | DOC-01 | Write docs/compliance/ai-act-mapping.md | #165 | in-review |
 | 2026-06-22 | DASH-03 | Metrics dashboard (cost, latency, success ratio) | #90 | in-review |
 | 2026-06-22 | COL-14 | Chain run records into the WORM audit log | #158 | in-review |
 | 2026-06-22 | COL-13 | Query API extension for run records | #157 | in-review |

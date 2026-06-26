@@ -212,6 +212,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/policies/validate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Validate policy YAML (dry-run)
+         * @description Validate policy YAML content against the policy schema without persisting.
+         */
+        post: operations["validate_policy"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/policies/{policy_id}": {
         parameters: {
             query?: never;
@@ -847,6 +867,28 @@ export interface components {
              * @enum {string}
              */
             status: "active" | "draft" | "archived";
+        };
+        /**
+         * PolicyValidateRequest
+         * @description Request body for ``POST /api/v1/policies/validate`` (dry-run).
+         */
+        PolicyValidateRequest: {
+            /** Yaml */
+            yaml: string;
+        };
+        /**
+         * PolicyValidateResponse
+         * @description Response body for ``POST /api/v1/policies/validate`` (dry-run).
+         */
+        PolicyValidateResponse: {
+            /** Errors */
+            errors: string[];
+            /** Policy */
+            policy?: {
+                [key: string]: unknown;
+            } | null;
+            /** Valid */
+            valid: boolean;
         };
         /**
          * ReadinessResponse
@@ -1543,6 +1585,39 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    validate_policy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PolicyValidateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PolicyValidateResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
             };
         };
     };

@@ -9,6 +9,10 @@ description = "Argox Collector — server-side ingestion, indexing and policy di
 requires-python = ">=3.9"
 license = { text = "MIT" }
 dependencies = [
+    # argox-core provides the `argox` package (e.g. policy parsing) imported by
+    # the collector. Not on PyPI: the Docker build and editable dev installs
+    # supply it locally (see Dockerfile and the monorepo dev setup).
+    "argox-core>=0.1.0",
     "fastapi>=0.110",
     "uvicorn[standard]>=0.27",
     "pydantic>=2.0",

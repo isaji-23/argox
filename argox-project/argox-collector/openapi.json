@@ -905,6 +905,55 @@
         "title": "PolicyUpdate",
         "type": "object"
       },
+      "PolicyValidateRequest": {
+        "description": "Request body for ``POST /api/v1/policies/validate`` (dry-run).",
+        "properties": {
+          "yaml": {
+            "maxLength": 1000000,
+            "title": "Yaml",
+            "type": "string"
+          }
+        },
+        "required": [
+          "yaml"
+        ],
+        "title": "PolicyValidateRequest",
+        "type": "object"
+      },
+      "PolicyValidateResponse": {
+        "description": "Response body for ``POST /api/v1/policies/validate`` (dry-run).",
+        "properties": {
+          "errors": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Errors",
+            "type": "array"
+          },
+          "policy": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Policy"
+          },
+          "valid": {
+            "title": "Valid",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "valid",
+          "errors"
+        ],
+        "title": "PolicyValidateResponse",
+        "type": "object"
+      },
       "ReadinessResponse": {
         "description": "Payload returned by the readiness endpoint.",
         "properties": {
@@ -2243,6 +2292,48 @@
           }
         },
         "summary": "Merged policy bundle (YAML)",
+        "tags": [
+          "policies"
+        ]
+      }
+    },
+    "/api/v1/policies/validate": {
+      "post": {
+        "description": "Validate policy YAML content against the policy schema without persisting.",
+        "operationId": "validate_policy",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PolicyValidateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PolicyValidateResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Validate policy YAML (dry-run)",
         "tags": [
           "policies"
         ]

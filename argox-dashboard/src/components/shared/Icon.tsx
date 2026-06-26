@@ -1,10 +1,12 @@
-import React from 'react';
-import { cn } from '../../lib/utils';
+// Icon set — 1.7 stroke on a 24px grid, rendered as stroke-only SVG paths.
+// Ported from the Argox design system (argox-design/ui.jsx).
+import type { CSSProperties } from 'react';
 
-export const ICON_PATHS: Record<string, string> = {
+export const ICON_PATHS = {
   metrics: 'M3 3v18h18 M7 14l3-4 3 3 4-6',
   traces: 'M4 5h10 M4 12h7 M4 19h13 M18 5h2 M14 12h2 M19 12h1',
   policies: 'M12 3l7 3v5c0 4.5-3 7.6-7 9-4-1.4-7-4.5-7-9V6z M9 12l2 2 4-4',
+  keys: 'M4 16a4 4 0 1 0 8 0a4 4 0 1 0-8 0 M11 13l9-9 M16 8l2 2 M18 6l2 2',
   system: 'M4 5h7v7H4z M13 5h7v4h-7z M13 12h7v7h-7z M4 14h7v5H4z',
   search: 'M11 4a7 7 0 105.2 11.7L20 20 M11 4a7 7 0 010 14',
   clock: 'M12 7v5l3 2 M12 3a9 9 0 100 18 9 9 0 000-18z',
@@ -34,6 +36,7 @@ export const ICON_PATHS: Record<string, string> = {
   layers: 'M12 3l9 5-9 5-9-5z M3 13l9 5 9-5 M3 17l9 5 9-5',
   dot: 'M12 12m-3 0a3 3 0 106 0 3 3 0 10-6 0',
   eye: 'M2 12s4-7 10-7 10 7 10 7-4 7-10 7-10-7-10-7z M12 9a3 3 0 100 6 3 3 0 000-6z',
+  eyeOff: 'M3 3l18 18 M10.6 10.7a3 3 0 004 4 M9.9 5.1A9.6 9.6 0 0112 5c6 0 10 7 10 7a17 17 0 01-3 3.6 M6.1 6.2A17 17 0 002 12s4 7 10 7a9.5 9.5 0 003.9-.8',
   sortAsc: 'M7 17V7 M4 10l3-3 3 3 M13 7h7 M13 12h5 M13 17h3',
   sortDesc: 'M7 7v10 M4 14l3 3 3-3 M13 7h3 M13 12h5 M13 17h7',
   shieldAlert: 'M12 3l7 3v5c0 4.5-3 7.6-7 9-4-1.4-7-4.5-7-9V6z M12 8v4 M12 15v.5',
@@ -45,24 +48,21 @@ export const ICON_PATHS: Record<string, string> = {
   gauge: 'M12 13l4-4 M12 21a9 9 0 110-18 9 9 0 016.4 15.4 M12 13a1.5 1.5 0 100-3 1.5 1.5 0 000 3z',
   dollar: 'M12 3v18 M16 7.5C16 5.6 14.2 4 12 4S8 5.6 8 7.5 9.8 11 12 11s4 1.6 4 3.5-1.8 3.5-4 3.5-4-1.6-4-3.5',
   spark: 'M12 3l2.2 6.2L20 11l-5.8 1.8L12 19l-2.2-6.2L4 11l5.8-1.8z',
-  brain: 'M9.5 2c.9 0 1.6.4 2.1 1 .3.4.4.8.4 1.3V10l3 3.4c.5.6.9 1.4.9 2.2a4 4 0 01-8 0c0-.8.4-1.6.9-2.2L12 10V4.3c0-.5.1-.9.4-1.3.5-.6 1.2-1 2.1-1z',
-  cpu: 'M9 9h6v6H9z M12 3v3 M12 18v3 M3 12h3 M18 12h3 M5 5l2 2 M17 17l2 2 M19 5l-2 2 M7 17l-2 2',
-  wrench: 'M14.7 6.3a1 1 0 000 1.4l1.6 1.6a1 1 0 001.4 0l3.7-3.7a3 3 0 00-4.2-4.2l-2.5 2.5z M18.3 18.3a3 3 0 01-4.2 4.2l-5-5a4 4 0 115.6-5.6l3.6 3.6a1 1 0 010 1.4l-1.6 1.6a1 1 0 01-1.4 0l-3-3',
-  chevronUp: 'M18 15l-6-6-6 6',
-  agent: 'M12 12m-9 0a9 9 0 1018 0 9 9 0 10-18 0 M12 8v4 M12 16v.01',
-  share: 'M4 12v7a2 2 0 002 2h12a2 2 0 002-2v-7 M16 6l-4-4-4 4 M12 2v13',
-};
+  trash: 'M4 7h16 M9 7V5h6v2 M6 7l1 13h10l1-13 M10 11v6 M14 11v6',
+} as const;
 
-interface IconProps extends React.SVGProps<SVGSVGElement> {
-  name: string;
+export type IconName = keyof typeof ICON_PATHS;
+
+interface IconProps {
+  name: IconName | string;
   size?: number;
+  className?: string;
+  style?: CSSProperties;
   strokeWidth?: number;
 }
 
-export function Icon({ name, size = 16, strokeWidth = 1.7, className, ...props }: IconProps) {
-  const d = ICON_PATHS[name];
-  if (!d) return null;
-
+export function Icon({ name, size = 16, className = '', style, strokeWidth = 1.7 }: IconProps) {
+  const d = ICON_PATHS[name as IconName] ?? ICON_PATHS.dot;
   return (
     <svg
       width={size}
@@ -73,9 +73,9 @@ export function Icon({ name, size = 16, strokeWidth = 1.7, className, ...props }
       strokeWidth={strokeWidth}
       strokeLinecap="round"
       strokeLinejoin="round"
-      className={cn("flex-shrink-0 block", className)}
+      className={className}
+      style={{ flex: '0 0 auto', display: 'block', ...style }}
       aria-hidden="true"
-      {...props}
     >
       {d.split(' M').map((seg, i) => (
         <path key={i} d={(i ? 'M' : '') + seg} />
