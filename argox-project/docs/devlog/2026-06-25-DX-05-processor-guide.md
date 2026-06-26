@@ -1,8 +1,8 @@
 # [DX-05] Write PROCESSOR_GUIDE.md for in-flight data transformation authors
 
 - **Date:** 2026-06-25
-- **PR:** n/a  ·  **Branch:** docs/DX-05-processor-guide
-- **Status:** in-progress
+- **PR:** #183  ·  **Branch:** docs/DX-05-processor-guide
+- **Status:** in-review
 
 ## What changed
 - `argox-project/docs/sdk/processor-guide.md`:
