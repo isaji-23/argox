@@ -23,6 +23,11 @@
   resolving the effective endpoint from the `endpoint` argument or the
   `OTEL_EXPORTER_OTLP_*` env vars. This homogenizes auth across all three SDK
   clients that reach authenticated Collector endpoints.
+- Review hardening: the explicit-header precedence is now case-insensitive (a
+  lowercase `authorization` header is honored, never double-set); the plaintext
+  warning is centralized in `argox/net.py:is_plaintext_credential_endpoint` and
+  no longer fires for loopback hosts (`localhost`/`127.0.0.1`/`::1`), which sent
+  no token over the wire. `RemotePolicyClient` shares the same helper.
 
 ## Why
 - The Collector's `GET /api/v1/policies/bundle` requires the `policy-read` scope

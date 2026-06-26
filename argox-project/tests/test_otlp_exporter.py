@@ -55,6 +55,21 @@ def test_otlp_exporter_explicit_authorization_header_wins():
     assert exporter._session.headers.get("Authorization") == "Bearer explicit"
 
 
+def test_otlp_exporter_lowercase_authorization_header_wins():
+    """A lowercase 'authorization' header is honored; api_key does not double-set."""
+    exporter = OTLPSpanExporter(
+        endpoint="https://collector.example.com/v1/traces",
+        api_key="argox_secret",
+        headers={"authorization": "Bearer explicit"},
+    )
+    auth_headers = {
+        k: v
+        for k, v in exporter._session.headers.items()
+        if k.lower() == "authorization"
+    }
+    assert list(auth_headers.values()) == ["Bearer explicit"]
+
+
 def test_otlp_exporter_warns_on_api_key_over_plaintext():
     """A non-HTTPS endpoint with an api_key logs a plaintext warning."""
     with mock.patch("argox.observability.otlp.logger") as mock_logger:
@@ -69,6 +84,15 @@ def test_otlp_exporter_no_warning_on_https_endpoint():
     with mock.patch("argox.observability.otlp.logger") as mock_logger:
         OTLPSpanExporter(
             endpoint="https://collector.example.com/v1/traces", api_key="argox_secret"
+        )
+    assert not mock_logger.warning.called
+
+
+def test_otlp_exporter_no_warning_on_loopback_http_endpoint():
+    """A plain-HTTP loopback endpoint with an api_key does not warn (no leak)."""
+    with mock.patch("argox.observability.otlp.logger") as mock_logger:
+        OTLPSpanExporter(
+            endpoint="http://localhost:4318/v1/traces", api_key="argox_secret"
         )
     assert not mock_logger.warning.called
 

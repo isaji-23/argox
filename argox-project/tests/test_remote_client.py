@@ -664,4 +664,14 @@ class TestRemotePolicyClientAuth:
 
         assert not mock_logger.warning.called
 
+    def test_no_warning_on_loopback_http_endpoint(self) -> None:
+        """A plain-HTTP loopback endpoint with an api_key does not warn (no leak)."""
+        with patch("argox.policies.remote_client.logger") as mock_logger:
+            RemotePolicyClient(
+                endpoint_url="http://127.0.0.1:8000/api/v1/policies/bundle",
+                api_key="argox_secret",
+            )
+
+        assert not mock_logger.warning.called
+
 

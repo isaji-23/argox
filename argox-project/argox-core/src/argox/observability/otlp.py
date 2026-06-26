@@ -10,6 +10,8 @@ from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
     OTLPSpanExporter as _OTLPSpanExporter,
 )
 
+from argox.net import is_plaintext_credential_endpoint
+
 logger = logging.getLogger(__name__)
 
 # Upstream default when neither an explicit endpoint nor an OTEL env var is set.
@@ -30,11 +32,13 @@ class OTLPSpanExporter(_OTLPSpanExporter):
     Args:
         api_key: Optional Bearer token for the Collector's ``/v1/traces`` ingest
             endpoint, which enforces the ``ingest`` scope when auth is enabled.
-            When set, it is sent as ``Authorization: Bearer <api_key>``. This is a
-            convenience that mirrors ``HttpRunExporter`` and ``RemotePolicyClient``;
-            it is equivalent to passing ``headers={"Authorization": ...}`` or
-            setting ``OTEL_EXPORTER_OTLP_HEADERS``. An ``Authorization`` header
-            passed explicitly via ``headers`` takes precedence over ``api_key``.
+            When set, it is injected as ``Authorization: Bearer <api_key>`` into
+            the ``headers`` kwarg, mirroring ``HttpRunExporter`` and
+            ``RemotePolicyClient``. Because the upstream exporter gives the
+            ``headers`` kwarg precedence over ``OTEL_EXPORTER_OTLP_HEADERS``,
+            ``api_key`` overrides any ``Authorization`` set through that
+            environment variable. An ``Authorization`` header passed explicitly
+            via ``headers`` (in any capitalization) still wins over ``api_key``.
         **kwargs: All remaining arguments are forwarded to the upstream
             OTLPSpanExporter. See OpenTelemetry documentation for full details.
 
@@ -51,11 +55,15 @@ class OTLPSpanExporter(_OTLPSpanExporter):
             headers = kwargs.get("headers")
             merged: dict[str, str] = dict(headers) if headers else {}
             # An explicit Authorization header wins; api_key only fills the gap.
-            merged.setdefault("Authorization", f"Bearer {api_key}")
+            # Header names are case-insensitive on the wire, so match any
+            # capitalization the caller may have used rather than just the
+            # canonical "Authorization".
+            if not any(name.lower() == "authorization" for name in merged):
+                merged["Authorization"] = f"Bearer {api_key}"
             kwargs["headers"] = merged
 
             endpoint = kwargs.get("endpoint") or _resolve_endpoint_from_env()
-            if not endpoint.lower().startswith("https://"):
+            if is_plaintext_credential_endpoint(endpoint):
                 logger.warning(
                     "OTLPSpanExporter: API key is provided but the endpoint (%s) "
                     "does not use HTTPS. The key will travel in plaintext over "

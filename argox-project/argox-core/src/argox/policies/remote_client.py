@@ -46,6 +46,7 @@ from argox.interfaces.policy import (
     TRIGGER_ON_OUTPUT,
     TRIGGER_ON_TOOL_CALL,
 )
+from argox.net import is_plaintext_credential_endpoint
 from argox.policies.cache import PolicyCache
 from argox.policies.parser import PolicyParser
 
@@ -110,7 +111,7 @@ class RemotePolicyClient(PolicyClient):
         self._client: Optional[httpx.AsyncClient] = None
         self._task: Optional[asyncio.Task[None]] = None
 
-        if self.api_key and not self.endpoint_url.lower().startswith("https://"):
+        if self.api_key and is_plaintext_credential_endpoint(self.endpoint_url):
             logger.warning(
                 "RemotePolicyClient: API key is provided but the endpoint (%s) does "
                 "not use HTTPS. The key will travel in plaintext over the network.",

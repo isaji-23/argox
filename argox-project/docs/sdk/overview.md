@@ -229,10 +229,13 @@ or the `argox-collector keys` CLI; see `docs/collector/auth.md`. The SDK clients
 that talk to authenticated endpoints accept the key directly: `HttpRunExporter`,
 `RemotePolicyClient` and `OTLPSpanExporter` all take an `api_key` constructor
 argument and send it as `Authorization: Bearer …` on every request (POL-05),
-warning when a key is configured over a non-HTTPS endpoint. For
-`OTLPSpanExporter` the argument is a thin convenience over the upstream OTel
-exporter — equivalent to passing `headers={"Authorization": …}` or setting
-`OTEL_EXPORTER_OTLP_HEADERS`; an explicit `Authorization` header wins over
+warning when a key is configured over a non-HTTPS, non-loopback endpoint (a
+token over `localhost`/`127.0.0.1` never leaves the machine, so it is not
+flagged). For `OTLPSpanExporter` the argument is a thin convenience over the
+upstream OTel exporter: it injects the `Authorization` header via the `headers`
+kwarg, which the exporter prioritizes over `OTEL_EXPORTER_OTLP_HEADERS` — so
+`api_key` overrides an `Authorization` set through that env var, while an
+`Authorization` passed explicitly via `headers` (any capitalization) wins over
 `api_key`.
 
 **Not yet:** no real `SsePolicyClient` (only
