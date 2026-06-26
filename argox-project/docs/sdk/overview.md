@@ -225,10 +225,20 @@ revocable API key as `Authorization: Bearer argox_…` (ingest needs the
 `ingest` scope, `RemotePolicyClient` polling needs `policy-read`), while
 dashboard users present an OIDC JWT whose role claim drives policy-write/admin
 RBAC. Keys are stored hashed in the index DB and managed via admin-only CRUD
-or the `argox-collector keys` CLI; see `docs/collector/auth.md`.
+or the `argox-collector keys` CLI; see `docs/collector/auth.md`. The SDK clients
+that talk to authenticated endpoints accept the key directly: `HttpRunExporter`,
+`RemotePolicyClient` and `OTLPSpanExporter` all take an `api_key` constructor
+argument and send it as `Authorization: Bearer …` on every request (POL-05),
+warning when a key is configured over a non-HTTPS, non-loopback endpoint (a
+token over `localhost`/`127.0.0.1` never leaves the machine, so it is not
+flagged). For `OTLPSpanExporter` the argument is a thin convenience over the
+upstream OTel exporter: it injects the `Authorization` header via the `headers`
+kwarg, which the exporter prioritizes over `OTEL_EXPORTER_OTLP_HEADERS` — so
+`api_key` overrides an `Authorization` set through that env var, while an
+`Authorization` passed explicitly via `headers` (any capitalization) wins over
+`api_key`.
 
-**Not yet:** the SDK exporters/policy client do not yet attach the API key
-header automatically (configuration follow-up); no real `SsePolicyClient` (only
+**Not yet:** no real `SsePolicyClient` (only
 the contract + in-process cache),
 and the SDK itself does not write to the audit log yet (it is a Collector-side
 API) nor render a dashboard (only the `metrics` object and OTel spans ready to
