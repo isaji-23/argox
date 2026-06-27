@@ -1,0 +1,19 @@
+# Extra runtime deps for the local multi-agent demo backend (server.py).
+#
+# The Argox SDK packages are installed in editable mode from the repo (see
+# README.md). Install argox-core with the `otlp` extra so the OTLP span exporter
+# is available:
+#
+#   pip install -e "../../argox-project/argox-core[otlp]" \
+#               -e ../../argox-project/argox-plugins/argox-plugin-openai
+#   pip install -r requirements.txt
+#
+# The entries below are what server.py uses directly and that the SDK packages
+# do not already pull in.
+fastapi>=0.110
+uvicorn>=0.29
+openai>=1.40
+openai-agents>=0.0.10
+python-dotenv>=1.0
+httpx>=0.27
+PyYAML>=6.0

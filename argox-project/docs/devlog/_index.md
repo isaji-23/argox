@@ -8,6 +8,7 @@ for the decisions behind these changes and
 
 | Date | Ticket | Title | PR | Status |
 |---|---|---|---|---|
+| 2026-06-27 | DEPLOY-02 | Local multi-agent demo with RemotePolicyClient | — | in-review |
 | 2026-06-26 | POL-05 | Authenticate RemotePolicyClient policy fetches with an API key | — | in-review |
 | 2026-06-25 | DASH-07 | Authenticate dashboard policy requests; post demo run records | #186 | in-review |
 | 2026-06-25 | EXP-10 | Link run records to their trace for by-trace lookup | #185 | in-review |

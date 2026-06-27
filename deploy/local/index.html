@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Argox · Local Agent Demo</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet" />
+  <style>
+    /* Tokens lifted from the real dashboard design system (dark mode). */
+    :root {
+      --font-ui: 'IBM Plex Sans', system-ui, sans-serif;
+      --font-mono: 'IBM Plex Mono', ui-monospace, monospace;
+      --font-display: 'Space Grotesk', var(--font-ui);
+      --bg-base: #0A0F1A;
+      --bg-surface: #0E1524;
+      --bg-surface-2: #121B2D;
+      --bg-surface-3: #18223A;
+      --border: #1D2940;
+      --border-strong: #2A3A59;
+      --text-primary: #E8EEF8;
+      --text-secondary: #97A6C2;
+      --text-muted: #5E6E8C;
+      --accent: #19BDC9;
+      --accent-hover: #2DD4E0;
+      --accent-fg: #04121A;
+      --accent-surface: rgba(25, 189, 201, 0.13);
+      --accent-border: rgba(25, 189, 201, 0.42);
+      --allow: #3FBE92;
+      --allow-surface: rgba(63, 190, 146, 0.14);
+      --allow-border: rgba(63, 190, 146, 0.38);
+      --warn: #D8A23E;
+      --warn-surface: rgba(216, 162, 62, 0.15);
+      --warn-border: rgba(216, 162, 62, 0.42);
+      --block: #E5544B;
+      --block-surface: rgba(229, 84, 75, 0.14);
+      --block-border: rgba(229, 84, 75, 0.42);
+      --r-md: 7px;
+      --r-lg: 10px;
+      --r-full: 999px;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: var(--font-ui);
+      background: var(--bg-base);
+      color: var(--text-primary);
+      font-size: 13.5px;
+      line-height: 1.55;
+    }
+    header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 16px 24px;
+      border-bottom: 1px solid var(--border);
+      background: var(--bg-surface);
+    }
+    .brand { display: flex; align-items: center; gap: 10px; }
+    .brand .dot {
+      width: 12px; height: 12px; border-radius: var(--r-full);
+      background: var(--accent); box-shadow: 0 0 12px var(--accent);
+    }
+    .brand h1 {
+      font-family: var(--font-display); font-size: 17px; font-weight: 600; margin: 0;
+      letter-spacing: 0.5px;
+    }
+    .brand span { color: var(--text-muted); font-size: 11.5px; }
+    a.dash-link {
+      color: var(--accent); text-decoration: none; font-size: 12.5px;
+      border: 1px solid var(--accent-border); padding: 6px 12px;
+      border-radius: var(--r-md); background: var(--accent-surface);
+    }
+    a.dash-link:hover { background: var(--accent); color: var(--accent-fg); }
+    main {
+      max-width: 1100px; margin: 0 auto; padding: 24px;
+      display: grid; grid-template-columns: 320px 1fr; gap: 24px;
+    }
+    @media (max-width: 820px) { main { grid-template-columns: 1fr; } }
+    .panel {
+      background: var(--bg-surface); border: 1px solid var(--border);
+      border-radius: var(--r-lg); padding: 20px;
+    }
+    h2 {
+      font-family: var(--font-display); font-size: 12.5px; font-weight: 600;
+      text-transform: uppercase; letter-spacing: 1px; color: var(--text-secondary);
+      margin: 0 0 16px 0;
+    }
+    label { display: block; font-size: 11.5px; color: var(--text-muted);
+      text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; }
+    select, textarea {
+      width: 100%; background: var(--bg-surface-3); color: var(--text-primary);
+      border: 1px solid var(--border-strong); border-radius: var(--r-md);
+      padding: 10px 12px; font-family: var(--font-ui); font-size: 13.5px;
+      margin-bottom: 16px; resize: vertical;
+    }
+    textarea { font-family: var(--font-mono); min-height: 90px; }
+    select:focus, textarea:focus { outline: none; border-color: var(--accent); }
+    .agent-desc { color: var(--text-secondary); font-size: 12.5px; margin: -8px 0 16px; }
+    .tools { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 16px; }
+    .chip {
+      font-family: var(--font-mono); font-size: 10.5px; padding: 3px 8px;
+      border-radius: var(--r-full); background: var(--bg-surface-2);
+      border: 1px solid var(--border); color: var(--text-secondary);
+    }
+    .examples { margin-bottom: 16px; }
+    .examples button {
+      display: block; width: 100%; text-align: left; background: transparent;
+      border: 1px dashed var(--border-strong); color: var(--text-secondary);
+      border-radius: var(--r-md); padding: 7px 10px; margin-bottom: 6px;
+      font-size: 12px; cursor: pointer; font-family: var(--font-mono);
+    }
+    .examples button:hover { border-color: var(--accent); color: var(--text-primary); }
+    button.run {
+      width: 100%; background: var(--accent); color: var(--accent-fg);
+      border: none; border-radius: var(--r-md); padding: 12px;
+      font-family: var(--font-display); font-size: 14px; font-weight: 600;
+      cursor: pointer; letter-spacing: 0.5px;
+    }
+    button.run:hover { background: var(--accent-hover); }
+    button.run:disabled { opacity: 0.5; cursor: wait; }
+    .cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 20px; }
+    @media (max-width: 560px) { .cards { grid-template-columns: repeat(2, 1fr); } }
+    .card {
+      background: var(--bg-surface-2); border: 1px solid var(--border);
+      border-radius: var(--r-md); padding: 14px;
+    }
+    .card .k { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.5px;
+      color: var(--text-muted); }
+    .card .v { font-family: var(--font-display); font-size: 21px; font-weight: 600; margin-top: 4px; }
+    .badge {
+      display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px;
+      font-weight: 600; padding: 4px 10px; border-radius: var(--r-full);
+    }
+    .badge.allow { background: var(--allow-surface); color: var(--allow); border: 1px solid var(--allow-border); }
+    .badge.warn  { background: var(--warn-surface);  color: var(--warn);  border: 1px solid var(--warn-border); }
+    .badge.block { background: var(--block-surface); color: var(--block); border: 1px solid var(--block-border); }
+    .output {
+      background: var(--bg-base); border: 1px solid var(--border);
+      border-radius: var(--r-md); padding: 16px; font-family: var(--font-mono);
+      font-size: 13px; white-space: pre-wrap; color: var(--text-primary);
+      margin-bottom: 16px; min-height: 40px;
+    }
+    .row { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 16px; }
+    .meta { font-size: 12px; color: var(--text-secondary); }
+    .meta b { color: var(--text-primary); font-weight: 600; }
+    .violations { color: var(--block); font-size: 12.5px; font-family: var(--font-mono); }
+    .placeholder { color: var(--text-muted); font-size: 13px; text-align: center; padding: 40px 0; }
+    .trace-link { color: var(--accent); text-decoration: none; font-family: var(--font-mono); font-size: 12px; }
+    .trace-link:hover { text-decoration: underline; }
+    .err { color: var(--block); font-family: var(--font-mono); font-size: 12.5px; }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <div class="dot"></div>
+      <div>
+        <h1>ARGOX</h1>
+        <span>Local Agent Demo · SDK + RemotePolicyClient</span>
+      </div>
+    </div>
+    <a class="dash-link" id="dash-link" href="#" target="_blank">Open dashboard →</a>
+  </header>
+
+  <main>
+    <section class="panel">
+      <h2>Agent</h2>
+      <label for="agent">Select agent</label>
+      <select id="agent"></select>
+      <div class="agent-desc" id="agent-desc"></div>
+      <label>Tools</label>
+      <div class="tools" id="tools"></div>
+      <label>Prompt</label>
+      <textarea id="prompt" placeholder="Type a prompt..."></textarea>
+      <label>Examples</label>
+      <div class="examples" id="examples"></div>
+      <button class="run" id="run">Run agent</button>
+    </section>
+
+    <section class="panel">
+      <h2>Result</h2>
+      <div id="result">
+        <div class="placeholder">Pick an agent, send a prompt, and the run metrics appear here.</div>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    let AGENTS = [];
+    let DASHBOARD = "";
+
+    function policyBadge(metrics) {
+      const p = metrics.policies || {};
+      const viol = p.violations || [];
+      if (!p.input_passed || !p.output_passed) {
+        return `<span class="badge block">● BLOCKED / FLAGGED</span>`;
+      }
+      if (viol.length) return `<span class="badge warn">● ALERT</span>`;
+      return `<span class="badge allow">● PASSED</span>`;
+    }
+
+    function renderResult(data) {
+      if (data.error && !data.metrics) {
+        $("result").innerHTML = `<div class="err">Run error: ${data.error}</div>`;
+        return;
+      }
+      const m = data.metrics || {};
+      const tk = m.tokens || {};
+      const tools = m.tools || {};
+      const blocked = (tools.blocked || []).map(t => t.tool_name || t.name || JSON.stringify(t));
+      const called = (tools.called || []).map(t => t.name + (t.blocked ? " (blocked)" : ""));
+      const dur = m.duration_seconds != null ? m.duration_seconds + "s" : "—";
+      const traceId = m.trace_id;
+      const traceLink = traceId
+        ? `<a class="trace-link" href="${DASHBOARD}/traces/${traceId}" target="_blank">${traceId.slice(0,16)}…</a>`
+        : "—";
+
+      $("result").innerHTML = `
+        <div class="cards">
+          <div class="card"><div class="k">Total tokens</div><div class="v">${tk.total ?? "—"}</div></div>
+          <div class="card"><div class="k">In / Out</div><div class="v">${(tk.input??0)}/${(tk.output??0)}</div></div>
+          <div class="card"><div class="k">Latency</div><div class="v">${dur}</div></div>
+          <div class="card"><div class="k">Success</div><div class="v">${m.success ? "✓" : "✗"}</div></div>
+        </div>
+        <div class="row">
+          <div>${policyBadge(m)}</div>
+          <div class="meta">Trace: ${traceLink}</div>
+        </div>
+        <label>Final output</label>
+        <div class="output">${(data.final_output || "(no output)").replace(/</g,"&lt;")}</div>
+        ${data.error ? `<div class="err">Run error: ${data.error}</div>` : ""}
+        <div class="meta">Tools called: <b>${called.join(", ") || "none"}</b></div>
+        ${blocked.length ? `<div class="meta">Tools blocked by policy: <b>${blocked.join(", ")}</b></div>` : ""}
+        ${(m.policies?.violations || []).length ? `<div class="violations">⚠ ${m.policies.violations.join(" · ")}</div>` : ""}
+      `;
+    }
+
+    function selectedAgent() { return AGENTS.find(a => a.id === $("agent").value); }
+
+    function renderAgentMeta() {
+      const a = selectedAgent();
+      if (!a) return;
+      $("agent-desc").textContent = a.description;
+      $("tools").innerHTML = a.tools.map(t => `<span class="chip">${t}</span>`).join("");
+      $("examples").innerHTML = a.examples.map(e =>
+        `<button data-ex="${e.replace(/"/g,'&quot;')}">${e}</button>`).join("");
+      document.querySelectorAll("#examples button").forEach(b =>
+        b.onclick = () => { $("prompt").value = b.dataset.ex; });
+    }
+
+    async function run() {
+      const a = selectedAgent();
+      const prompt = $("prompt").value.trim();
+      if (!a || !prompt) return;
+      $("run").disabled = true;
+      $("run").textContent = "Running…";
+      $("result").innerHTML = `<div class="placeholder">Running ${a.name}…</div>`;
+      try {
+        const res = await fetch("/api/run", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ agent: a.id, prompt }),
+        });
+        renderResult(await res.json());
+      } catch (e) {
+        $("result").innerHTML = `<div class="err">Request failed: ${e}</div>`;
+      } finally {
+        $("run").disabled = false;
+        $("run").textContent = "Run agent";
+      }
+    }
+
+    async function init() {
+      const cfg = await (await fetch("/api/config")).json();
+      DASHBOARD = cfg.dashboard_url;
+      $("dash-link").href = DASHBOARD;
+      const data = await (await fetch("/api/agents")).json();
+      AGENTS = data.agents;
+      $("agent").innerHTML = AGENTS.map(a => `<option value="${a.id}">${a.name}</option>`).join("");
+      $("agent").onchange = renderAgentMeta;
+      $("run").onclick = run;
+      renderAgentMeta();
+    }
+    init();
+  </script>
+</body>
+</html>
