@@ -207,7 +207,13 @@ class ArgoxManager:
                         _record_policy_block(span, result.rule_id, "input policy blocked")
                         record_policy_decision(decision="block", rule_id=result.rule_id)
                         raise PermissionError(f"[POLICY:{result.rule_id}] {result.reason}")
-                    record_policy_decision(decision="ok", rule_id=None)
+                    if result.rule_id:
+                        # Alert: a rule matched but does not block. Record the
+                        # violation and let the run continue (passed stays True).
+                        metrics.policy_violations.append(result.reason)
+                        record_policy_decision(decision="alert", rule_id=result.rule_id)
+                    else:
+                        record_policy_decision(decision="ok", rule_id=None)
 
                 # 3. Filter tools via policy
                 raw_tools = _extract_tool_names(run_agent) if tools is None else tools
@@ -217,7 +223,14 @@ class ArgoxManager:
                             tool_result = await self._policy.is_tool_allowed(tool_name)
                             if tool_result.passed:
                                 metrics.tools_available.append(tool_name)
-                                record_policy_decision(decision="ok", rule_id=None)
+                                if tool_result.rule_id:
+                                    # Alert: tool stays available but is flagged.
+                                    metrics.policy_violations.append(tool_result.reason)
+                                    record_policy_decision(
+                                        decision="alert", rule_id=tool_result.rule_id
+                                    )
+                                else:
+                                    record_policy_decision(decision="ok", rule_id=None)
                             else:
                                 metrics.tools_blocked.append({"name": tool_name, "reason": tool_result.reason})
                                 record_policy_decision(decision="block", rule_id=tool_result.rule_id)
@@ -274,7 +287,12 @@ class ArgoxManager:
                         _record_policy_block(span, result.rule_id, "output policy blocked")
                         record_policy_decision(decision="block", rule_id=result.rule_id)
                         raise PermissionError(f"[POLICY:{result.rule_id}] {result.reason}")
-                    record_policy_decision(decision="ok", rule_id=None)
+                    if result.rule_id:
+                        # Alert: output flagged but not blocked; run succeeds.
+                        metrics.policy_violations.append(result.reason)
+                        record_policy_decision(decision="alert", rule_id=result.rule_id)
+                    else:
+                        record_policy_decision(decision="ok", rule_id=None)
 
                 metrics.final_output = output
                 metrics.success = True
