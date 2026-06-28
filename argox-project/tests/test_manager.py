@@ -120,6 +120,44 @@ class _BlockToolPolicy(PolicyClient):
         return PolicyResult.ok()
 
 
+class _AlertInputPolicy(PolicyClient):
+    async def check_input(self, text: str) -> PolicyResult:
+        return PolicyResult.alert(reason="input flagged", rule_id="A1")
+
+    async def is_tool_allowed(self, tool_name: str) -> PolicyResult:
+        return PolicyResult.ok()
+
+    async def check_output(self, text: str) -> PolicyResult:
+        return PolicyResult.ok()
+
+
+class _AlertOutputPolicy(PolicyClient):
+    async def check_input(self, text: str) -> PolicyResult:
+        return PolicyResult.ok()
+
+    async def is_tool_allowed(self, tool_name: str) -> PolicyResult:
+        return PolicyResult.ok()
+
+    async def check_output(self, text: str) -> PolicyResult:
+        return PolicyResult.alert(reason="output flagged", rule_id="A2")
+
+
+class _AlertToolPolicy(PolicyClient):
+    def __init__(self, alerted_tool: str) -> None:
+        self._alerted = alerted_tool
+
+    async def check_input(self, text: str) -> PolicyResult:
+        return PolicyResult.ok()
+
+    async def is_tool_allowed(self, tool_name: str) -> PolicyResult:
+        if tool_name == self._alerted:
+            return PolicyResult.alert(reason="tool flagged", rule_id="A3")
+        return PolicyResult.ok()
+
+    async def check_output(self, text: str) -> PolicyResult:
+        return PolicyResult.ok()
+
+
 async def _fake_runner(agent: Any, prompt: str) -> _FakeResponse:
     return _FakeResponse(text=f"response to: {prompt}")
 
@@ -307,6 +345,45 @@ class TestPolicy:
             await mgr.run(_FakeAgent(), "prompt", "fake", _fake_runner)
         assert exp.exports[0].output_policy_passed is False
         assert exp.exports[0].success is False
+
+    @pytest.mark.asyncio
+    async def test_input_alert_records_violation_but_succeeds(self):
+        mgr = ArgoxManager(policy=_AlertInputPolicy())
+        mgr.register_plugin(_FakePlugin())
+        exp = _CapturingExporter()
+        mgr.register_exporter(exp)
+        await mgr.run(_FakeAgent(), "flag me", "fake", _fake_runner)
+        m = exp.exports[0]
+        assert m.input_policy_passed is True
+        assert m.success is True
+        assert "input flagged" in m.policy_violations
+
+    @pytest.mark.asyncio
+    async def test_output_alert_records_violation_but_succeeds(self):
+        mgr = ArgoxManager(policy=_AlertOutputPolicy())
+        mgr.register_plugin(_FakePlugin())
+        exp = _CapturingExporter()
+        mgr.register_exporter(exp)
+        await mgr.run(_FakeAgent(), "prompt", "fake", _fake_runner)
+        m = exp.exports[0]
+        assert m.output_policy_passed is True
+        assert m.success is True
+        assert "output flagged" in m.policy_violations
+
+    @pytest.mark.asyncio
+    async def test_tool_alert_keeps_tool_available_and_flags(self):
+        mgr = ArgoxManager(policy=_AlertToolPolicy("flagged"))
+        mgr.register_plugin(_FakePlugin())
+        exp = _CapturingExporter()
+        mgr.register_exporter(exp)
+        await mgr.run(
+            _FakeAgent(), "prompt", "fake", _fake_runner,
+            tools=["safe", "flagged"],
+        )
+        m = exp.exports[0]
+        assert "flagged" in m.tools_available
+        assert m.tools_blocked == []
+        assert "tool flagged" in m.policy_violations
 
     @pytest.mark.asyncio
     async def test_tool_filtering(self):

@@ -66,9 +66,11 @@ When the `@argox.monitor`-decorated function is called, `ArgoxManager`
 
 1. **Processors · `input` phase** — raw prompt is persisted in `metrics`, then
    transformed. Ideal for PII redaction before the LLM sees it.
-2. **Policy · `check_input`** — `block` aborts the run with `PermissionError`.
+2. **Policy · `check_input`** — `block` aborts the run with `PermissionError`;
+   `alert` records the reason in `metrics.policy_violations` and continues.
 3. **Policy · `is_tool_allowed` (per tool)** — blocked tools are physically
-   removed from the per-run agent copy before the agent starts.
+   removed from the per-run agent copy before the agent starts; an `alert` tool
+   stays available but its reason is recorded in `metrics.policy_violations`.
 4. **Plugin · `instrument(agent, metrics)`** — the Manager passes a per-run copy
    of the agent (`_clone_agent`, ADR-0010), never the caller's shared instance;
    the plugin wraps that copy with framework-specific hooks and wraps every
@@ -78,8 +80,11 @@ When the `@argox.monitor`-decorated function is called, `ArgoxManager`
    textual answer are pulled from the runner result.
 6. **Processors · `output` phase** — final text passes through all processors
    before returning to the caller.
-7. **Policy · `check_output`** — last chance to block; violation re-raises
-   `PermissionError`.
+7. **Policy · `check_output`** — last chance to block; a `block` violation
+   re-raises `PermissionError`, an `alert` is recorded and the run completes.
+   Across all three stages, `block` flips the matching `*_policy_passed` flag to
+   `False`, while `alert` leaves the flags `True` (the run still succeeds) but
+   appends to `policy_violations` — so an alert is visible without failing.
 8. **`finally` · seal & export** — stamp `end_time`, fill the span with OTel
    GenAI semconv, invoke each `ExporterBase.export(metrics)`. No tool restore is
    needed: the shared agent was never mutated, only its per-run copy.
