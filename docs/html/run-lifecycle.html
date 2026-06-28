@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Argox — Ciclo de vida del run (explicador visual)</title>
+<style>
+  :root {
+    --ink: #16181d; --muted: #5c6370; --line: #e6e8ec; --bg: #fbfbfc; --card: #ffffff;
+    --accent: #2f6df0; --accent-soft: #eaf1fe; --warn: #b25b00; --warn-soft: #fff4e5;
+    --good: #1a7f4b; --good-soft: #e9f7ef; --code-bg: #0f1320; --code-ink: #e7ecf5;
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+    font: 16px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased; }
+  header.hero { border-bottom: 1px solid var(--line);
+    background: radial-gradient(1200px 300px at 15% -40%, var(--accent-soft), transparent 60%), var(--card);
+    padding: 56px 24px 40px; }
+  .wrap { max-width: 920px; margin: 0 auto; }
+  .back { font: 600 12px var(--mono); color: var(--accent); text-decoration: none; letter-spacing: .04em; }
+  .back:hover { text-decoration: underline; }
+  .eyebrow { font: 600 12px/1 var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--accent); margin: 16px 0 14px; }
+  h1 { font-size: 2.4rem; line-height: 1.1; margin: 0 0 12px; letter-spacing: -.02em; }
+  .lede { font-size: 1.1rem; color: var(--muted); max-width: 62ch; margin: 0; }
+  main { padding: 8px 24px 80px; }
+  section { padding: 38px 0; border-bottom: 1px solid var(--line); }
+  section:last-child { border-bottom: 0; }
+  h2 { font-size: 1.5rem; letter-spacing: -.01em; margin: 0 0 6px; }
+  h2 .num { font: 600 .9rem var(--mono); color: var(--accent); margin-right: 10px; }
+  p { margin: 12px 0; }
+  a { color: var(--accent); }
+  code { font: .88em var(--mono); background: #eef0f4; padding: .12em .4em; border-radius: 5px; }
+  table { width: 100%; border-collapse: collapse; margin: 18px 0; font-size: .94rem; }
+  th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-size: .78rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+  tr td:first-child { white-space: nowrap; }
+  .mono { font-family: var(--mono); }
+  .callout { border-radius: 12px; padding: 14px 18px; margin: 18px 0; border: 1px solid; font-size: .95rem; }
+  .callout.warn { background: var(--warn-soft); border-color: #f4d8af; } .callout.warn strong { color: var(--warn); }
+  .callout.note { background: var(--accent-soft); border-color: #cfe0fd; } .callout.note strong { color: var(--accent); }
+  .callout.good { background: var(--good-soft); border-color: #bfe6cf; } .callout.good strong { color: var(--good); }
+  figure { margin: 24px 0; }
+  figcaption { font-size: .82rem; color: var(--muted); text-align: center; margin-top: 8px; }
+  .diagram { width: 100%; height: auto; background: var(--card); border: 1px solid var(--line); border-radius: 14px; }
+  footer { color: var(--muted); font-size: .85rem; padding: 32px 24px; text-align: center; }
+  .kbd { font: .82em var(--mono); border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 6px; padding: 1px 6px; background: #fff; }
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="wrap">
+    <a class="back" href="index.html">← Explicadores</a>
+    <p class="eyebrow">Argox · SDK</p>
+    <h1>Ciclo de vida del run</h1>
+    <p class="lede">Qué hace <code>ArgoxManager.run()</code> de principio a fin: siete fases
+      dentro de un único span <code>argox.agent.run</code>, con políticas y processors
+      intercalados.</p>
+  </div>
+</header>
+
+<main class="wrap">
+
+  <section>
+    <h2><span class="num">01</span>Las siete fases</h2>
+    <p>Todo el ciclo va envuelto en el span <code>argox.agent.run</code> (el carril azul).
+      Cuando <code>enable_phase_timings=True</code>, cada fase se cronometra en
+      <code>metrics.phase_timings</code>.</p>
+    <figure>
+      <svg class="diagram" viewBox="0 0 900 560" role="img" aria-label="Las siete fases del run">
+        <!-- span lane -->
+        <rect x="40" y="30" width="820" height="500" rx="16" fill="#f5f8ff" stroke="#cfe0fd" stroke-width="1.5" stroke-dasharray="6 4"></rect>
+        <text x="58" y="54" font-family="ui-monospace,monospace" font-weight="600" font-size="12" fill="#2f6df0">span: argox.agent.run &#160;(graba trace_id, tokens, decisión, success)</text>
+
+        <!-- vertical spine -->
+        <line x1="120" y1="80" x2="120" y2="500" stroke="#cdd6e4" stroke-width="2"></line>
+
+        <!-- phase factory -->
+        <!-- 1 -->
+        <circle cx="120" cy="100" r="13" fill="#2f6df0"></circle>
+        <text x="120" y="105" text-anchor="middle" font-family="ui-monospace,monospace" font-weight="700" font-size="12" fill="#fff">1</text>
+        <text x="148" y="97" font-family="ui-monospace,monospace" font-weight="600" font-size="13" fill="#16181d">processors_input</text>
+        <text x="148" y="114" font-family="-apple-system,sans-serif" font-size="11.5" fill="#5c6370">process_input sobre el prompt</text>
+        <!-- 2 -->
+        <circle cx="120" cy="160" r="13" fill="#2f6df0"></circle>
+        <text x="120" y="165" text-anchor="middle" font-family="ui-monospace,monospace" font-weight="700" font-size="12" fill="#fff">2</text>
+        <text x="148" y="157" font-family="ui-monospace,monospace" font-weight="600" font-size="13" fill="#16181d">policy_input</text>
+        <text x="148" y="174" font-family="-apple-system,sans-serif" font-size="11.5" fill="#5c6370">check_input · block → PermissionError</text>
+        <!-- 3 -->
+        <circle cx="120" cy="220" r="13" fill="#2f6df0"></circle>
+        <text x="120" y="225" text-anchor="middle" font-family="ui-monospace,monospace" font-weight="700" font-size="12" fill="#fff">3</text>
+        <text x="148" y="217" font-family="ui-monospace,monospace" font-weight="600" font-size="13" fill="#16181d">tool_filter</text>
+        <text x="148" y="234" font-family="-apple-system,sans-serif" font-size="11.5" fill="#5c6370">is_tool_allowed · quita tools bloqueadas</text>
+        <!-- 4 -->
+        <circle cx="120" cy="280" r="13" fill="#1a7f4b"></circle>
+        <text x="120" y="285" text-anchor="middle" font-family="ui-monospace,monospace" font-weight="700" font-size="12" fill="#fff">4</text>
+        <text x="148" y="277" font-family="ui-monospace,monospace" font-weight="600" font-size="13" fill="#16181d">agent_exec</text>
+        <text x="148" y="294" font-family="-apple-system,sans-serif" font-size="11.5" fill="#5c6370">plugin.instrument(copia) + runner()</text>
+        <!-- 5 -->
+        <circle cx="120" cy="340" r="13" fill="#2f6df0"></circle>
+        <text x="120" y="345" text-anchor="middle" font-family="ui-monospace,monospace" font-weight="700" font-size="12" fill="#fff">5</text>
+        <text x="148" y="337" font-family="ui-monospace,monospace" font-weight="600" font-size="13" fill="#16181d">extract</text>
+        <text x="148" y="354" font-family="-apple-system,sans-serif" font-size="11.5" fill="#5c6370">extract_tokens / extract_output · gen_ai.usage.*</text>
+        <!-- 6 -->
+        <circle cx="120" cy="400" r="13" fill="#2f6df0"></circle>
+        <text x="120" y="405" text-anchor="middle" font-family="ui-monospace,monospace" font-weight="700" font-size="12" fill="#fff">6</text>
+        <text x="148" y="397" font-family="ui-monospace,monospace" font-weight="600" font-size="13" fill="#16181d">processors_output</text>
+        <text x="148" y="414" font-family="-apple-system,sans-serif" font-size="11.5" fill="#5c6370">process_output sobre la salida</text>
+        <!-- 7 -->
+        <circle cx="120" cy="460" r="13" fill="#2f6df0"></circle>
+        <text x="120" y="465" text-anchor="middle" font-family="ui-monospace,monospace" font-weight="700" font-size="12" fill="#fff">7</text>
+        <text x="148" y="457" font-family="ui-monospace,monospace" font-weight="600" font-size="13" fill="#16181d">policy_output</text>
+        <text x="148" y="474" font-family="-apple-system,sans-serif" font-size="11.5" fill="#5c6370">check_output · block → PermissionError</text>
+
+        <!-- export (finally) -->
+        <circle cx="120" cy="510" r="11" fill="#b25b00"></circle>
+        <text x="148" y="507" font-family="ui-monospace,monospace" font-weight="600" font-size="13" fill="#b25b00">export (finally)</text>
+        <text x="148" y="524" font-family="-apple-system,sans-serif" font-size="11.5" fill="#5c6370">success, restore agente, export(metrics) tolerante a fallos</text>
+      </svg>
+      <figcaption>Orden exacto de <code>ArgoxManager.run()</code>. El <code>export</code> corre
+        en el <code>finally</code>: ocurre incluso si una política bloquea a mitad.</figcaption>
+    </figure>
+  </section>
+
+  <section>
+    <h2><span class="num">02</span>Qué graba cada fase</h2>
+    <table>
+      <thead><tr><th>Fase</th><th>Acción</th><th>En caso de bloqueo</th></tr></thead>
+      <tbody>
+        <tr><td class="mono">processors_input</td><td>Transforma el prompt (p.ej. redacción PII)</td><td>strict → aborta · fail-open → sigue</td></tr>
+        <tr><td class="mono">policy_input</td><td><span class="mono">check_input(prompt)</span></td><td><span class="mono">PermissionError</span></td></tr>
+        <tr><td class="mono">tool_filter</td><td><span class="mono">is_tool_allowed</span> por tool</td><td>quita la tool + span hijo</td></tr>
+        <tr><td class="mono">agent_exec</td><td>Instrumenta copia + ejecuta runner</td><td>—</td></tr>
+        <tr><td class="mono">extract</td><td>Tokens y salida del plugin</td><td>—</td></tr>
+        <tr><td class="mono">processors_output</td><td>Transforma la salida</td><td>strict → aborta · fail-open → sigue</td></tr>
+        <tr><td class="mono">policy_output</td><td><span class="mono">check_output(output)</span></td><td><span class="mono">PermissionError</span></td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2><span class="num">03</span>Dos detalles de robustez</h2>
+    <div class="callout note">
+      <strong>Copia del agente por run (#153).</strong> El manager instrumenta una copia
+      <em>shallow</em> del agente, no la instancia compartida, porque el mismo objeto
+      <code>Agent</code> suele ser conducido por <code>run()</code> concurrentes. Así el
+      filtrado de tools y el wrapping nunca contaminan a un run hermano.
+    </div>
+    <div class="callout good">
+      <strong>Export que nunca rompe el run.</strong> En el <code>finally</code>, cada
+      <code>exporter.export(metrics)</code> va en try/except; los errores se acumulan en
+      <code>metrics.exporter_errors</code> y jamás abortan la ejecución del agente.
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="num">04</span>Tras el run: dos rutas al Collector</h2>
+    <p>El SDK envía datos por dos caminos independientes, unidos por el mismo
+      <code>trace_id</code>:</p>
+    <figure>
+      <svg class="diagram" viewBox="0 0 900 200" role="img" aria-label="Dos rutas al Collector">
+        <defs>
+          <marker id="ar3" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#2f6df0"></path></marker>
+        </defs>
+        <rect x="30" y="40" width="200" height="50" rx="10" fill="#fff" stroke="#d8dde6" stroke-width="1.5"></rect>
+        <text x="130" y="62" text-anchor="middle" font-family="ui-monospace,monospace" font-size="12" fill="#16181d">spans (OTel)</text>
+        <text x="130" y="78" text-anchor="middle" font-family="-apple-system,sans-serif" font-size="11" fill="#5c6370">BatchSpanProcessor</text>
+
+        <rect x="30" y="115" width="200" height="50" rx="10" fill="#fff" stroke="#d8dde6" stroke-width="1.5"></rect>
+        <text x="130" y="137" text-anchor="middle" font-family="ui-monospace,monospace" font-size="12" fill="#16181d">AgentRunMetrics</text>
+        <text x="130" y="153" text-anchor="middle" font-family="-apple-system,sans-serif" font-size="11" fill="#5c6370">HttpRunExporter</text>
+
+        <path d="M230,65 L420,65" stroke="#2f6df0" stroke-width="2" fill="none" marker-end="url(#ar3)"></path>
+        <text x="250" y="56" font-family="ui-monospace,monospace" font-size="11" fill="#5c6370">OTLP</text>
+        <path d="M230,140 L420,140" stroke="#2f6df0" stroke-width="2" fill="none" marker-end="url(#ar3)"></path>
+        <text x="250" y="131" font-family="ui-monospace,monospace" font-size="11" fill="#5c6370">JSON</text>
+
+        <rect x="424" y="40" width="200" height="50" rx="10" fill="#eaf1fe" stroke="#cfe0fd" stroke-width="1.5"></rect>
+        <text x="524" y="62" text-anchor="middle" font-family="ui-monospace,monospace" font-size="12" fill="#2f6df0">POST /v1/traces</text>
+        <text x="524" y="78" text-anchor="middle" font-family="-apple-system,sans-serif" font-size="11" fill="#5c6370">Collector</text>
+        <rect x="424" y="115" width="200" height="50" rx="10" fill="#eaf1fe" stroke="#cfe0fd" stroke-width="1.5"></rect>
+        <text x="524" y="137" text-anchor="middle" font-family="ui-monospace,monospace" font-size="12" fill="#2f6df0">POST /v1/runs</text>
+        <text x="524" y="153" text-anchor="middle" font-family="-apple-system,sans-serif" font-size="11" fill="#5c6370">Collector</text>
+
+        <path d="M624,90 C720,90 720,115 624,140" stroke="#cfd6e0" stroke-width="2" fill="none" stroke-dasharray="4 3"></path>
+        <text x="700" y="118" text-anchor="middle" font-family="-apple-system,sans-serif" font-size="11" fill="#5c6370">join por</text>
+        <text x="700" y="133" text-anchor="middle" font-family="ui-monospace,monospace" font-size="11" fill="#5c6370">trace_id</text>
+      </svg>
+      <figcaption>El <code>trace_id</code> común permite al dashboard ir de una traza a su run
+        (<code>/runs/by-trace/{trace_id}</code>) y viceversa.</figcaption>
+    </figure>
+    <div class="callout note">
+      <strong>Más detalle.</strong> Ver <a href="../sdk/core.md">docs/sdk/core.md</a> y
+      <a href="../overview/data-flow.md">docs/overview/data-flow.md</a>.
+    </div>
+  </section>
+
+</main>
+
+<footer>
+  Argox · explicador del ciclo de vida del run · grounded en
+  <span class="kbd">core/manager.py</span> · <span class="kbd">core/state.py</span>
+</footer>
+
+</body>
+</html>

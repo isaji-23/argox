@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Argox — Arquitectura global (explicador visual)</title>
+<style>
+  :root {
+    --ink: #16181d; --muted: #5c6370; --line: #e6e8ec; --bg: #fbfbfc; --card: #ffffff;
+    --accent: #2f6df0; --accent-soft: #eaf1fe; --warn: #b25b00; --warn-soft: #fff4e5;
+    --good: #1a7f4b; --good-soft: #e9f7ef; --code-bg: #0f1320; --code-ink: #e7ecf5;
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+    font: 16px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased; }
+  header.hero { border-bottom: 1px solid var(--line);
+    background: radial-gradient(1200px 300px at 15% -40%, var(--accent-soft), transparent 60%), var(--card);
+    padding: 56px 24px 40px; }
+  .wrap { max-width: 920px; margin: 0 auto; }
+  .back { font: 600 12px var(--mono); color: var(--accent); text-decoration: none; letter-spacing: .04em; }
+  .back:hover { text-decoration: underline; }
+  .eyebrow { font: 600 12px/1 var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--accent); margin: 16px 0 14px; }
+  h1 { font-size: 2.4rem; line-height: 1.1; margin: 0 0 12px; letter-spacing: -.02em; }
+  .lede { font-size: 1.1rem; color: var(--muted); max-width: 62ch; margin: 0; }
+  main { padding: 8px 24px 80px; }
+  section { padding: 38px 0; border-bottom: 1px solid var(--line); }
+  section:last-child { border-bottom: 0; }
+  h2 { font-size: 1.5rem; letter-spacing: -.01em; margin: 0 0 6px; }
+  h2 .num { font: 600 .9rem var(--mono); color: var(--accent); margin-right: 10px; }
+  p { margin: 12px 0; }
+  a { color: var(--accent); }
+  code { font: .88em var(--mono); background: #eef0f4; padding: .12em .4em; border-radius: 5px; }
+  table { width: 100%; border-collapse: collapse; margin: 18px 0; font-size: .94rem; }
+  th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-size: .78rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+  tr td:first-child { white-space: nowrap; }
+  .mono { font-family: var(--mono); }
+  .callout { border-radius: 12px; padding: 14px 18px; margin: 18px 0; border: 1px solid; font-size: .95rem; }
+  .callout.note { background: var(--accent-soft); border-color: #cfe0fd; } .callout.note strong { color: var(--accent); }
+  figure { margin: 24px 0; }
+  figcaption { font-size: .82rem; color: var(--muted); text-align: center; margin-top: 8px; }
+  .diagram { width: 100%; height: auto; background: var(--card); border: 1px solid var(--line); border-radius: 14px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; margin: 18px 0; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; }
+  .card h4 { margin: 0 0 4px; font-size: .98rem; } .card p { margin: 0; font-size: .9rem; color: var(--muted); }
+  footer { color: var(--muted); font-size: .85rem; padding: 32px 24px; text-align: center; }
+  .kbd { font: .82em var(--mono); border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 6px; padding: 1px 6px; background: #fff; }
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="wrap">
+    <a class="back" href="index.html">← Explicadores</a>
+    <p class="eyebrow">Argox · Sistema</p>
+    <h1>Arquitectura global</h1>
+    <p class="lede">Tres componentes desplegables por separado. El SDK vive con el agente
+      (zona del cliente); el Collector y el Dashboard, en infraestructura propia del
+      operador.</p>
+  </div>
+</header>
+
+<main class="wrap">
+
+  <section>
+    <h2><span class="num">01</span>Los tres componentes y la frontera de confianza</h2>
+    <figure>
+      <svg class="diagram" viewBox="0 0 900 380" role="img" aria-label="SDK, Collector y Dashboard">
+        <defs>
+          <marker id="ar" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#2f6df0"></path></marker>
+        </defs>
+
+        <!-- client zone -->
+        <rect x="20" y="40" width="250" height="310" rx="16" fill="#f5f8ff" stroke="#cfe0fd" stroke-width="1.5" stroke-dasharray="6 4"></rect>
+        <text x="36" y="64" font-family="ui-monospace,monospace" font-size="11" fill="#2f6df0">Proceso del agente (cliente)</text>
+        <rect x="44" y="80" width="200" height="50" rx="9" fill="#fff" stroke="#d8dde6" stroke-width="1.5"></rect>
+        <text x="144" y="102" text-anchor="middle" font-family="ui-monospace,monospace" font-size="12" fill="#16181d">@argox.monitor</text>
+        <text x="144" y="118" text-anchor="middle" font-family="-apple-system,sans-serif" font-size="11" fill="#5c6370">código de usuario</text>
+        <rect x="44" y="142" width="200" height="50" rx="9" fill="#fff" stroke="#d8dde6" stroke-width="1.5"></rect>
+        <text x="144" y="164" text-anchor="middle" font-family="ui-monospace,monospace" font-size="12" fill="#16181d">ArgoxManager</text>
+        <text x="144" y="180" text-anchor="middle" font-family="-apple-system,sans-serif" font-size="11" fill="#5c6370">+ plugin · processors</text>
+        <rect x="44" y="204" width="200" height="50" rx="9" fill="#fff" stroke="#d8dde6" stroke-width="1.5"></rect>
+        <text x="144" y="226" text-anchor="middle" font-family="ui-monospace,monospace" font-size="12" fill="#16181d">PolicyClient</text>
+        <text x="144" y="242" text-anchor="middle" font-family="-apple-system,sans-serif" font-size="11" fill="#5c6370">PolicyCache (sin red)</text>
+        <rect x="44" y="266" width="200" height="50" rx="9" fill="#fff" stroke="#d8dde6" stroke-width="1.5"></rect>
+        <text x="144" y="288" text-anchor="middle" font-family="ui-monospace,monospace" font-size="12" fill="#16181d">Exporters</text>
+        <text x="144" y="304" text-anchor="middle" font-family="-apple-system,sans-serif" font-size="11" fill="#5c6370">spans · runs</text>
+
+        <!-- collector -->
+        <rect x="340" y="60" width="230" height="270" rx="16" fill="#fff" stroke="#d8dde6" stroke-width="1.5"></rect>
+        <text x="356" y="84" font-family="ui-monospace,monospace" font-weight="600" font-size="13" fill="#16181d">Collector (FastAPI)</text>
+        <text x="356" y="112" font-family="-apple-system,sans-serif" font-size="12" fill="#5c6370">ingesta · enriquecimiento</text>
+        <text x="356" y="134" font-family="-apple-system,sans-serif" font-size="12" fill="#5c6370">storage + índice DuckDB</text>
+        <text x="356" y="156" font-family="-apple-system,sans-serif" font-size="12" fill="#5c6370">audit log WORM</text>
+        <text x="356" y="178" font-family="-apple-system,sans-serif" font-size="12" fill="#5c6370">políticas (CRUD + bundle)</text>
+        <text x="356" y="200" font-family="-apple-system,sans-serif" font-size="12" fill="#5c6370">query API · auth</text>
+        <rect x="356" y="222" width="198" height="44" rx="9" fill="#f5f8ff" stroke="#cfe0fd"></rect>
+        <text x="455" y="249" text-anchor="middle" font-family="-apple-system,sans-serif" font-size="11" fill="#5c6370">blob (local/Azure) · DuckDB · WORM</text>
+
+        <!-- dashboard -->
+        <rect x="640" y="130" width="230" height="110" rx="16" fill="#fff" stroke="#d8dde6" stroke-width="1.5"></rect>
+        <text x="656" y="154" font-family="ui-monospace,monospace" font-weight="600" font-size="13" fill="#16181d">Dashboard</text>
+        <text x="656" y="178" font-family="-apple-system,sans-serif" font-size="12" fill="#5c6370">React + Vite (SPA)</text>
+        <text x="656" y="200" font-family="-apple-system,sans-serif" font-size="12" fill="#5c6370">trazas · métricas · runs</text>
+        <text x="656" y="222" font-family="-apple-system,sans-serif" font-size="12" fill="#5c6370">políticas · claves</text>
+
+        <!-- flows SDK -> collector -->
+        <path d="M270,150 L338,120" stroke="#2f6df0" stroke-width="2" fill="none" marker-end="url(#ar)"></path>
+        <text x="276" y="128" font-family="ui-monospace,monospace" font-size="10.5" fill="#5c6370">/v1/traces</text>
+        <path d="M270,210 L338,180" stroke="#2f6df0" stroke-width="2" fill="none" marker-end="url(#ar)"></path>
+        <text x="276" y="200" font-family="ui-monospace,monospace" font-size="10.5" fill="#5c6370">/v1/runs</text>
+        <path d="M338,250 L272,280" stroke="#cfd6e0" stroke-width="2" fill="none" marker-end="url(#ar)"></path>
+        <text x="286" y="272" font-family="ui-monospace,monospace" font-size="10.5" fill="#5c6370">/bundle</text>
+
+        <!-- dashboard -> collector -->
+        <path d="M640,185 L572,185" stroke="#2f6df0" stroke-width="2" fill="none" marker-end="url(#ar)"></path>
+        <text x="582" y="176" font-family="ui-monospace,monospace" font-size="10.5" fill="#5c6370">/api/v1</text>
+      </svg>
+      <figcaption>El SDK aplica políticas y redacta PII <em>en el borde</em>; solo salen del
+        proceso spans y métricas. El Dashboard nunca toca el dato crudo: pasa por la query API.</figcaption>
+    </figure>
+  </section>
+
+  <section>
+    <h2><span class="num">02</span>Contratos entre componentes</h2>
+    <table>
+      <thead><tr><th>Productor</th><th>Consumidor</th><th>Contrato</th><th>Transporte</th></tr></thead>
+      <tbody>
+        <tr><td>SDK exporter</td><td>Collector</td><td>Spans OTel</td><td class="mono">OTLP → /v1/traces</td></tr>
+        <tr><td>SDK exporter</td><td>Collector</td><td>AgentRunMetrics</td><td class="mono">JSON → /v1/runs</td></tr>
+        <tr><td>Collector</td><td>RemotePolicyClient</td><td>PolicyDocument mergeado</td><td class="mono">YAML → /policies/bundle</td></tr>
+        <tr><td>Collector</td><td>Dashboard</td><td>DTOs (OpenAPI)</td><td class="mono">JSON → /api/v1/*</td></tr>
+      </tbody>
+    </table>
+    <div class="callout note">
+      <strong>El <code>trace_id</code> cohesiona todo.</strong> El id del span raíz
+      <code>argox.agent.run</code> se graba también en <code>AgentRunMetrics.trace_id</code>,
+      así el Collector une un run con su traza.
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="num">03</span>Principios de diseño</h2>
+    <div class="grid">
+      <div class="card"><h4>Bajo overhead</h4><p>Políticas contra caché local con predicados precompilados; cero red en el hot-path (&lt; 200&nbsp;µs).</p></div>
+      <div class="card"><h4>Fail-open por defecto</h4><p>Si la infraestructura se degrada, el agente sigue. El enforcement estricto es opt-in.</p></div>
+      <div class="card"><h4>Self-hosted primero</h4><p>Todo corre en tu infraestructura. Sin SaaS, sin phone-home, sin telemetría por defecto.</p></div>
+      <div class="card"><h4>Soberanía del dato</h4><p>PII se redacta en el borde antes de salir; el audit log es append-only con integridad criptográfica.</p></div>
+    </div>
+    <div class="callout note">
+      <strong>Referencia.</strong> Detalle en
+      <a href="../overview/architecture.md">docs/overview/architecture.md</a>.
+    </div>
+  </section>
+
+</main>
+
+<footer>
+  Argox · explicador de arquitectura · grounded en
+  <span class="kbd">README.md</span> · <span class="kbd">collector/app.py</span>
+</footer>
+
+</body>
+</html>

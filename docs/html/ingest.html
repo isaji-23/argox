@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Argox — Ingesta del Collector (explicador visual)</title>
+<style>
+  :root {
+    --ink: #16181d; --muted: #5c6370; --line: #e6e8ec; --bg: #fbfbfc; --card: #ffffff;
+    --accent: #2f6df0; --accent-soft: #eaf1fe; --warn: #b25b00; --warn-soft: #fff4e5;
+    --good: #1a7f4b; --good-soft: #e9f7ef; --code-bg: #0f1320; --code-ink: #e7ecf5;
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+    font: 16px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased; }
+  header.hero { border-bottom: 1px solid var(--line);
+    background: radial-gradient(1200px 300px at 15% -40%, var(--accent-soft), transparent 60%), var(--card);
+    padding: 56px 24px 40px; }
+  .wrap { max-width: 920px; margin: 0 auto; }
+  .back { font: 600 12px var(--mono); color: var(--accent); text-decoration: none; letter-spacing: .04em; }
+  .back:hover { text-decoration: underline; }
+  .eyebrow { font: 600 12px/1 var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--accent); margin: 16px 0 14px; }
+  h1 { font-size: 2.4rem; line-height: 1.1; margin: 0 0 12px; letter-spacing: -.02em; }
+  .lede { font-size: 1.1rem; color: var(--muted); max-width: 62ch; margin: 0; }
+  main { padding: 8px 24px 80px; }
+  section { padding: 38px 0; border-bottom: 1px solid var(--line); }
+  section:last-child { border-bottom: 0; }
+  h2 { font-size: 1.5rem; letter-spacing: -.01em; margin: 0 0 6px; }
+  h2 .num { font: 600 .9rem var(--mono); color: var(--accent); margin-right: 10px; }
+  p { margin: 12px 0; }
+  a { color: var(--accent); }
+  code { font: .88em var(--mono); background: #eef0f4; padding: .12em .4em; border-radius: 5px; }
+  table { width: 100%; border-collapse: collapse; margin: 18px 0; font-size: .94rem; }
+  th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-size: .78rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+  tr td:first-child { white-space: nowrap; }
+  .mono { font-family: var(--mono); }
+  .callout { border-radius: 12px; padding: 14px 18px; margin: 18px 0; border: 1px solid; font-size: .95rem; }
+  .callout.warn { background: var(--warn-soft); border-color: #f4d8af; } .callout.warn strong { color: var(--warn); }
+  .callout.note { background: var(--accent-soft); border-color: #cfe0fd; } .callout.note strong { color: var(--accent); }
+  figure { margin: 24px 0; }
+  figcaption { font-size: .82rem; color: var(--muted); text-align: center; margin-top: 8px; }
+  .diagram { width: 100%; height: auto; background: var(--card); border: 1px solid var(--line); border-radius: 14px; }
+  footer { color: var(--muted); font-size: .85rem; padding: 32px 24px; text-align: center; }
+  .kbd { font: .82em var(--mono); border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 6px; padding: 1px 6px; background: #fff; }
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="wrap">
+    <a class="back" href="index.html">← Explicadores</a>
+    <p class="eyebrow">Argox · Collector</p>
+    <h1>Ingesta del Collector</h1>
+    <p class="lede">Dos rutas independientes entran al Collector: trazas OTLP en
+      <code>/v1/traces</code> y runs en <code>/v1/runs</code>. Esto es lo que pasa con cada
+      payload.</p>
+  </div>
+</header>
+
+<main class="wrap">
+
+  <section>
+    <h2><span class="num">01</span>Ruta A — trazas OTLP</h2>
+    <p>El SDK envía un <code>ExportTraceServiceRequest</code> (protobuf o JSON). El Collector
+      lo decodifica, lo aplana, lo enriquece y lo persiste:</p>
+    <figure>
+      <svg class="diagram" viewBox="0 0 900 220" role="img" aria-label="Pipeline de ingesta de trazas">
+        <defs>
+          <marker id="ar" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#2f6df0"></path></marker>
+        </defs>
+        <!-- steps -->
+        <rect x="20" y="40" width="150" height="60" rx="10" fill="#eaf1fe" stroke="#cfe0fd" stroke-width="1.5"></rect>
+        <text x="95" y="66" text-anchor="middle" font-family="ui-monospace,monospace" font-weight="600" font-size="12" fill="#2f6df0">decode</text>
+        <text x="95" y="84" text-anchor="middle" font-family="-apple-system,sans-serif" font-size="10.5" fill="#5c6370">otlp.py · 400 si falla</text>
+
+        <rect x="200" y="40" width="150" height="60" rx="10" fill="#fff" stroke="#d8dde6" stroke-width="1.5"></rect>
+        <text x="275" y="66" text-anchor="middle" font-family="ui-monospace,monospace" font-weight="600" font-size="12" fill="#16181d">flatten</text>
+        <text x="275" y="84" text-anchor="middle" font-family="-apple-system,sans-serif" font-size="10.5" fill="#5c6370">→ SpanRecord[]</text>
+
+        <rect x="380" y="40" width="150" height="60" rx="10" fill="#fff" stroke="#d8dde6" stroke-width="1.5"></rect>
+        <text x="455" y="66" text-anchor="middle" font-family="ui-monospace,monospace" font-weight="600" font-size="12" fill="#16181d">enrich</text>
+        <text x="455" y="84" text-anchor="middle" font-family="-apple-system,sans-serif" font-size="10.5" fill="#5c6370">normalize·cost·pii</text>
+
+        <rect x="560" y="40" width="150" height="60" rx="10" fill="#fff" stroke="#d8dde6" stroke-width="1.5"></rect>
+        <text x="635" y="66" text-anchor="middle" font-family="ui-monospace,monospace" font-weight="600" font-size="12" fill="#16181d">persist</text>
+        <text x="635" y="84" text-anchor="middle" font-family="-apple-system,sans-serif" font-size="10.5" fill="#5c6370">blob + DuckDB</text>
+
+        <path d="M170,70 L198,70" stroke="#2f6df0" stroke-width="2" fill="none" marker-end="url(#ar)"></path>
+        <path d="M350,70 L378,70" stroke="#2f6df0" stroke-width="2" fill="none" marker-end="url(#ar)"></path>
+        <path d="M530,70 L558,70" stroke="#2f6df0" stroke-width="2" fill="none" marker-end="url(#ar)"></path>
+
+        <!-- response branch -->
+        <path d="M710,70 L750,70" stroke="#5c6370" stroke-width="2" fill="none" marker-end="url(#ar)"></path>
+        <rect x="752" y="20" width="130" height="44" rx="9" fill="#e9f7ef" stroke="#bfe6cf"></rect>
+        <text x="817" y="40" text-anchor="middle" font-family="ui-monospace,monospace" font-size="11" fill="#1a7f4b">200 durable</text>
+        <text x="817" y="56" text-anchor="middle" font-family="-apple-system,sans-serif" font-size="10" fill="#5c6370">espera el blob</text>
+        <rect x="752" y="78" width="130" height="44" rx="9" fill="#eaf1fe" stroke="#cfe0fd"></rect>
+        <text x="817" y="98" text-anchor="middle" font-family="ui-monospace,monospace" font-size="11" fill="#2f6df0">202 async</text>
+        <text x="817" y="114" text-anchor="middle" font-family="-apple-system,sans-serif" font-size="10" fill="#5c6370">tarea de fondo</text>
+
+        <!-- storage targets -->
+        <rect x="540" y="150" width="150" height="44" rx="9" fill="#f5f8ff" stroke="#cfe0fd"></rect>
+        <text x="615" y="170" text-anchor="middle" font-family="ui-monospace,monospace" font-size="11" fill="#5c6370">traces/{fecha}/{uuid}.pb</text>
+        <text x="615" y="186" text-anchor="middle" font-family="-apple-system,sans-serif" font-size="10" fill="#5c6370">blob crudo</text>
+        <rect x="700" y="150" width="150" height="44" rx="9" fill="#f5f8ff" stroke="#cfe0fd"></rect>
+        <text x="775" y="170" text-anchor="middle" font-family="ui-monospace,monospace" font-size="11" fill="#5c6370">DuckDB</text>
+        <text x="775" y="186" text-anchor="middle" font-family="-apple-system,sans-serif" font-size="10" fill="#5c6370">insert_spans</text>
+        <path d="M635,100 L620,148" stroke="#cfd6e0" stroke-width="2" fill="none" marker-end="url(#ar)"></path>
+        <path d="M660,100 L760,148" stroke="#cfd6e0" stroke-width="2" fill="none" marker-end="url(#ar)"></path>
+      </svg>
+      <figcaption>Cada span se convierte en una fila <code>SpanRecord</code>. Requiere scope
+        <code>ingest</code>.</figcaption>
+    </figure>
+    <h3 style="font-size:1.06rem;margin:28px 0 8px;">Durable vs async</h3>
+    <table>
+      <thead><tr><th>Modo</th><th>Header</th><th>Respuesta</th><th>Semántica</th></tr></thead>
+      <tbody>
+        <tr><td>Async (default)</td><td>—</td><td class="mono">202 Accepted</td><td>Persistencia en tarea de fondo; respuesta inmediata.</td></tr>
+        <tr><td>Durable</td><td class="mono">X-Argox-Durable: true</td><td class="mono">200 OK</td><td>Espera a que el blob esté escrito.</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2><span class="num">02</span>Ruta B — runs</h2>
+    <p><code>POST /v1/runs</code> acepta un <code>AgentRunMetrics</code> serializado (lo que
+      produce <code>HttpRunExporter</code>). Se enriquece (coste), se indexa y se añade al
+      audit log:</p>
+    <figure>
+      <svg class="diagram" viewBox="0 0 900 150" role="img" aria-label="Pipeline de ingesta de runs">
+        <defs>
+          <marker id="ar2" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#2f6df0"></path></marker>
+        </defs>
+        <rect x="20" y="50" width="160" height="54" rx="10" fill="#eaf1fe" stroke="#cfe0fd" stroke-width="1.5"></rect>
+        <text x="100" y="74" text-anchor="middle" font-family="ui-monospace,monospace" font-size="12" fill="#2f6df0">POST /v1/runs</text>
+        <text x="100" y="92" text-anchor="middle" font-family="-apple-system,sans-serif" font-size="10.5" fill="#5c6370">AgentRunMetrics</text>
+
+        <rect x="230" y="50" width="150" height="54" rx="10" fill="#fff" stroke="#d8dde6" stroke-width="1.5"></rect>
+        <text x="305" y="74" text-anchor="middle" font-family="ui-monospace,monospace" font-size="12" fill="#16181d">enrich coste</text>
+
+        <rect x="430" y="14" width="180" height="40" rx="9" fill="#f5f8ff" stroke="#cfe0fd"></rect>
+        <text x="520" y="39" text-anchor="middle" font-family="ui-monospace,monospace" font-size="11" fill="#5c6370">runs/{fecha}/{run_id}.json</text>
+        <rect x="430" y="64" width="180" height="40" rx="9" fill="#f5f8ff" stroke="#cfe0fd"></rect>
+        <text x="520" y="89" text-anchor="middle" font-family="ui-monospace,monospace" font-size="11" fill="#5c6370">DuckDB · insert_run</text>
+        <rect x="430" y="114" width="180" height="34" rx="9" fill="#fff4e5" stroke="#f4d8af"></rect>
+        <text x="520" y="135" text-anchor="middle" font-family="ui-monospace,monospace" font-size="11" fill="#b25b00">Audit WORM (COL-14)</text>
+
+        <path d="M180,77 L228,77" stroke="#2f6df0" stroke-width="2" fill="none" marker-end="url(#ar2)"></path>
+        <path d="M380,72 L428,40" stroke="#cfd6e0" stroke-width="2" fill="none" marker-end="url(#ar2)"></path>
+        <path d="M380,80 L428,84" stroke="#cfd6e0" stroke-width="2" fill="none" marker-end="url(#ar2)"></path>
+        <path d="M380,88 L428,126" stroke="#cfd6e0" stroke-width="2" fill="none" marker-end="url(#ar2)"></path>
+      </svg>
+      <figcaption>Si el append WORM falla en una request exitosa, el reconcile de arranque lo
+        cierra después.</figcaption>
+    </figure>
+  </section>
+
+  <section>
+    <h2><span class="num">03</span>El join por <code>trace_id</code></h2>
+    <p>Las dos rutas convergen: el <code>trace_id</code> del run coincide con el de su traza,
+      así el Dashboard navega entre ambos.</p>
+    <table>
+      <thead><tr><th>Desde</th><th>Hacia</th><th>Endpoint</th></tr></thead>
+      <tbody>
+        <tr><td>Traza (waterfall)</td><td>Run asociado</td><td class="mono">/runs/by-trace/{trace_id}</td></tr>
+        <tr><td>Lista de trazas</td><td>Spans de una traza</td><td class="mono">/traces/{trace_id}</td></tr>
+      </tbody>
+    </table>
+    <div class="callout warn">
+      <strong>Límite de payload.</strong> El middleware rechaza con <code>413</code> cualquier
+      cuerpo que supere <code>ARGOX_MAX_PAYLOAD_SIZE</code> (10&nbsp;MiB) antes de bufferizarlo.
+    </div>
+    <div class="callout note">
+      <strong>Referencia.</strong> Detalle en
+      <a href="../collector/ingest.md">docs/collector/ingest.md</a>.
+    </div>
+  </section>
+
+</main>
+
+<footer>
+  Argox · explicador de ingesta · grounded en
+  <span class="kbd">routers/traces.py</span> · <span class="kbd">routers/runs.py</span> ·
+  <span class="kbd">ingest/otlp.py</span>
+</footer>
+
+</body>
+</html>

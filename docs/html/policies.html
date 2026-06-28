@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Argox — Sistema de políticas (explicador visual)</title>
+<style>
+  :root {
+    --ink: #16181d; --muted: #5c6370; --line: #e6e8ec; --bg: #fbfbfc; --card: #ffffff;
+    --accent: #2f6df0; --accent-soft: #eaf1fe; --warn: #b25b00; --warn-soft: #fff4e5;
+    --good: #1a7f4b; --good-soft: #e9f7ef; --code-bg: #0f1320; --code-ink: #e7ecf5;
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+    font: 16px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased; }
+  header.hero { border-bottom: 1px solid var(--line);
+    background: radial-gradient(1200px 300px at 15% -40%, var(--accent-soft), transparent 60%), var(--card);
+    padding: 56px 24px 40px; }
+  .wrap { max-width: 920px; margin: 0 auto; }
+  .back { font: 600 12px var(--mono); color: var(--accent); text-decoration: none; letter-spacing: .04em; }
+  .back:hover { text-decoration: underline; }
+  .eyebrow { font: 600 12px/1 var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--accent); margin: 16px 0 14px; }
+  h1 { font-size: 2.4rem; line-height: 1.1; margin: 0 0 12px; letter-spacing: -.02em; }
+  .lede { font-size: 1.1rem; color: var(--muted); max-width: 62ch; margin: 0; }
+  nav.toc { position: sticky; top: 0; z-index: 5; background: rgba(251,251,252,.86);
+    backdrop-filter: blur(8px); border-bottom: 1px solid var(--line); padding: 12px 24px; }
+  nav.toc ul { list-style: none; display: flex; flex-wrap: wrap; gap: 6px 18px; margin: 0 auto; max-width: 920px; padding: 0; }
+  nav.toc a { color: var(--muted); text-decoration: none; font-size: .9rem; font-weight: 500; }
+  nav.toc a:hover { color: var(--accent); }
+  main { padding: 8px 24px 80px; }
+  section { padding: 38px 0; border-bottom: 1px solid var(--line); }
+  section:last-child { border-bottom: 0; }
+  h2 { font-size: 1.5rem; letter-spacing: -.01em; margin: 0 0 6px; }
+  h2 .num { font: 600 .9rem var(--mono); color: var(--accent); margin-right: 10px; }
+  h3 { font-size: 1.06rem; margin: 28px 0 8px; }
+  p { margin: 12px 0; }
+  a { color: var(--accent); }
+  code { font: .88em var(--mono); background: #eef0f4; padding: .12em .4em; border-radius: 5px; }
+  pre { background: var(--code-bg); color: var(--code-ink); border-radius: 12px; padding: 18px 20px;
+    overflow-x: auto; font: .86rem/1.6 var(--mono); margin: 16px 0; }
+  pre code { background: none; padding: 0; color: inherit; }
+  .tok { color: #8aa0c6; } .key { color: #c7a4ff; } .str { color: #7ee0a8; }
+  table { width: 100%; border-collapse: collapse; margin: 18px 0; font-size: .94rem; }
+  th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-size: .78rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+  tr td:first-child { white-space: nowrap; }
+  .mono { font-family: var(--mono); }
+  .callout { border-radius: 12px; padding: 14px 18px; margin: 18px 0; border: 1px solid; font-size: .95rem; }
+  .callout.warn { background: var(--warn-soft); border-color: #f4d8af; } .callout.warn strong { color: var(--warn); }
+  .callout.note { background: var(--accent-soft); border-color: #cfe0fd; } .callout.note strong { color: var(--accent); }
+  .callout.good { background: var(--good-soft); border-color: #bfe6cf; } .callout.good strong { color: var(--good); }
+  figure { margin: 24px 0; }
+  figcaption { font-size: .82rem; color: var(--muted); text-align: center; margin-top: 8px; }
+  .diagram { width: 100%; height: auto; background: var(--card); border: 1px solid var(--line); border-radius: 14px; }
+  .legend { display: flex; flex-wrap: wrap; gap: 14px; font-size: .82rem; color: var(--muted); margin: 10px 0 0; justify-content: center; }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .sw { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+  .pill { display: inline-block; font: 600 .72rem var(--mono); padding: 2px 9px; border-radius: 999px; }
+  .pill.block { background: var(--warn-soft); color: var(--warn); }
+  .pill.alert { background: #fff7d6; color: #8a6d00; }
+  .pill.ok { background: var(--good-soft); color: var(--good); }
+  footer { color: var(--muted); font-size: .85rem; padding: 32px 24px; text-align: center; }
+  .kbd { font: .82em var(--mono); border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 6px; padding: 1px 6px; background: #fff; }
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="wrap">
+    <a class="back" href="index.html">← Explicadores</a>
+    <p class="eyebrow">Argox · Gobernanza</p>
+    <h1>Sistema de políticas</h1>
+    <p class="lede">El motor que decide qué entradas, herramientas y salidas se permiten.
+      Reglas en YAML, evaluadas dentro del proceso del agente, sin red en el hot-path.</p>
+  </div>
+</header>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#anatomia">Anatomía</a></li>
+    <li><a href="#triggers">Triggers</a></li>
+    <li><a href="#operadores">Operadores</a></li>
+    <li><a href="#acciones">Acciones</a></li>
+    <li><a href="#precedencia">Precedencia</a></li>
+    <li><a href="#enforcement">Enforcement</a></li>
+    <li><a href="#clientes">Local vs Remote</a></li>
+    <li><a href="#ejemplo">Ejemplo</a></li>
+  </ul>
+</nav>
+
+<main class="wrap">
+
+  <section id="anatomia">
+    <h2><span class="num">01</span>Anatomía de una política</h2>
+    <p>Una <strong>política</strong> es un documento YAML con un id, una versión y una lista
+      de <strong>reglas</strong>. Cada regla tiene un <strong>trigger</strong> (cuándo se
+      evalúa), una <strong>condición</strong> (qué comprueba) y una <strong>acción</strong>
+      (qué hacer si se cumple).</p>
+    <figure>
+      <svg class="diagram" viewBox="0 0 900 300" role="img" aria-label="Anatomía: política contiene reglas, cada regla contiene una condición">
+        <!-- PolicyDocument -->
+        <rect x="20" y="20" width="860" height="260" rx="16" fill="#f5f8ff" stroke="#cfe0fd" stroke-width="1.5"></rect>
+        <text x="40" y="48" font="600 14px ui-monospace,monospace" fill="#2f6df0" font-family="ui-monospace,monospace" font-weight="600" font-size="14">PolicyDocument</text>
+        <text x="40" y="68" font-family="ui-monospace,monospace" font-size="11" fill="#5c6370">id · version · status · created_by · updated_at · rules[]  (máx. 1000)</text>
+
+        <!-- Rule -->
+        <rect x="40" y="86" width="820" height="174" rx="13" fill="#fff" stroke="#d8dde6" stroke-width="1.5"></rect>
+        <text x="60" y="112" font-family="ui-monospace,monospace" font-weight="600" font-size="14" fill="#16181d">PolicyRule</text>
+        <text x="60" y="132" font-family="ui-monospace,monospace" font-size="11" fill="#5c6370">id · trigger · action · enforcement="strict"</text>
+
+        <!-- Condition -->
+        <rect x="60" y="150" width="380" height="92" rx="11" fill="#eaf1fe" stroke="#cfe0fd" stroke-width="1.5"></rect>
+        <text x="80" y="176" font-family="ui-monospace,monospace" font-weight="600" font-size="13" fill="#2f6df0">RuleCondition</text>
+        <text x="80" y="200" font-family="ui-monospace,monospace" font-size="12" fill="#16181d">metric &#160;&#160;→ qué leer (dot-notation)</text>
+        <text x="80" y="218" font-family="ui-monospace,monospace" font-size="12" fill="#16181d">operator → cómo comparar</text>
+        <text x="80" y="236" font-family="ui-monospace,monospace" font-size="12" fill="#16181d">threshold → con qué valor</text>
+
+        <!-- action box -->
+        <rect x="460" y="150" width="380" height="92" rx="11" fill="#fff" stroke="#d8dde6" stroke-width="1.5"></rect>
+        <text x="480" y="176" font-family="ui-monospace,monospace" font-weight="600" font-size="13" fill="#16181d">action</text>
+        <text x="480" y="200" font-family="-apple-system,sans-serif" font-size="12" fill="#b25b00">● block — detiene / quita la tool</text>
+        <text x="480" y="218" font-family="-apple-system,sans-serif" font-size="12" fill="#8a6d00">● alert — registra, sigue</text>
+        <text x="480" y="236" font-family="-apple-system,sans-serif" font-size="12" fill="#1a7f4b">● ok &#160;&#160;— no-op</text>
+      </svg>
+      <figcaption>Documento → reglas → condición + acción. El esquema lo valida Pydantic
+        (<code>policies/parser.py</code>) y se rechaza cualquier valor fuera de lo permitido.</figcaption>
+    </figure>
+  </section>
+
+  <section id="triggers">
+    <h2><span class="num">02</span>Tres triggers, una métrica cada uno</h2>
+    <p>El trigger marca <em>en qué momento</em> del run se evalúa la regla, y cada uno expone
+      exactamente <strong>una</strong> métrica string:</p>
+    <table>
+      <thead><tr><th>Trigger</th><th>Momento</th><th>Métrica</th><th>Método del cliente</th></tr></thead>
+      <tbody>
+        <tr><td class="mono">on_input</td><td>Antes de enviar el prompt al LLM</td><td class="mono">prompt</td><td class="mono">check_input()</td></tr>
+        <tr><td class="mono">on_tool_call</td><td>Antes de exponer cada tool</td><td class="mono">tool_name</td><td class="mono">is_tool_allowed()</td></tr>
+        <tr><td class="mono">on_output</td><td>Tras recibir la respuesta del LLM</td><td class="mono">output</td><td class="mono">check_output()</td></tr>
+      </tbody>
+    </table>
+    <div class="callout warn">
+      <strong>Cuidado con tipos.</strong> En la v1 las tres métricas son <em>strings</em>. Un
+      <code>threshold</code> numérico con <code>gt</code>/<code>lt</code> sobre
+      <code>prompt</code>/<code>output</code>/<code>tool_name</code> no disparará. Los
+      operadores numéricos existen para métricas futuras.
+    </div>
+  </section>
+
+  <section id="operadores">
+    <h2><span class="num">03</span>Ocho operadores</h2>
+    <p>Con <code>a</code> = valor de la métrica y <code>b</code> = <code>threshold</code>
+      (implementación exacta de <code>operator_funcs</code> en <code>parser.py</code>):</p>
+    <table>
+      <thead><tr><th>Operador</th><th>Semántica</th><th>Implementación</th></tr></thead>
+      <tbody>
+        <tr><td class="mono">eq</td><td>Igualdad</td><td class="mono">a == b</td></tr>
+        <tr><td class="mono">neq</td><td>Desigualdad</td><td class="mono">a != b</td></tr>
+        <tr><td class="mono">gt</td><td>Mayor que</td><td class="mono">a &gt; b</td></tr>
+        <tr><td class="mono">gte</td><td>Mayor o igual</td><td class="mono">a &gt;= b</td></tr>
+        <tr><td class="mono">lt</td><td>Menor que</td><td class="mono">a &lt; b</td></tr>
+        <tr><td class="mono">lte</td><td>Menor o igual</td><td class="mono">a &lt;= b</td></tr>
+        <tr><td class="mono">contains</td><td>Contención</td><td class="mono">b in a (si a es list/str/dict)</td></tr>
+        <tr><td class="mono">in</td><td>Pertenencia</td><td class="mono">a in b (si b es list/set/tuple)</td></tr>
+      </tbody>
+    </table>
+    <div class="callout note">
+      <strong>Métrica ausente → False.</strong> Si la métrica no está en el diccionario, el
+      predicado devuelve <code>False</code> (la regla no dispara). Es <em>fail-open</em> a
+      nivel de métrica ausente.
+    </div>
+  </section>
+
+  <section id="acciones">
+    <h2><span class="num">04</span>Tres acciones</h2>
+    <div class="legend" style="justify-content:flex-start; margin-bottom:8px;">
+      <span><span class="pill block">block</span> detiene la ejecución o quita la tool</span>
+      <span><span class="pill alert">alert</span> continúa pero queda registrado</span>
+      <span><span class="pill ok">ok</span> no-op, se ignora</span>
+    </div>
+    <p>Toda evaluación devuelve un <code>PolicyResult</code> inmutable
+      (<code>passed</code>, <code>reason</code>, <code>rule_id</code>). Solo
+      <code>block</code> tiene <code>passed=False</code>; un <code>alert</code> pasa pero
+      lleva <code>rule_id</code>, por eso se distingue de un <code>ok</code> puro.</p>
+  </section>
+
+  <section id="precedencia">
+    <h2><span class="num">05</span>Precedencia: block &gt; alert &gt; ok</h2>
+    <p><code>PolicyCache.evaluate()</code> recorre las reglas del trigger en orden y aplica:</p>
+    <figure>
+      <svg class="diagram" viewBox="0 0 900 250" role="img" aria-label="Diagrama de precedencia de evaluación">
+        <defs>
+          <marker id="ar" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#5c6370"></path></marker>
+        </defs>
+        <rect x="20" y="100" width="150" height="50" rx="10" fill="#fff" stroke="#d8dde6" stroke-width="1.5"></rect>
+        <text x="95" y="130" text-anchor="middle" font-family="ui-monospace,monospace" font-size="12" fill="#16181d">para cada regla</text>
+
+        <path d="M170,125 L230,125" stroke="#5c6370" stroke-width="2" fill="none" marker-end="url(#ar)"></path>
+
+        <rect x="232" y="95" width="160" height="60" rx="10" fill="#fff" stroke="#d8dde6" stroke-width="1.5"></rect>
+        <text x="312" y="120" text-anchor="middle" font-family="ui-monospace,monospace" font-size="12" fill="#16181d">¿predicado true?</text>
+        <text x="312" y="140" text-anchor="middle" font-family="-apple-system,sans-serif" font-size="11" fill="#5c6370">si no → siguiente regla</text>
+
+        <!-- block path -->
+        <path d="M392,110 L470,55" stroke="#b25b00" stroke-width="2" fill="none" marker-end="url(#ar)"></path>
+        <rect x="472" y="28" width="200" height="54" rx="10" fill="#fff4e5" stroke="#f4d8af" stroke-width="1.5"></rect>
+        <text x="572" y="50" text-anchor="middle" font-family="ui-monospace,monospace" font-weight="600" font-size="12" fill="#b25b00">action = block</text>
+        <text x="572" y="70" text-anchor="middle" font-family="-apple-system,sans-serif" font-size="11" fill="#b25b00">return inmediato (corta)</text>
+
+        <!-- alert path -->
+        <path d="M392,128 L470,128" stroke="#8a6d00" stroke-width="2" fill="none" marker-end="url(#ar)"></path>
+        <rect x="472" y="100" width="200" height="54" rx="10" fill="#fff7d6" stroke="#ecd98a" stroke-width="1.5"></rect>
+        <text x="572" y="122" text-anchor="middle" font-family="ui-monospace,monospace" font-weight="600" font-size="12" fill="#8a6d00">action = alert</text>
+        <text x="572" y="142" text-anchor="middle" font-family="-apple-system,sans-serif" font-size="11" fill="#8a6d00">guarda el primero, sigue</text>
+
+        <!-- end -->
+        <path d="M672,55 L760,55 L760,128 L674,128" stroke="#5c6370" stroke-width="2" fill="none" marker-end="url(#ar)" stroke-dasharray="4 3"></path>
+        <path d="M672,127 L740,180" stroke="#5c6370" stroke-width="2" fill="none" marker-end="url(#ar)"></path>
+        <rect x="700" y="188" width="180" height="48" rx="10" fill="#e9f7ef" stroke="#bfe6cf" stroke-width="1.5"></rect>
+        <text x="790" y="210" text-anchor="middle" font-family="ui-monospace,monospace" font-size="12" fill="#1a7f4b">fin sin block</text>
+        <text x="790" y="228" text-anchor="middle" font-family="-apple-system,sans-serif" font-size="11" fill="#1a7f4b">1er alert, o ok()</text>
+      </svg>
+      <figcaption>Un <code>block</code> corta la evaluación de inmediato. Si no hay block, gana
+        el <strong>primer</strong> alert. Si nada dispara, <code>ok()</code>.</figcaption>
+    </figure>
+  </section>
+
+  <section id="enforcement">
+    <h2><span class="num">06</span>Tres puntos de enforcement en el run</h2>
+    <p>Las políticas se evalúan en tres checkpoints de <code>ArgoxManager.run()</code>. Esto
+      es lo que pasa en cada decisión:</p>
+    <figure>
+      <svg class="diagram" viewBox="0 0 900 340" role="img" aria-label="Tres checkpoints de enforcement">
+        <defs>
+          <marker id="ar2" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#2f6df0"></path></marker>
+        </defs>
+        <!-- lane -->
+        <line x1="120" y1="40" x2="120" y2="300" stroke="#e6e8ec" stroke-width="2"></line>
+
+        <!-- input -->
+        <circle cx="120" cy="70" r="7" fill="#2f6df0"></circle>
+        <text x="100" y="46" text-anchor="end" font-family="ui-monospace,monospace" font-weight="600" font-size="13" fill="#16181d">check_input</text>
+        <text x="100" y="64" text-anchor="end" font-family="ui-monospace,monospace" font-size="11" fill="#5c6370">metric = prompt</text>
+        <rect x="150" y="48" width="260" height="46" rx="9" fill="#fff4e5" stroke="#f4d8af"></rect>
+        <text x="164" y="66" font-family="-apple-system,sans-serif" font-size="11.5" fill="#b25b00"><tspan font-weight="700">block →</tspan> raise PermissionError</text>
+        <text x="164" y="84" font-family="-apple-system,sans-serif" font-size="11.5" fill="#5c6370">alert → registra · ok → sigue</text>
+
+        <!-- tool filter -->
+        <circle cx="120" cy="160" r="7" fill="#2f6df0"></circle>
+        <text x="100" y="150" text-anchor="end" font-family="ui-monospace,monospace" font-weight="600" font-size="13" fill="#16181d">is_tool_allowed</text>
+        <text x="100" y="168" text-anchor="end" font-family="ui-monospace,monospace" font-size="11" fill="#5c6370">metric = tool_name</text>
+        <rect x="150" y="132" width="320" height="64" rx="9" fill="#fff4e5" stroke="#f4d8af"></rect>
+        <text x="164" y="152" font-family="-apple-system,sans-serif" font-size="11.5" fill="#b25b00"><tspan font-weight="700">block →</tspan> quita la tool de agent.tools</text>
+        <text x="164" y="170" font-family="-apple-system,sans-serif" font-size="11.5" fill="#5c6370">+ span hijo execute_tool (decision=block)</text>
+        <text x="164" y="188" font-family="-apple-system,sans-serif" font-size="11.5" fill="#5c6370">alert → tool disponible + flag</text>
+
+        <!-- exec -->
+        <circle cx="120" cy="240" r="7" fill="#cfd6e0"></circle>
+        <text x="100" y="244" text-anchor="end" font-family="ui-monospace,monospace" font-size="12" fill="#5c6370">ejecución del agente</text>
+
+        <!-- output -->
+        <circle cx="120" cy="290" r="7" fill="#2f6df0"></circle>
+        <text x="100" y="286" text-anchor="end" font-family="ui-monospace,monospace" font-weight="600" font-size="13" fill="#16181d">check_output</text>
+        <text x="100" y="304" text-anchor="end" font-family="ui-monospace,monospace" font-size="11" fill="#5c6370">metric = output</text>
+        <rect x="150" y="268" width="260" height="46" rx="9" fill="#fff4e5" stroke="#f4d8af"></rect>
+        <text x="164" y="286" font-family="-apple-system,sans-serif" font-size="11.5" fill="#b25b00"><tspan font-weight="700">block →</tspan> raise PermissionError</text>
+        <text x="164" y="304" font-family="-apple-system,sans-serif" font-size="11.5" fill="#5c6370">alert → registra · ok → devuelve</text>
+      </svg>
+      <figcaption>Todo queda registrado en <code>AgentRunMetrics</code>
+        (<code>policy_violations</code>, <code>tools_blocked</code>) y en el atributo OTel
+        <code>argox.policy.decision</code>.</figcaption>
+    </figure>
+  </section>
+
+  <section id="clientes">
+    <h2><span class="num">07</span>Cliente Local vs Remote</h2>
+    <p>Ambos delegan la evaluación en el mismo <code>PolicyCache</code> síncrono. Difieren en
+      de dónde sacan las políticas y en su resiliencia:</p>
+    <table>
+      <thead><tr><th>Aspecto</th><th>LocalPolicyClient</th><th>RemotePolicyClient</th></tr></thead>
+      <tbody>
+        <tr><td>Fuente</td><td>Archivo YAML de disco</td><td>Endpoint <span class="mono">/policies/bundle</span> del Collector</td></tr>
+        <tr><td>Carga</td><td>Una vez en <span class="mono">__init__</span></td><td>Polling en background (~60&nbsp;s)</td></tr>
+        <tr><td>Hot-path</td><td colspan="2" style="text-align:center"><span class="mono">cache.evaluate(...)</span> — cero red en ambos</td></tr>
+        <tr><td>Error de evaluación</td><td>Fail-closed → <span class="pill block">block</span></td><td>Fail-closed → <span class="pill block">block</span></td></tr>
+        <tr><td>Error de red/parseo</td><td>n/a</td><td>Fail-open → retiene última política</td></tr>
+        <tr><td>Uso típico</td><td>Desarrollo / tests</td><td>Producción</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section id="ejemplo">
+    <h2><span class="num">08</span>Ejemplo comentado</h2>
+    <pre><span class="key">id</span>: guardrails
+<span class="key">version</span>: 1
+<span class="key">status</span>: active
+<span class="key">rules</span>:
+  <span class="tok"># input: bloquea intento de SQL injection</span>
+  - <span class="key">id</span>: GR-IN-01
+    <span class="key">trigger</span>: on_input
+    <span class="key">condition</span>: { metric: prompt, operator: contains, threshold: <span class="str">"drop table"</span> }
+    <span class="key">action</span>: block
+  <span class="tok"># input: menciona credenciales → solo alerta</span>
+  - <span class="key">id</span>: GR-IN-02
+    <span class="key">trigger</span>: on_input
+    <span class="key">condition</span>: { metric: prompt, operator: contains, threshold: password }
+    <span class="key">action</span>: alert
+  <span class="tok"># tool: acceso a secretos → quita la tool</span>
+  - <span class="key">id</span>: GR-TOOL-01
+    <span class="key">trigger</span>: on_tool_call
+    <span class="key">condition</span>: { metric: tool_name, operator: eq, threshold: get_secret }
+    <span class="key">action</span>: block
+  <span class="tok"># output: stack trace filtrado → block</span>
+  - <span class="key">id</span>: GR-OUT-01
+    <span class="key">trigger</span>: on_output
+    <span class="key">condition</span>: { metric: output, operator: contains, threshold: STACK_TRACE }
+    <span class="key">action</span>: block</pre>
+    <div class="callout good">
+      <strong>Referencia completa.</strong> El detalle exhaustivo (campos, ciclo de vida,
+      versionado CAS, guía de uso) está en <a href="../policies/README.md">docs/policies/</a>.
+    </div>
+  </section>
+
+</main>
+
+<footer>
+  Argox · explicador del sistema de políticas · grounded en
+  <span class="kbd">policies/parser.py</span> · <span class="kbd">cache.py</span> ·
+  <span class="kbd">manager.py</span>
+</footer>
+
+</body>
+</html>
