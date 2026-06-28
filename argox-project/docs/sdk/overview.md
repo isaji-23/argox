@@ -112,13 +112,19 @@ overhead percentage is `(total_ms - phase_timings["agent_exec"]) / total_ms * 10
   no manual attribute setting in the runner is needed. `ArgoxOpenAIPlugin` also
   tags the same span with `gen_ai.request.model` from `Agent.model` (PLUGIN-05),
   which the Collector's cost enricher needs to compute `run_cost`; if the agent
-  has no resolvable model the attribute is left unset.
+  has no resolvable model the attribute is left unset. The same model is mirrored
+  onto `AgentRunMetrics.model` (CORE-10), so `HttpRunExporter` ships it on the
+  `/v1/runs` record and the Collector backfills the run's `cost_usd` from it.
 - **Fail-open by default.** Processors registered with `strict=False` log
   errors as span events and pass the value through unchanged. `strict=True`
   aborts the run. `asyncio.CancelledError` always propagates.
 - **Tools filtered before start.** Blocked tools are removed from the per-run
   agent copy in preflight — the agent literally cannot call them during that run,
-  and the caller's shared instance is left untouched (ADR-0010).
+  and the caller's shared instance is left untouched (ADR-0010). Each blocked
+  tool also emits a zero-duration `execute_tool {name}` child span carrying
+  `argox.policy.decision=block` (CORE-10), so the block is queryable per tool —
+  the trace waterfall and the Collector's `top_blocked_tools` metric both read it
+  from spans, which a stripped (never-invoked) tool would otherwise not produce.
 - **Instrumentation never touches the shared agent.** Each run instruments its
   own shallow copy of the agent, so the same `Agent` object can be driven by
   concurrent runs without their tool wrappers or per-run `hooks`/`metrics` racing

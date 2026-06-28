@@ -21,6 +21,7 @@ from argox.interfaces.plugin import ArgoxPlugin
 from argox.interfaces.policy import PolicyClient, PolicyResult
 from argox.semconv.attributes import (
     ARGOX_AGENT_NAME,
+    ARGOX_POLICY_DECISION,
     ARGOX_RUN_SUCCESS,
     SPAN_AGENT_RUN,
 )
@@ -119,6 +120,22 @@ class _BlockOutputPolicy(PolicyClient):
         return PolicyResult.block(reason="output blocked", rule_id="R2")
 
 
+class _BlockToolPolicy(PolicyClient):
+    def __init__(self, blocked_tool: str) -> None:
+        self._blocked = blocked_tool
+
+    async def check_input(self, text: str) -> PolicyResult:
+        return PolicyResult.ok()
+
+    async def is_tool_allowed(self, tool_name: str) -> PolicyResult:
+        if tool_name == self._blocked:
+            return PolicyResult.block(reason="tool blocked", rule_id="R3")
+        return PolicyResult.ok()
+
+    async def check_output(self, text: str) -> PolicyResult:
+        return PolicyResult.ok()
+
+
 class _CapturingExporter(ExporterBase):
     def __init__(self) -> None:
         self.exports: list[AgentRunMetrics] = []
@@ -193,3 +210,32 @@ async def test_run_metrics_trace_id_matches_span(span_exporter: InMemorySpanExpo
     # 32-char lowercase hex, matching the OTLP span id format the Collector stores.
     assert len(metrics.trace_id) == 32
     assert metrics.trace_id == metrics.trace_id.lower()
+
+
+@pytest.mark.asyncio
+async def test_blocked_tool_emits_child_span_with_block_decision(
+    span_exporter: InMemorySpanExporter,
+):
+    """A policy-blocked tool emits its own child span carrying
+    argox.policy.decision=block. The tool is stripped before the run, so without
+    this span the block is invisible in the trace waterfall and the blocked-tool
+    metrics (the Collector indexes policy decisions only from spans)."""
+    mgr = _make_manager(policy=_BlockToolPolicy("dangerous"))
+
+    await mgr.run(
+        _FakeAgent(), "hello", "fake", _fake_runner,
+        tools=["safe", "dangerous"],
+    )
+
+    blocked = [
+        s
+        for s in span_exporter.get_finished_spans()
+        if s.attributes.get(ARGOX_POLICY_DECISION) == "block"
+        and s.name != SPAN_AGENT_RUN
+    ]
+    assert len(blocked) == 1
+    span = blocked[0]
+    assert span.name == "execute_tool dangerous"
+    assert span.attributes["gen_ai.tool.name"] == "dangerous"
+    # A non-blocked tool must not emit a block span.
+    assert all("safe" not in s.name for s in blocked)

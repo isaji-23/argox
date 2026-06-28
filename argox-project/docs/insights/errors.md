@@ -8,6 +8,29 @@ and resolves a non-trivial error.
 
 <!-- Add new entries directly below this line, newest first. -->
 
+## 2026-06-28 — Trace detail shows no Model/Cost and misses blocked tools  [CORE-10]
+- **Symptom:** after the dashboard was replaced with the redesigned SPA
+  (`fb96ba7`), trace detail showed Model and Cost as "—" and counted zero policy
+  blocks for tool blocks, even though the same data appeared before.
+- **Root cause:** the new SPA reads `run.model` / `run.cost_usd` from the run
+  record and derives blocks from `spans.policy_decision = 'block'`. Two SDK gaps
+  the old UI had papered over: (1) `AgentRunMetrics` never carried a `model`
+  field, so the `/v1/runs` payload had `model = null` and `enrich_run_cost` left
+  `cost_usd` NULL; the model only ever lived on the span as
+  `gen_ai.request.model`. (2) A policy-blocked tool is stripped before the run,
+  so it never emits an `execute_tool` span; the block was recorded only as a
+  metric counter and the root span's `argox.run.blocked_tools` attribute, neither
+  of which the span-based UI/metrics read.
+- **Fix:** add `model` to `AgentRunMetrics` + `to_dict`, mirror it from the
+  plugin (`metrics.model = model`) so the run record carries it and cost
+  backfills. Emit a zero-duration `execute_tool {name}` child span with
+  `argox.policy.decision=block` for each blocked tool, so both the trace
+  waterfall and `top_blocked_tools` (`spans WHERE policy_decision='block'`)
+  surface it.
+- **Guard:** `test_run_root_attributes.py` asserts the blocked-tool span +
+  decision attribute; `test_core_data_model.py` and `test_plugin_openai.py`
+  assert `model` flows into `to_dict` and `metrics.model`.
+
 ## 2026-06-25 — Dashboard Policies screen 401 under Collector auth  [DASH-07]
 - **Symptom:** `GET /api/v1/policies` returned `401 ()` in the deployed
   dashboard while traces/runs/metrics loaded fine with the same key. Worked only
