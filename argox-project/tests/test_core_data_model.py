@@ -115,6 +115,7 @@ class TestAgentRunMetrics:
             agent_name="bot",
             run_id="abc-123",
             agent_version="1.0.0",
+            model="gpt-4o-mini",
             prompt="hello",
             timestamp="2026-01-01T00:00:00+00:00",
         )
@@ -133,6 +134,7 @@ class TestAgentRunMetrics:
         assert d["run_id"] == "abc-123"
         assert d["agent_name"] == "bot"
         assert d["agent_version"] == "1.0.0"
+        assert d["model"] == "gpt-4o-mini"
         assert d["prompt"] == "hello"
         assert d["final_output"] == "world"
         assert d["success"] is True

@@ -139,6 +139,9 @@ class ArgoxOpenAIPlugin(ArgoxPlugin):
         model = _resolve_request_model(getattr(target, "model", None))
         if model:
             trace.get_current_span().set_attribute(_GEN_AI_REQUEST_MODEL, model)
+            # Mirror onto the run metrics so HttpRunExporter ships it to /v1/runs;
+            # the Collector keys it against the price table to backfill cost_usd.
+            metrics.model = model
 
         if not hasattr(target, "tools"):
             return target

@@ -41,6 +41,11 @@ from argox.semconv.attributes import (
 
 _GEN_AI_INPUT_TOKENS = "gen_ai.usage.input_tokens"
 _GEN_AI_OUTPUT_TOKENS = "gen_ai.usage.output_tokens"
+# GenAI tool-span conventions, mirrored from argox-plugin-openai so a blocked
+# tool's span matches the shape of a real execute_tool span.
+_GEN_AI_OPERATION_NAME = "gen_ai.operation.name"
+_GEN_AI_TOOL_NAME = "gen_ai.tool.name"
+_OPERATION_EXECUTE_TOOL = "execute_tool"
 
 
 class ArgoxManager:
@@ -234,6 +239,17 @@ class ArgoxManager:
                             else:
                                 metrics.tools_blocked.append({"name": tool_name, "reason": tool_result.reason})
                                 record_policy_decision(decision="block", rule_id=tool_result.rule_id)
+                                # Emit a child span for the blocked tool so the
+                                # decision is queryable per tool (the Collector
+                                # only indexes policy decisions from spans). A
+                                # stripped tool never produces an execute_tool
+                                # span otherwise, so the block would be invisible
+                                # in the trace waterfall and the blocked-tool
+                                # metrics.
+                                _record_blocked_tool_span(
+                                    tracer, tool_name, tool_result.rule_id,
+                                    tool_result.reason,
+                                )
                     if metrics.tools_blocked:
                         span.set_attribute(
                             ARGOX_RUN_BLOCKED_TOOLS,
@@ -461,6 +477,27 @@ def _record_policy_block(span: Span, rule_id: str, message: str) -> None:
     if rule_id:
         span.set_attribute(ARGOX_POLICY_RULE_ID, rule_id)
     span.set_status(Status(StatusCode.ERROR, message))
+
+
+def _record_blocked_tool_span(
+    tracer: trace.Tracer, tool_name: str, rule_id: str, reason: str,
+) -> None:
+    """Emit a zero-duration child span recording a policy-blocked tool.
+
+    A blocked tool is stripped before the run, so it never produces an
+    ``execute_tool`` span of its own. Emitting one here — named like the tool's
+    real span and carrying ``argox.policy.decision=block`` — lets the Collector
+    index the decision per tool, so the trace waterfall and the blocked-tool
+    metrics surface it. Created under the active ``argox.agent.run`` span, so it
+    nests as a child of the run.
+    """
+    with tracer.start_as_current_span(f"{_OPERATION_EXECUTE_TOOL} {tool_name}") as span:
+        span.set_attribute(_GEN_AI_OPERATION_NAME, _OPERATION_EXECUTE_TOOL)
+        span.set_attribute(_GEN_AI_TOOL_NAME, tool_name)
+        span.set_attribute(ARGOX_POLICY_DECISION, "block")
+        if rule_id:
+            span.set_attribute(ARGOX_POLICY_RULE_ID, rule_id)
+        span.set_status(Status(StatusCode.ERROR, f"tool blocked by policy: {reason}"))
 
 
 def _extract_tool_names(agent: Any) -> list[str]:
