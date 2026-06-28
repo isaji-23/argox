@@ -57,9 +57,23 @@
   .callout.note strong { color: var(--accent); }
   footer { color: var(--muted); font-size: .85rem; padding: 32px 24px; text-align: center; border-top: 1px solid var(--line); }
   .kbd { font: .82em var(--mono); border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 6px; padding: 1px 6px; background: #fff; }
+  /* dark mode toggle */
+  .theme-toggle { position: fixed; top: 14px; right: 16px; z-index: 20; font: 600 12px var(--mono); color: var(--accent); background: var(--card); border: 1px solid var(--line); border-radius: 999px; padding: 7px 13px; cursor: pointer; box-shadow: 0 2px 8px rgba(0,0,0,.06); }
+  .theme-toggle:hover { border-color: var(--accent); }
+  :root[data-theme="dark"] { --ink:#e7ecf5; --muted:#9aa4b2; --line:#2a2f3a; --bg:#0e1119; --card:#161b27; --accent:#6ea0ff; --accent-soft:#1b2740; --warn:#e0a458; --warn-soft:#2c2316; --good:#5cd29a; --good-soft:#13241c; --code-bg:#0a0d16; --code-ink:#e7ecf5; }
+  [data-theme="dark"] code { background:#222a3a; color:#cdd6e8; }
+  [data-theme="dark"] pre code { background:none; }
+  [data-theme="dark"] nav.toc { background: rgba(14,17,25,.86); }
+  [data-theme="dark"] .diagram { background:#f5f7fb; }
+  [data-theme="dark"] .theme-toggle { box-shadow: 0 2px 8px rgba(0,0,0,.5); }
 </style>
+<script>
+(function(){var K='argox-theme',r=document.documentElement;var s=localStorage.getItem(K);var t=s||((window.matchMedia&&matchMedia('(prefers-color-scheme:dark)').matches)?'dark':'light');r.setAttribute('data-theme',t);function lbl(){var b=document.getElementById('themeToggle');if(b)b.textContent=r.getAttribute('data-theme')==='dark'?'☀ Claro':'☾ Oscuro';}window.__argoxTheme=function(){var n=r.getAttribute('data-theme')==='dark'?'light':'dark';r.setAttribute('data-theme',n);localStorage.setItem(K,n);lbl();};document.addEventListener('DOMContentLoaded',lbl);})();
+</script>
 </head>
 <body>
+
+<button id="themeToggle" class="theme-toggle" type="button" onclick="__argoxTheme()" aria-label="Cambiar modo claro/oscuro">☾ Oscuro</button>
 
 <header class="hero">
   <div class="wrap">
