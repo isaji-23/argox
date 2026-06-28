@@ -123,6 +123,28 @@ class TestRequestModelSpanAttribute:
         span = self._instrument_within_span(agent)
         assert "gen_ai.request.model" not in span.attributes
 
+    def test_sets_metrics_model_for_run_record(self):
+        # The model is mirrored onto AgentRunMetrics so HttpRunExporter ships it
+        # to /v1/runs, where the Collector prices it into cost_usd.
+        exporter = InMemorySpanExporter()
+        provider = TracerProvider()
+        provider.add_span_processor(SimpleSpanProcessor(exporter))
+        tracer = provider.get_tracer("test")
+        metrics = AgentRunMetrics(agent_name="t")
+        with tracer.start_as_current_span("argox.agent.run"):
+            ArgoxOpenAIPlugin().instrument(_make_agent(), metrics)
+        assert metrics.model == "gpt-4o-mini"
+
+    def test_metrics_model_empty_when_model_unresolvable(self):
+        metrics = AgentRunMetrics(agent_name="t")
+        provider = TracerProvider()
+        tracer = provider.get_tracer("test")
+        with tracer.start_as_current_span("argox.agent.run"):
+            ArgoxOpenAIPlugin().instrument(
+                Agent(name="no-model", instructions="test", model=None), metrics
+            )
+        assert metrics.model == ""
+
 
 # ---------------------------------------------------------------------------
 # Tool tracking through hooks
