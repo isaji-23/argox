@@ -57,6 +57,9 @@
   [data-theme="dark"] nav.toc { background: rgba(14,17,25,.86); }
   [data-theme="dark"] .diagram { background:#f5f7fb; }
   [data-theme="dark"] .theme-toggle { box-shadow: 0 2px 8px rgba(0,0,0,.5); }
+  [data-theme="dark"] .kbd { background: #1e2638; border-color: #2e3a52; }
+  footer b { color: var(--ink); }
+  footer i { font-style: normal; font-size: .78rem; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--accent); }
 </style>
 <script>
 (function(){var K='argox-theme',r=document.documentElement;var s=localStorage.getItem(K);var t=s||((window.matchMedia&&matchMedia('(prefers-color-scheme:dark)').matches)?'dark':'light');r.setAttribute('data-theme',t);function lbl(){var b=document.getElementById('themeToggle');if(b)b.textContent=r.getAttribute('data-theme')==='dark'?'☀ Claro':'☾ Oscuro';}window.__argoxTheme=function(){var n=r.getAttribute('data-theme')==='dark'?'light':'dark';r.setAttribute('data-theme',n);localStorage.setItem(K,n);lbl();};document.addEventListener('DOMContentLoaded',lbl);})();
@@ -173,7 +176,7 @@
 </main>
 
 <footer>
-  Argox · explicador de arquitectura · grounded en
+  <b>Argox</b> · explicador de arquitectura · <i>grounded en</i>
   <span class="kbd">README.md</span> · <span class="kbd">collector/app.py</span>
 </footer>
 
