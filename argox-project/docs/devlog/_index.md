@@ -12,6 +12,7 @@ for the decisions behind these changes and
 | 2026-06-27 | DEPLOY-02 | Local multi-agent demo with RemotePolicyClient | — | in-review |
 | 2026-06-27 | POL-06 | Record policy alerts in run metrics | — | in-review |
 | 2026-06-26 | POL-05 | Authenticate RemotePolicyClient policy fetches with an API key | — | in-review |
+| 2026-06-25 | DX-04 | Write EXPORTER_GUIDE.md for custom exporter authors | #182 | in-review |
 | 2026-06-25 | DASH-07 | Authenticate dashboard policy requests; post demo run records | #186 | in-review |
 | 2026-06-25 | EXP-10 | Link run records to their trace for by-trace lookup | #185 | in-review |
 | 2026-06-24 | COL-20 | Bundle argox-core into the collector image | #178 | in-review |
