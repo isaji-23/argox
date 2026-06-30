@@ -142,7 +142,50 @@ under `tools_blocked` and never under `tools_called`.
 
 ---
 
-## 7. Troubleshooting
+## 7. End-to-end with the Collector (SDK → Collector → query)
+
+The run above exports spans locally (console + `spans.jsonl`). To prove the
+**full backend pipeline** — SDK emits spans over OTLP/HTTP, the Collector
+ingests, enriches (PII, cost), stores and indexes them, and serves them back
+over the query API — use the bundled runbook:
+
+```bash
+bash examples/demo_e2e.sh
+```
+
+It is self-contained and leaves no residue:
+
+1. Mints an API key (`ingest` + `read`) straight into a throwaway index DB.
+2. Boots the Collector (`argox-collector serve`) with auth enabled, on a
+   temporary local-storage + DuckDB sandbox.
+3. Runs `demo_azure_openai.py` with `ARGOX_COLLECTOR_ENDPOINT` /
+   `ARGOX_COLLECTOR_API_KEY` set, so the SDK's `OTLPSpanExporter` ships every
+   span to the Collector in addition to the console/JSONL sinks.
+4. Curls `GET /api/v1/traces`, `/metrics/cost`, `/metrics/latency` and
+   `/metrics/success` (with the read key) and pretty-prints the results.
+
+Prerequisite: install the Collector and the OTLP extra into the same venv:
+
+```bash
+pip install -e "./argox-core[otlp]" -e ./argox-collector
+```
+
+To point the demo at an **already-running** Collector instead, set the two
+variables yourself (the key needs the `ingest` scope) and run the script
+directly:
+
+```bash
+ARGOX_COLLECTOR_ENDPOINT=http://localhost:8000/v1/traces \
+ARGOX_COLLECTOR_API_KEY=argox_... \
+  python examples/demo_azure_openai.py
+```
+
+With neither variable set, `demo_azure_openai.py` behaves exactly as in
+section 6 (local export only).
+
+---
+
+## 8. Troubleshooting
 
 | Symptom | Likely cause |
 |---------|--------------|
@@ -154,7 +197,7 @@ under `tools_blocked` and never under `tools_called`.
 
 ---
 
-## 8. Adding a new demo
+## 9. Adding a new demo
 
 When contributing a new example:
 

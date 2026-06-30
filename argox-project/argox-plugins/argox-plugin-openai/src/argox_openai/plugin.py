@@ -4,10 +4,13 @@ The plugin bridges three responsibilities to the SDK:
 
 - ``instrument``  attaches lifecycle hooks (:class:`_ArgoxAgentHooks`) to the agent so
   tool invocations are recorded into ``AgentRunMetrics.tools_called`` during the run,
-  and, when the Manager supplies a ``tool_args_runner``, wraps every
-  :class:`agents.tool.FunctionTool` in ``agent.tools`` so the registered
-  ``ArgoxProcessor.process_tool_args`` chain runs against each invocation before the
-  framework executes the underlying function.
+  and always wraps every :class:`agents.tool.FunctionTool` in ``agent.tools`` so each
+  invocation emits an OTel ``execute_tool {name}`` child span under the run span
+  (PLUGIN-06). When the Manager additionally supplies a ``tool_args_runner``, the same
+  wrapper runs the registered ``ArgoxProcessor.process_tool_args`` chain against each
+  invocation before the framework executes the underlying function. It also tags the
+  active ``argox.agent.run`` span with ``gen_ai.request.model`` from ``Agent.model`` so
+  the Collector can price the run.
 - ``extract_tokens`` walks ``RunResult.raw_responses`` and appends one
   :class:`~argox.core.state.ApiCallRecord` per LLM call observed.
 - ``extract_output`` returns ``RunResult.final_output`` as a plain string.
@@ -28,9 +31,25 @@ from typing import Any
 from agents import Agent
 from agents.lifecycle import AgentHooks, RunContextWrapper
 from agents.tool import FunctionTool
-
 from argox.core.state import AgentRunMetrics, ApiCallRecord, ToolCallRecord
 from argox.interfaces.plugin import ArgoxPlugin, ToolArgsRunner
+from opentelemetry import trace
+from opentelemetry.trace import SpanKind, Status, StatusCode
+
+# Canonical OTel GenAI key the Collector's cost enricher (COL-07) matches against
+# ``pricing.yaml``. Setting it on the run span is what populates ``spans.run_cost``.
+_GEN_AI_REQUEST_MODEL = "gen_ai.request.model"
+
+# OTel GenAI semantic-convention keys for tool-execution spans (PLUGIN-06).
+_GEN_AI_OPERATION_NAME = "gen_ai.operation.name"
+_GEN_AI_TOOL_NAME = "gen_ai.tool.name"
+_OPERATION_EXECUTE_TOOL = "execute_tool"
+# OTel semconv key for the failure class; carries the exception *type* only, so
+# the span never picks up a message/stack trace that could echo tool args (PII).
+_ERROR_TYPE = "error.type"
+
+# Tracer used for the per-tool child spans emitted around each invocation.
+_tracer = trace.get_tracer("argox")
 
 
 class _ArgoxAgentHooks(AgentHooks):
@@ -67,17 +86,17 @@ class ArgoxOpenAIPlugin(ArgoxPlugin):
     """ArgoxPlugin implementation for the OpenAI Agents SDK.
 
     Note:
-        ``instrument`` mutates ``agent.hooks`` and does not restore it. The
-        Manager replaces the hooks on every ``run()`` call, so this is safe for
-        manager-driven workflows. Running the agent directly via ``Runner`` outside
-        the Manager after a managed run will still trigger the previous run's hooks.
+        ``instrument`` mutates ``agent.hooks`` and ``agent.tools`` in place and
+        does not restore them. The Manager calls ``instrument`` on a per-run
+        copy of the agent (``_clone_agent``), so the caller's shared instance is
+        never touched and concurrent runs never collide (#153). Instrumenting an
+        agent directly outside the Manager mutates that object in place.
 
-        When ``tool_args_runner`` is supplied, ``agent.tools`` is rewritten to a
-        list of cloned :class:`FunctionTool` instances whose ``on_invoke_tool`` is
-        a shim that runs the processor chain before delegating. The originals are
-        never mutated; ``ArgoxManager._restore_tools`` puts the original list back
-        after the run, so subsequent direct ``Runner`` calls observe the untouched
-        tools.
+        ``agent.tools`` is rewritten to a list of cloned :class:`FunctionTool`
+        instances whose ``on_invoke_tool`` is a shim that opens a child span
+        around the invocation (and, when a ``tool_args_runner`` is supplied, runs
+        the processor chain before delegating). The original tool objects are
+        never mutated.
     """
 
     @property
@@ -93,17 +112,37 @@ class ArgoxOpenAIPlugin(ArgoxPlugin):
         """Attach Argox lifecycle hooks and (optionally) wrap function tools.
 
         Uses ``object.__setattr__`` to bypass Pydantic field validation on
-        ``Agent``. When ``tool_args_runner`` is provided and the agent exposes
-        a ``tools`` list, each :class:`FunctionTool` entry is replaced with a
-        copy whose ``on_invoke_tool`` runs the processor chain against the parsed
-        arguments before invoking the original. Non-``FunctionTool`` entries
-        (hosted tools, file search, computer use, etc.) are passed through
-        unchanged because their execution happens server-side.
+        ``Agent``. When the agent exposes a ``tools`` list, each
+        :class:`FunctionTool` entry is replaced with a copy whose
+        ``on_invoke_tool`` opens an ``execute_tool`` child span around the
+        invocation; when ``tool_args_runner`` is provided that shim also runs the
+        processor chain against the parsed arguments before invoking the
+        original. Non-``FunctionTool`` entries (hosted tools, file search,
+        computer use, etc.) are passed through unchanged because their execution
+        happens server-side.
+
+        The agent's configured model (``Agent.model``) is also written to
+        ``gen_ai.request.model`` on the active ``argox.agent.run`` span so the
+        Collector can price the run. ``Agent.model`` may be a plain model id
+        string or a ``Model`` instance; the latter is read via its ``model``
+        attribute. When no model is resolvable (the agent relies on the SDK
+        default), the attribute is left unset.
+
+        Note:
+            Azure deployment names often differ from the priced model id. The
+            plugin reports whatever the agent exposes; mapping a deployment name
+            to a ``pricing.yaml`` key (or ``ARGOX_PRICING_TABLE_PATH``) stays the
+            operator's responsibility.
         """
         object.__setattr__(target, "hooks", _ArgoxAgentHooks(metrics))
 
-        if tool_args_runner is None:
-            return target
+        model = _resolve_request_model(getattr(target, "model", None))
+        if model:
+            trace.get_current_span().set_attribute(_GEN_AI_REQUEST_MODEL, model)
+            # Mirror onto the run metrics so HttpRunExporter ships it to /v1/runs;
+            # the Collector keys it against the price table to backfill cost_usd.
+            metrics.model = model
+
         if not hasattr(target, "tools"):
             return target
 
@@ -137,19 +176,66 @@ class ArgoxOpenAIPlugin(ArgoxPlugin):
         return str(out) if out is not None else ""
 
 
-def _wrap_function_tool(tool: FunctionTool, runner: ToolArgsRunner) -> FunctionTool:
-    """Return a copy of ``tool`` whose ``on_invoke_tool`` runs the processor chain.
+def _resolve_request_model(model: Any) -> str | None:
+    """Return the model id string for ``gen_ai.request.model``, or ``None``.
 
-    The shim parses the SDK's raw JSON input, hands the dict to ``runner``, then
-    re-serialises the mutated dict and delegates to the original
-    ``on_invoke_tool``. Empty input is treated as an empty dict to mirror the
-    SDK's behaviour; malformed JSON is forwarded unchanged so the SDK can raise
-    its standard ``ModelBehaviorError`` instead of having the shim swallow it.
+    ``Agent.model`` is ``str | Model | None``. A string is used directly; a
+    ``Model`` instance is read via its ``model`` attribute (the underlying model
+    id); ``None`` or anything without a usable id yields ``None`` so the caller
+    leaves the span attribute unset.
+    """
+    if model is None:
+        return None
+    if isinstance(model, str):
+        return model or None
+    resolved = getattr(model, "model", None)
+    return resolved if isinstance(resolved, str) and resolved else None
+
+
+def _wrap_function_tool(
+    tool: FunctionTool, runner: ToolArgsRunner | None,
+) -> FunctionTool:
+    """Return a copy of ``tool`` whose ``on_invoke_tool`` emits a child span.
+
+    Wrapping is unconditional (PLUGIN-06): every invocation is bracketed by an
+    OTel child span named ``execute_tool {tool.name}`` carrying
+    ``gen_ai.operation.name=execute_tool`` and ``gen_ai.tool.name``. The shim is
+    awaited by the SDK runner in the same task as the active ``argox.agent.run``
+    span, so ``start_as_current_span`` attaches the tool span as its child with
+    no ContextVar handling.
+
+    Error semantics. The span is marked ``ERROR`` only when the invocation
+    *raises past the shim*. A ``@function_tool`` keeps its default
+    ``failure_error_function``, so the SDK catches the tool body's exception
+    inside ``on_invoke_tool`` and returns an error *string* to the model — the
+    shim never sees it, and the call is still recorded in
+    ``AgentRunMetrics.tools_called`` by the lifecycle hooks. The shim's ERROR
+    path therefore covers tools that propagate (``failure_error_function=None``,
+    custom invokers that re-raise, or a failing argument-processor chain). On
+    such a failure only ``error.type`` (the exception class name) is recorded —
+    not the exception message or stack trace, which routinely echo the tool's
+    arguments and would re-introduce the PII the shim deliberately keeps off the
+    span. ``asyncio.CancelledError`` is not caught, so a cancelled run is not
+    mislabelled ERROR.
+
+    When ``runner`` is supplied, the shim also runs the processor chain against
+    the parsed arguments before delegating: it parses the SDK's raw JSON input,
+    hands the dict to ``runner``, then re-serialises the mutated dict and calls
+    the original ``on_invoke_tool``. Empty input is treated as an empty dict to
+    mirror the SDK's behaviour; malformed or non-object JSON is forwarded
+    unchanged so the SDK can raise its standard ``ModelBehaviorError`` instead of
+    having the shim swallow it. When ``runner`` is ``None`` the raw input is
+    forwarded byte-for-byte — only the span is added.
+
+    Raw tool arguments are never placed on the span (PII); the redaction chain
+    runs inside the span but its output only reaches the original invoker.
     """
     original_invoke = tool.on_invoke_tool
     wrapped = copy.copy(tool)
 
-    async def _argox_invoke(ctx: Any, raw_input: str) -> Any:
+    async def _invoke_original(ctx: Any, tool_name: str, raw_input: str) -> Any:
+        if runner is None:
+            return await original_invoke(ctx, raw_input)
         if raw_input:
             try:
                 parsed = json.loads(raw_input)
@@ -162,9 +248,32 @@ def _wrap_function_tool(tool: FunctionTool, runner: ToolArgsRunner) -> FunctionT
         else:
             parsed = {}
 
-        tool_name = getattr(ctx, "tool_name", None) or tool.name
         mutated = await runner(tool_name, parsed)
         return await original_invoke(ctx, json.dumps(mutated))
+
+    async def _argox_invoke(ctx: Any, raw_input: str) -> Any:
+        tool_name = getattr(ctx, "tool_name", None) or tool.name
+        with _tracer.start_as_current_span(
+            f"{_OPERATION_EXECUTE_TOOL} {tool_name}",
+            kind=SpanKind.INTERNAL,
+            attributes={
+                _GEN_AI_OPERATION_NAME: _OPERATION_EXECUTE_TOOL,
+                _GEN_AI_TOOL_NAME: tool_name,
+            },
+            # The context manager would otherwise call ``record_exception`` and
+            # set the status message from the exception on its way out — both
+            # carry the exception message and stack trace, which routinely echo
+            # the tool's arguments (PII). Handle the failure ourselves below,
+            # recording only ``error.type``.
+            record_exception=False,
+            set_status_on_exception=False,
+        ) as span:
+            try:
+                return await _invoke_original(ctx, tool_name, raw_input)
+            except Exception as exc:
+                span.set_attribute(_ERROR_TYPE, type(exc).__qualname__)
+                span.set_status(Status(StatusCode.ERROR))
+                raise
 
     wrapped.on_invoke_tool = _argox_invoke
     return wrapped

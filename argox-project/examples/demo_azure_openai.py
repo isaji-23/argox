@@ -159,12 +159,33 @@ class _PrintMetricsExporter(ExporterBase):
             print("[metrics] violations:   ", metrics.policy_violations)
 
 
-init_telemetry(
-    exporters=[
-        ConsoleSpanLogger(),
-        JsonlSpanExporter(_SPANS_PATH),
-    ],
-)
+_span_exporters = [
+    ConsoleSpanLogger(),
+    JsonlSpanExporter(_SPANS_PATH),
+]
+
+# Optional full round trip: also ship every span to a running Argox Collector
+# over OTLP/HTTP. Set ARGOX_COLLECTOR_ENDPOINT (e.g.
+# http://localhost:8000/v1/traces) and, when the Collector has auth enabled
+# (the default since COL-09), ARGOX_COLLECTOR_API_KEY holding a key with the
+# ``ingest`` scope. With both unset the demo behaves exactly as before and
+# only exports locally.
+_collector_endpoint = os.environ.get("ARGOX_COLLECTOR_ENDPOINT")
+if _collector_endpoint:
+    from argox.observability import OTLPSpanExporter
+
+    _otlp_headers = {}
+    _collector_key = os.environ.get("ARGOX_COLLECTOR_API_KEY")
+    if _collector_key:
+        _otlp_headers["Authorization"] = f"Bearer {_collector_key}"
+    _span_exporters.append(
+        OTLPSpanExporter(endpoint=_collector_endpoint, headers=_otlp_headers or None)
+    )
+    print(f"[otlp] exporting spans to Argox Collector at {_collector_endpoint}")
+
+# Captured so main() can force-flush the BatchSpanProcessor before exit; the
+# OTLP batch would otherwise be dropped when a short-lived script returns.
+_tracer_provider = init_telemetry(exporters=_span_exporters)
 
 agent = Agent(
     name="weather-assistant",
@@ -226,6 +247,10 @@ async def main() -> None:
     print(f"\n[timing] baseline:  {baseline_elapsed:.2f}s")
     print(f"[timing] monitored: {monitored_elapsed:.2f}s")
     print(f"[timing] overhead:  {overhead:+.2f}s")
+
+    # Flush pending spans (the OTLP BatchSpanProcessor batches in the
+    # background) so a Collector round trip completes before the script exits.
+    _tracer_provider.force_flush()
 
 
 if __name__ == "__main__":

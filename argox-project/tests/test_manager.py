@@ -120,6 +120,44 @@ class _BlockToolPolicy(PolicyClient):
         return PolicyResult.ok()
 
 
+class _AlertInputPolicy(PolicyClient):
+    async def check_input(self, text: str) -> PolicyResult:
+        return PolicyResult.alert(reason="input flagged", rule_id="A1")
+
+    async def is_tool_allowed(self, tool_name: str) -> PolicyResult:
+        return PolicyResult.ok()
+
+    async def check_output(self, text: str) -> PolicyResult:
+        return PolicyResult.ok()
+
+
+class _AlertOutputPolicy(PolicyClient):
+    async def check_input(self, text: str) -> PolicyResult:
+        return PolicyResult.ok()
+
+    async def is_tool_allowed(self, tool_name: str) -> PolicyResult:
+        return PolicyResult.ok()
+
+    async def check_output(self, text: str) -> PolicyResult:
+        return PolicyResult.alert(reason="output flagged", rule_id="A2")
+
+
+class _AlertToolPolicy(PolicyClient):
+    def __init__(self, alerted_tool: str) -> None:
+        self._alerted = alerted_tool
+
+    async def check_input(self, text: str) -> PolicyResult:
+        return PolicyResult.ok()
+
+    async def is_tool_allowed(self, tool_name: str) -> PolicyResult:
+        if tool_name == self._alerted:
+            return PolicyResult.alert(reason="tool flagged", rule_id="A3")
+        return PolicyResult.ok()
+
+    async def check_output(self, text: str) -> PolicyResult:
+        return PolicyResult.ok()
+
+
 async def _fake_runner(agent: Any, prompt: str) -> _FakeResponse:
     return _FakeResponse(text=f"response to: {prompt}")
 
@@ -148,13 +186,11 @@ class TestRegistration:
         mgr.register_processor(proc)
         assert any(p is proc for p, _ in mgr._processors)
 
-    def test_unknown_plugin_raises(self):
+    @pytest.mark.asyncio
+    async def test_unknown_plugin_raises(self):
         mgr = ArgoxManager()
         with pytest.raises(KeyError):
-            import asyncio
-            asyncio.get_event_loop().run_until_complete(
-                mgr.run(_FakeAgent(), "prompt", "missing", _fake_runner)
-            )
+            await mgr.run(_FakeAgent(), "prompt", "missing", _fake_runner)
 
 
 # ---------------------------------------------------------------------------
@@ -311,6 +347,45 @@ class TestPolicy:
         assert exp.exports[0].success is False
 
     @pytest.mark.asyncio
+    async def test_input_alert_records_violation_but_succeeds(self):
+        mgr = ArgoxManager(policy=_AlertInputPolicy())
+        mgr.register_plugin(_FakePlugin())
+        exp = _CapturingExporter()
+        mgr.register_exporter(exp)
+        await mgr.run(_FakeAgent(), "flag me", "fake", _fake_runner)
+        m = exp.exports[0]
+        assert m.input_policy_passed is True
+        assert m.success is True
+        assert "input flagged" in m.policy_violations
+
+    @pytest.mark.asyncio
+    async def test_output_alert_records_violation_but_succeeds(self):
+        mgr = ArgoxManager(policy=_AlertOutputPolicy())
+        mgr.register_plugin(_FakePlugin())
+        exp = _CapturingExporter()
+        mgr.register_exporter(exp)
+        await mgr.run(_FakeAgent(), "prompt", "fake", _fake_runner)
+        m = exp.exports[0]
+        assert m.output_policy_passed is True
+        assert m.success is True
+        assert "output flagged" in m.policy_violations
+
+    @pytest.mark.asyncio
+    async def test_tool_alert_keeps_tool_available_and_flags(self):
+        mgr = ArgoxManager(policy=_AlertToolPolicy("flagged"))
+        mgr.register_plugin(_FakePlugin())
+        exp = _CapturingExporter()
+        mgr.register_exporter(exp)
+        await mgr.run(
+            _FakeAgent(), "prompt", "fake", _fake_runner,
+            tools=["safe", "flagged"],
+        )
+        m = exp.exports[0]
+        assert "flagged" in m.tools_available
+        assert m.tools_blocked == []
+        assert "tool flagged" in m.policy_violations
+
+    @pytest.mark.asyncio
     async def test_tool_filtering(self):
         mgr = ArgoxManager(policy=_BlockToolPolicy("dangerous"))
         mgr.register_plugin(_FakePlugin())
@@ -398,6 +473,140 @@ class TestPolicy:
         mgr.register_exporter(exp)
         await mgr.run(_AgentWithTools(), "prompt", "fake", _fake_runner, tools=[])
         assert exp.exports[0].tools_available == []
+
+    @pytest.mark.asyncio
+    async def test_runner_receives_agent_copy_not_shared_instance(self):
+        """The runner must see a per-run clone, never the caller's shared agent."""
+
+        class _AgentWithTools(_FakeAgent):
+            tools = ["safe"]
+
+        agent = _AgentWithTools()
+        seen: list[Any] = []
+
+        async def spy_runner(ag: Any, prompt: str) -> _FakeResponse:
+            seen.append(ag)
+            return _FakeResponse()
+
+        mgr = ArgoxManager()
+        mgr.register_plugin(_FakePlugin())
+        await mgr.run(agent, "prompt", "fake", spy_runner, tools=["safe"])
+        assert seen[0] is not agent
+
+    @pytest.mark.asyncio
+    async def test_concurrent_runs_do_not_share_agent_tools(self):
+        """Concurrent runs on one shared agent must not leak tool mutations.
+
+        Reproduces #153: each run filters/instruments a per-run copy, so the
+        shared agent is untouched and neither run sees the other's tool list.
+        """
+        import asyncio
+
+        class _AgentWithTools(_FakeAgent):
+            tools = ["safe", "dangerous"]
+
+        agent = _AgentWithTools()
+        seen: dict[str, list] = {}
+
+        async def make_runner(key: str):
+            async def spy_runner(ag: Any, prompt: str) -> _FakeResponse:
+                # Yield so the two runs interleave inside the run lifecycle.
+                await asyncio.sleep(0)
+                seen[key] = list(ag.tools)
+                return _FakeResponse()
+
+            return spy_runner
+
+        mgr_a = ArgoxManager(policy=_BlockToolPolicy("dangerous"))
+        mgr_b = ArgoxManager(policy=_BlockToolPolicy("safe"))
+        for m in (mgr_a, mgr_b):
+            m.register_plugin(_FakePlugin())
+
+        await asyncio.gather(
+            mgr_a.run(agent, "a", "fake", await make_runner("a"), tools=["safe", "dangerous"]),
+            mgr_b.run(agent, "b", "fake", await make_runner("b"), tools=["safe", "dangerous"]),
+        )
+
+        assert seen["a"] == ["safe"]
+        assert seen["b"] == ["dangerous"]
+        # Shared agent is never mutated by either run.
+        assert agent.tools == ["safe", "dangerous"]
+
+    @pytest.mark.asyncio
+    async def test_single_manager_concurrent_runs_share_agent_safely(self):
+        """One manager + one shared agent + concurrent runs: the singleton-agent
+        pattern from #153. Both runs see their own filtered copy and the shared
+        agent is left intact."""
+        import asyncio
+
+        class _AgentWithTools(_FakeAgent):
+            tools = ["safe", "dangerous"]
+
+        agent = _AgentWithTools()
+        seen: list[list] = []
+
+        async def spy_runner(ag: Any, prompt: str) -> _FakeResponse:
+            await asyncio.sleep(0)  # force interleaving across the two runs
+            seen.append(list(ag.tools))
+            await asyncio.sleep(0)
+            return _FakeResponse()
+
+        mgr = ArgoxManager(policy=_BlockToolPolicy("dangerous"))
+        mgr.register_plugin(_FakePlugin())
+
+        await asyncio.gather(
+            mgr.run(agent, "a", "fake", spy_runner, tools=["safe", "dangerous"]),
+            mgr.run(agent, "b", "fake", spy_runner, tools=["safe", "dangerous"]),
+        )
+
+        assert seen == [["safe"], ["safe"]]
+        assert agent.tools == ["safe", "dangerous"]
+
+    @pytest.mark.asyncio
+    async def test_uncopyable_agent_falls_back_and_restores_tools(self):
+        """When the agent cannot be copied, the run instruments it in place but
+        restores tools in finally, so no wrapped/filtered list leaks past the
+        run (the clone-failure fallback path)."""
+
+        class _UncopyableAgent(_FakeAgent):
+            tools = ["safe", "dangerous"]
+
+            def __copy__(self):
+                raise TypeError("not copyable")
+
+        agent = _UncopyableAgent()
+        seen: list[list] = []
+
+        async def spy_runner(ag: Any, prompt: str) -> _FakeResponse:
+            # Fallback instruments the shared instance directly.
+            assert ag is agent
+            seen.append(list(ag.tools))
+            return _FakeResponse()
+
+        mgr = ArgoxManager(policy=_BlockToolPolicy("dangerous"))
+        mgr.register_plugin(_FakePlugin())
+        await mgr.run(agent, "prompt", "fake", spy_runner, tools=["safe", "dangerous"])
+
+        # Runner saw the filtered list, but tools are restored afterwards.
+        assert seen[0] == ["safe"]
+        assert agent.tools == ["safe", "dangerous"]
+
+    @pytest.mark.asyncio
+    async def test_uncopyable_agent_restores_tools_on_error(self):
+        """The fallback restore must run even when the run raises."""
+
+        class _UncopyableAgent(_FakeAgent):
+            tools = ["safe", "dangerous"]
+
+            def __copy__(self):
+                raise TypeError("not copyable")
+
+        agent = _UncopyableAgent()
+        mgr = ArgoxManager(policy=_BlockInputPolicy())
+        mgr.register_plugin(_FakePlugin())
+        with pytest.raises(PermissionError):
+            await mgr.run(agent, "bad", "fake", _fake_runner, tools=["safe", "dangerous"])
+        assert agent.tools == ["safe", "dangerous"]
 
     @pytest.mark.asyncio
     async def test_failing_exporter_does_not_mask_run_result(self):

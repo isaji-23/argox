@@ -16,6 +16,7 @@ from argox_collector.storage.base import (
     BlobData,
     BlobMetadata,
     BlobNotFoundError,
+    ConditionNotMetError,
     StorageBackend,
     StorageError,
     StoredBlob,
@@ -72,6 +73,7 @@ class LocalStorageBackend(StorageBackend):
         *,
         content_type: Optional[str] = None,
         metadata: Optional[Mapping[str, str]] = None,
+        expected_etag: Optional[str] = None,
     ) -> BlobMetadata:
         normalize_key(key)
         clean_metadata = validate_metadata(metadata)
@@ -86,7 +88,23 @@ class LocalStorageBackend(StorageBackend):
         }
         meta_bytes = json.dumps(meta_record, sort_keys=True).encode("utf-8")
 
+        # The guard check and the write happen under the same lock that
+        # serializes every put/get/delete, so a guard that passes cannot be
+        # invalidated by a concurrent writer before the payload lands.
         with self._lock:
+            if expected_etag is not None:
+                try:
+                    current_payload: Optional[bytes] = target.read_bytes()
+                except FileNotFoundError:
+                    current_payload = None
+                if expected_etag == "*":
+                    if current_payload is not None:
+                        raise ConditionNotMetError(key)
+                elif (
+                    current_payload is None
+                    or _etag_for(current_payload) != expected_etag
+                ):
+                    raise ConditionNotMetError(key)
             self._atomic_write(target, payload)
             self._atomic_write(meta_path, meta_bytes)
             stat = target.stat()

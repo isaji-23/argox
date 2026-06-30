@@ -84,7 +84,16 @@ class AgentRunMetrics:
 
     agent_name: str = ""
     run_id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    # OTel trace id (32-char lowercase hex) of this run's root span, stamped by
+    # the manager once the span is active. The Collector joins runs to spans on
+    # this column, so GET /v1/runs/by-trace/{trace_id} returns 404 without it.
+    trace_id: str | None = None
     agent_version: str = ""
+    # Model id the run used (e.g. ``gpt-4o-mini``). Stamped by the plugin from
+    # the agent's configured model, mirroring the ``gen_ai.request.model`` span
+    # attribute. The Collector keys this against its price table to backfill the
+    # run record's ``cost_usd``; empty when the agent exposes no resolvable model.
+    model: str = ""
     prompt: str = ""
     timestamp: str = field(
         default_factory=lambda: datetime.now(timezone.utc).isoformat()
@@ -141,8 +150,10 @@ class AgentRunMetrics:
         """Serialize to a JSON-compatible dict for exporters and logging."""
         return {
             "run_id": self.run_id,
+            "trace_id": self.trace_id,
             "agent_name": self.agent_name,
             "agent_version": self.agent_version,
+            "model": self.model,
             "timestamp": self.timestamp,
             "prompt": self.prompt,
             "final_output": self.final_output,

@@ -18,6 +18,7 @@ from __future__ import annotations
 import base64
 import binascii
 import json
+import math
 import re
 from datetime import datetime, timezone
 from typing import Any, Optional
@@ -114,6 +115,15 @@ def _span_to_record(span: Any, attributes: dict[str, Any]) -> SpanRecord:
     if run_cost is None:
         run_cost = attributes.get(semconv.GEN_AI_USAGE_COST)
 
+    events = tuple(
+        {
+            "name": event.name,
+            "timestamp": _nanos_to_dt(event.time_unix_nano),
+            "attributes": _key_values_to_dict(event.attributes),
+        }
+        for event in span.events
+    )
+
     return SpanRecord(
         trace_id=span.trace_id.hex(),
         span_id=span.span_id.hex(),
@@ -129,6 +139,7 @@ def _span_to_record(span: Any, attributes: dict[str, Any]) -> SpanRecord:
         run_cost=_as_float(run_cost),
         run_success=_as_bool(attributes.get(semconv.ARGOX_RUN_SUCCESS)),
         attributes=attributes,
+        events=events,
     )
 
 
@@ -139,12 +150,20 @@ def _nanos_to_dt(nanos: int) -> Optional[datetime]:
 
 
 def _as_float(value: Any) -> Optional[float]:
+    """Coerce an OTLP attribute into a finite ``float``.
+
+    OTLP doubles (and strings such as ``"nan"``) can carry NaN/Infinity,
+    which would poison every index aggregate they enter and cannot be
+    encoded in the JSON metrics responses, so non-finite values degrade to
+    ``None``.
+    """
     if value is None:
         return None
     try:
-        return float(value)
+        parsed = float(value)
     except (TypeError, ValueError):
         return None
+    return parsed if math.isfinite(parsed) else None
 
 
 def _as_bool(value: Any) -> Optional[bool]:

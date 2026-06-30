@@ -1,0 +1,36 @@
+# Configuration for the optional OTel collector sidecar (profile "otel").
+# Receives OTLP on the standard ports, prints every span to stdout for
+# protocol-level inspection and forwards batches to the Argox Collector.
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch: {}
+
+exporters:
+  debug:
+    verbosity: detailed
+  # otlphttp appends the standard /v1/traces path to the endpoint, matching
+  # the Argox Collector ingest route. Compression is disabled because the
+  # Collector does not decompress gzip request bodies (it answers 400).
+  otlphttp:
+    endpoint: http://collector:8000
+    compression: none
+
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+
+service:
+  extensions: [health_check]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [debug, otlphttp]

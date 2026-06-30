@@ -37,11 +37,17 @@ You are a core collaborator on the Argox project. Your goal is to maintain techn
 - **No AI attribution:** PR titles and bodies must NEVER contain "Generated with", "Co-authored-by: Claude", a 🤖 footer, or any other AI attribution. This applies to PRs, commits, issues, and every other output.
 - **Cleanup:** After merging, delete the local branch with `git branch -d <name>` and the remote branch with `git push origin --delete <name>`.
 
-## 4. Technical Standards (Python 3.9+)
+## 4. Technical Standards
+### Python (3.9+)
 - **Environment:** Use `pip install -e ".[dev]"`.
 - **Quality:** Run `pytest` before proposing any commit or PR. Broken tests are not allowed.
 - **Tests:** New features must include corresponding tests in the `tests/` directory.
 - **OTel:** Observe "OTel" capitalization and OpenTelemetry Semantic Conventions.
+
+### Node.js / Frontend
+- **Package Manager:** Use `pnpm` EXCLUSIVELY. Do not use `npm` or `yarn`.
+- **Environment:** Run `pnpm install` to set up dependencies.
+- **Commands:** Use `pnpm run <script>` for development tasks.
 
 ## 5. Project Management (GitHub Projects)
 - **Context:** User: `isaji-23`, Repo: `argox`, Project: `1`.

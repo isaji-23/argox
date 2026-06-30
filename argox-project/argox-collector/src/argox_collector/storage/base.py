@@ -24,6 +24,19 @@ class BlobNotFoundError(StorageError):
         self.key = key
 
 
+class ConditionNotMetError(StorageError):
+    """Raised when a conditional :meth:`StorageBackend.put` loses its guard.
+
+    Either the blob's current ETag no longer matches ``expected_etag``, or the
+    create-only sentinel ``"*"`` was supplied and the blob already exists.
+    Callers use this to drive optimistic-concurrency retry loops.
+    """
+
+    def __init__(self, key: str) -> None:
+        super().__init__(f"write condition not met for blob: {key!r}")
+        self.key = key
+
+
 @dataclass(frozen=True)
 class BlobMetadata:
     """Lightweight descriptor returned by ``put``/``list``.
@@ -72,6 +85,7 @@ class StorageBackend(ABC):
         *,
         content_type: Optional[str] = None,
         metadata: Optional[Mapping[str, str]] = None,
+        expected_etag: Optional[str] = None,
     ) -> BlobMetadata:
         """Write ``data`` to ``key`` and return its metadata.
 
@@ -87,6 +101,20 @@ class StorageBackend(ABC):
             metadata: Optional user metadata. Keys and values must be ASCII
                 strings; non-ASCII input raises ``ValueError``. Backends may
                 impose additional limits.
+            expected_etag: Optional guard for optimistic concurrency control.
+                ``None`` writes unconditionally. The sentinel ``"*"`` makes the
+                write create-only: it fails when the blob already exists. Any
+                other value makes the write conditional: it fails unless the
+                blob's current ETag equals the supplied value. Implementations
+                must evaluate the guard and the write atomically — a guard
+                that passes must not be invalidated by a concurrent writer
+                before the payload lands.
+
+        Raises:
+            ConditionNotMetError: If ``expected_etag`` is set and the guard
+                fails. Backends that cannot enforce the guard must raise
+                ``StorageError`` instead of silently degrading to an
+                unconditional write.
 
         Returns:
             Metadata describing the persisted blob.

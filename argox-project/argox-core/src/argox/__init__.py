@@ -2,6 +2,7 @@
 
 from argox.core.decorator import monitor
 from argox.core.manager import ArgoxManager
+from argox.core.registry import registry
 from argox.core.telemetry import init_metrics, init_telemetry
 
-__all__ = ["ArgoxManager", "init_metrics", "init_telemetry", "monitor"]
+__all__ = ["ArgoxManager", "init_metrics", "init_telemetry", "monitor", "registry"]

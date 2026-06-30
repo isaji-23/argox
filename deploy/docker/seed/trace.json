@@ -1,0 +1,91 @@
+{
+  "resourceSpans": [
+    {
+      "scopeSpans": [
+        {
+          "spans": [
+            {
+              "traceId": "AQIDBAUGBwgJCgsMDQ4PEA==",
+              "spanId": "ERITFBUWFxg=",
+              "name": "argox.agent.run",
+              "startTimeUnixNano": "1781091108698375168",
+              "endTimeUnixNano": "1781091110198375168",
+              "attributes": [
+                {
+                  "key": "argox.agent.name",
+                  "value": {
+                    "stringValue": "demo-agent"
+                  }
+                },
+                {
+                  "key": "argox.agent.version",
+                  "value": {
+                    "stringValue": "1.2.3"
+                  }
+                },
+                {
+                  "key": "argox.policy.decision",
+                  "value": {
+                    "stringValue": "ok"
+                  }
+                },
+                {
+                  "key": "argox.run.success",
+                  "value": {
+                    "boolValue": true
+                  }
+                },
+                {
+                  "key": "gen_ai.request.model",
+                  "value": {
+                    "stringValue": "gpt-4o-mini"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.input_tokens",
+                  "value": {
+                    "intValue": "1200"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.output_tokens",
+                  "value": {
+                    "intValue": "350"
+                  }
+                }
+              ]
+            },
+            {
+              "traceId": "AQIDBAUGBwgJCgsMDQ4PEA==",
+              "spanId": "ISIjJCUmJyg=",
+              "parentSpanId": "ERITFBUWFxg=",
+              "name": "argox.llm.call",
+              "startTimeUnixNano": "1781091108998375168",
+              "endTimeUnixNano": "1781091109998375168",
+              "attributes": [
+                {
+                  "key": "gen_ai.request.model",
+                  "value": {
+                    "stringValue": "gpt-4o-mini"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.input_tokens",
+                  "value": {
+                    "intValue": "1200"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.output_tokens",
+                  "value": {
+                    "intValue": "350"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

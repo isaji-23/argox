@@ -1,0 +1,56 @@
+name: Refresh pricing snapshot
+
+# Regenerate the committed LiteLLM price snapshot (argox-collector/.../pricing.yaml)
+# and open a PR when prices drift, so the cost basis changes through review
+# rather than a silent runtime fetch (see ADR-0008).
+
+on:
+  schedule:
+    # Weekly, Monday 06:00 UTC.
+    - cron: "0 6 * * 1"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      # Third-party actions are pinned to a commit SHA (tags are mutable) since
+      # this job runs with contents:write + pull-requests:write.
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.11"
+
+      - name: Install collector
+        run: pip install -e ./argox-project/argox-collector
+
+      - name: Regenerate pricing snapshot
+        run: |
+          argox-collector refresh-pricing \
+            --provider gpt- \
+            --provider o1 \
+            --provider o3 \
+            --provider o4 \
+            --provider claude- \
+            --provider azure/ \
+            --provider text-embedding-
+
+      - name: Open PR on drift
+        uses: peter-evans/create-pull-request@c5a7806660adbe173f04e3e038b0ccdcd758773c # v6
+        with:
+          branch: chore/refresh-pricing
+          base: dev
+          commit-message: "chore: [COL-17] refresh pricing snapshot from LiteLLM"
+          title: "chore: [COL-17] refresh pricing snapshot from LiteLLM"
+          body: |
+            Automated regeneration of the bundled LiteLLM price snapshot.
+
+            Review the price diff before merging — this changes the cost basis
+            for `runs.cost_usd` and `spans.run_cost`.
+          add-paths: |
+            argox-project/argox-collector/src/argox_collector/enrichment/pricing.yaml

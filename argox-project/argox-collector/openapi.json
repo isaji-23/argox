@@ -1,0 +1,3080 @@
+{
+  "components": {
+    "schemas": {
+      "AgentSpendPoint": {
+        "properties": {
+          "agent_name": {
+            "title": "Agent Name",
+            "type": "string"
+          },
+          "spend": {
+            "title": "Spend",
+            "type": "number"
+          }
+        },
+        "required": [
+          "agent_name",
+          "spend"
+        ],
+        "title": "AgentSpendPoint",
+        "type": "object"
+      },
+      "ApiKeyCreate": {
+        "description": "Request body for ``POST /api/v1/keys``.",
+        "properties": {
+          "expires_in": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires In"
+          },
+          "name": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "scopes": {
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "title": "Scopes",
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "scopes"
+        ],
+        "title": "ApiKeyCreate",
+        "type": "object"
+      },
+      "ApiKeyCreateResponse": {
+        "description": "Create response: the metadata view plus the one-time raw secret.",
+        "properties": {
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "created_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created By"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "key_prefix": {
+            "title": "Key Prefix",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "revoked": {
+            "title": "Revoked",
+            "type": "boolean"
+          },
+          "revoked_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revoked At"
+          },
+          "scopes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Scopes",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "key_prefix",
+          "scopes",
+          "created_at",
+          "revoked",
+          "key"
+        ],
+        "title": "ApiKeyCreateResponse",
+        "type": "object"
+      },
+      "ApiKeyListResponse": {
+        "properties": {
+          "keys": {
+            "items": {
+              "$ref": "#/components/schemas/ApiKeyView"
+            },
+            "title": "Keys",
+            "type": "array"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "keys",
+          "total"
+        ],
+        "title": "ApiKeyListResponse",
+        "type": "object"
+      },
+      "ApiKeyView": {
+        "description": "Non-secret view of a stored key.",
+        "properties": {
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "created_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created By"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "key_prefix": {
+            "title": "Key Prefix",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "revoked": {
+            "title": "Revoked",
+            "type": "boolean"
+          },
+          "revoked_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revoked At"
+          },
+          "scopes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Scopes",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "key_prefix",
+          "scopes",
+          "created_at",
+          "revoked"
+        ],
+        "title": "ApiKeyView",
+        "type": "object"
+      },
+      "AuditAppendRequest": {
+        "description": "Body of ``POST /api/v1/audit``.\n\n``actor`` is intentionally absent: it is bound to the authenticated\nprincipal, never read from the request, so an entry cannot be forged under\nanother identity.\n\nProvide either ``payload`` (hashed server-side into a digest so the raw\nvalue is never persisted) or a pre-computed ``payload_digest`` \u2014 not both.\nOmitting both records the digest of an empty payload.",
+        "properties": {
+          "action": {
+            "minLength": 1,
+            "title": "Action",
+            "type": "string"
+          },
+          "kind": {
+            "default": "event",
+            "pattern": "^(event|run|span_batch)$",
+            "title": "Kind",
+            "type": "string"
+          },
+          "payload": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Payload"
+          },
+          "payload_digest": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Payload Digest"
+          },
+          "target": {
+            "minLength": 1,
+            "title": "Target",
+            "type": "string"
+          }
+        },
+        "required": [
+          "action",
+          "target"
+        ],
+        "title": "AuditAppendRequest",
+        "type": "object"
+      },
+      "AuditEntryResponse": {
+        "description": "One persisted, hash-chained audit entry.",
+        "properties": {
+          "action": {
+            "title": "Action",
+            "type": "string"
+          },
+          "actor": {
+            "title": "Actor",
+            "type": "string"
+          },
+          "hash": {
+            "title": "Hash",
+            "type": "string"
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kind"
+          },
+          "payload_digest": {
+            "title": "Payload Digest",
+            "type": "string"
+          },
+          "prev_hash": {
+            "title": "Prev Hash",
+            "type": "string"
+          },
+          "seq": {
+            "title": "Seq",
+            "type": "integer"
+          },
+          "target": {
+            "title": "Target",
+            "type": "string"
+          },
+          "timestamp": {
+            "title": "Timestamp",
+            "type": "string"
+          }
+        },
+        "required": [
+          "seq",
+          "timestamp",
+          "actor",
+          "action",
+          "target",
+          "payload_digest",
+          "prev_hash",
+          "hash"
+        ],
+        "title": "AuditEntryResponse",
+        "type": "object"
+      },
+      "AuditListResponse": {
+        "description": "A bounded slice of the chain, oldest first.\n\n``malformed`` is True when listing stopped early because a corrupt or\ntruncated record was hit (mirroring ``/verify``); use ``/verify`` to locate\nthe break. One bad line never fails the whole listing.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AuditEntryResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "limit": {
+            "title": "Limit",
+            "type": "integer"
+          },
+          "malformed": {
+            "default": false,
+            "title": "Malformed",
+            "type": "boolean"
+          },
+          "offset": {
+            "title": "Offset",
+            "type": "integer"
+          },
+          "returned": {
+            "title": "Returned",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "offset",
+          "limit",
+          "returned"
+        ],
+        "title": "AuditListResponse",
+        "type": "object"
+      },
+      "AuditVerifyResponse": {
+        "description": "Result of walking the chain.\n\nOn a break, ``broken_kind`` and ``broken_target`` identify which kind of\nrecord failed and its ``run_id`` (kind ``run``) or ``trace_id`` (kind\n``span_batch``); ``broken_offset`` is the zero-based position usable as the\nlist endpoint's ``offset``. All are ``None`` when the chain is intact or\nwhen the broken record is too malformed to read.",
+        "properties": {
+          "broken_kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Broken Kind"
+          },
+          "broken_offset": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Broken Offset"
+          },
+          "broken_seq": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Broken Seq"
+          },
+          "broken_target": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Broken Target"
+          },
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "total_entries": {
+            "title": "Total Entries",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "ok",
+          "total_entries"
+        ],
+        "title": "AuditVerifyResponse",
+        "type": "object"
+      },
+      "BlockedToolPoint": {
+        "properties": {
+          "blocked_count": {
+            "title": "Blocked Count",
+            "type": "integer"
+          },
+          "tool_name": {
+            "title": "Tool Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tool_name",
+          "blocked_count"
+        ],
+        "title": "BlockedToolPoint",
+        "type": "object"
+      },
+      "CostMetricsResponse": {
+        "description": "Aggregated cost over a trailing window.",
+        "properties": {
+          "timeline": {
+            "items": {
+              "$ref": "#/components/schemas/CostTimeSeriesPoint"
+            },
+            "title": "Timeline",
+            "type": "array"
+          },
+          "top_agents": {
+            "items": {
+              "$ref": "#/components/schemas/AgentSpendPoint"
+            },
+            "title": "Top Agents",
+            "type": "array"
+          },
+          "total_cost": {
+            "title": "Total Cost",
+            "type": "number"
+          },
+          "trace_count": {
+            "title": "Trace Count",
+            "type": "integer"
+          },
+          "window_hours": {
+            "title": "Window Hours",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "window_hours",
+          "total_cost",
+          "trace_count",
+          "timeline",
+          "top_agents"
+        ],
+        "title": "CostMetricsResponse",
+        "type": "object"
+      },
+      "CostTimeSeriesPoint": {
+        "properties": {
+          "bucket": {
+            "format": "date-time",
+            "title": "Bucket",
+            "type": "string"
+          },
+          "cost": {
+            "title": "Cost",
+            "type": "number"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          }
+        },
+        "required": [
+          "bucket",
+          "model",
+          "cost"
+        ],
+        "title": "CostTimeSeriesPoint",
+        "type": "object"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "HealthResponse": {
+        "description": "Payload returned by the liveness endpoint.",
+        "properties": {
+          "service": {
+            "title": "Service",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "service",
+          "version"
+        ],
+        "title": "HealthResponse",
+        "type": "object"
+      },
+      "LatencyHistogramBin": {
+        "properties": {
+          "bin_max": {
+            "title": "Bin Max",
+            "type": "number"
+          },
+          "bin_min": {
+            "title": "Bin Min",
+            "type": "number"
+          },
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "bin_min",
+          "bin_max",
+          "count"
+        ],
+        "title": "LatencyHistogramBin",
+        "type": "object"
+      },
+      "LatencyMetricsResponse": {
+        "description": "Aggregated root-span latency over a trailing window.",
+        "properties": {
+          "avg_latency_ms": {
+            "title": "Avg Latency Ms",
+            "type": "number"
+          },
+          "histogram": {
+            "items": {
+              "$ref": "#/components/schemas/LatencyHistogramBin"
+            },
+            "title": "Histogram",
+            "type": "array"
+          },
+          "p95_latency_ms": {
+            "title": "P95 Latency Ms",
+            "type": "number"
+          },
+          "percentiles": {
+            "$ref": "#/components/schemas/LatencyPercentiles"
+          },
+          "trace_count": {
+            "title": "Trace Count",
+            "type": "integer"
+          },
+          "window_hours": {
+            "title": "Window Hours",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "window_hours",
+          "avg_latency_ms",
+          "p95_latency_ms",
+          "trace_count",
+          "percentiles",
+          "histogram"
+        ],
+        "title": "LatencyMetricsResponse",
+        "type": "object"
+      },
+      "LatencyPercentiles": {
+        "properties": {
+          "p50": {
+            "title": "P50",
+            "type": "number"
+          },
+          "p95": {
+            "title": "P95",
+            "type": "number"
+          },
+          "p99": {
+            "title": "P99",
+            "type": "number"
+          }
+        },
+        "required": [
+          "p50",
+          "p95",
+          "p99"
+        ],
+        "title": "LatencyPercentiles",
+        "type": "object"
+      },
+      "PolicyCreate": {
+        "description": "Request body for ``POST /api/v1/policies``.",
+        "properties": {
+          "created_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created By"
+          },
+          "id": {
+            "pattern": "^[a-zA-Z0-9_-]+$",
+            "title": "Id",
+            "type": "string"
+          },
+          "rules": {
+            "items": {
+              "$ref": "#/components/schemas/PolicyRule"
+            },
+            "maxItems": 1000,
+            "title": "Rules",
+            "type": "array"
+          },
+          "status": {
+            "default": "draft",
+            "enum": [
+              "active",
+              "draft",
+              "archived"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "rules"
+        ],
+        "title": "PolicyCreate",
+        "type": "object"
+      },
+      "PolicyListResponse": {
+        "properties": {
+          "policies": {
+            "items": {
+              "$ref": "#/components/schemas/PolicySummary"
+            },
+            "title": "Policies",
+            "type": "array"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "policies",
+          "total"
+        ],
+        "title": "PolicyListResponse",
+        "type": "object"
+      },
+      "PolicyResponse": {
+        "description": "A stored policy version plus the hash addressing its blob.",
+        "properties": {
+          "content_hash": {
+            "title": "Content Hash",
+            "type": "string"
+          },
+          "created_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created By"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "rules": {
+            "items": {
+              "$ref": "#/components/schemas/PolicyRule"
+            },
+            "title": "Rules",
+            "type": "array"
+          },
+          "status": {
+            "enum": [
+              "active",
+              "draft",
+              "archived"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "version",
+          "status",
+          "rules",
+          "content_hash"
+        ],
+        "title": "PolicyResponse",
+        "type": "object"
+      },
+      "PolicyRule": {
+        "description": "Single enforcement rule; mirrors the SDK parser schema.",
+        "properties": {
+          "action": {
+            "enum": [
+              "block",
+              "alert",
+              "ok"
+            ],
+            "title": "Action",
+            "type": "string"
+          },
+          "condition": {
+            "$ref": "#/components/schemas/RuleCondition"
+          },
+          "enforcement": {
+            "default": "strict",
+            "title": "Enforcement",
+            "type": "string"
+          },
+          "id": {
+            "pattern": "^[a-zA-Z0-9_-]+$",
+            "title": "Id",
+            "type": "string"
+          },
+          "trigger": {
+            "title": "Trigger",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "trigger",
+          "condition",
+          "action"
+        ],
+        "title": "PolicyRule",
+        "type": "object"
+      },
+      "PolicySummary": {
+        "description": "Manifest-level view of one policy; no blob reads required.",
+        "properties": {
+          "active_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Active Version"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "latest_version": {
+            "title": "Latest Version",
+            "type": "integer"
+          },
+          "status": {
+            "enum": [
+              "active",
+              "draft",
+              "archived"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "latest_version"
+        ],
+        "title": "PolicySummary",
+        "type": "object"
+      },
+      "PolicyUpdate": {
+        "description": "Request body for ``PUT /api/v1/policies/{id}`` (creates version n+1).",
+        "properties": {
+          "created_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created By"
+          },
+          "rules": {
+            "items": {
+              "$ref": "#/components/schemas/PolicyRule"
+            },
+            "maxItems": 1000,
+            "title": "Rules",
+            "type": "array"
+          },
+          "status": {
+            "enum": [
+              "active",
+              "draft",
+              "archived"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "rules"
+        ],
+        "title": "PolicyUpdate",
+        "type": "object"
+      },
+      "PolicyValidateRequest": {
+        "description": "Request body for ``POST /api/v1/policies/validate`` (dry-run).",
+        "properties": {
+          "yaml": {
+            "maxLength": 1000000,
+            "title": "Yaml",
+            "type": "string"
+          }
+        },
+        "required": [
+          "yaml"
+        ],
+        "title": "PolicyValidateRequest",
+        "type": "object"
+      },
+      "PolicyValidateResponse": {
+        "description": "Response body for ``POST /api/v1/policies/validate`` (dry-run).",
+        "properties": {
+          "errors": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Errors",
+            "type": "array"
+          },
+          "policy": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Policy"
+          },
+          "valid": {
+            "title": "Valid",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "valid",
+          "errors"
+        ],
+        "title": "PolicyValidateResponse",
+        "type": "object"
+      },
+      "ReadinessResponse": {
+        "description": "Payload returned by the readiness endpoint.",
+        "properties": {
+          "checks": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Checks",
+            "type": "object"
+          },
+          "service": {
+            "title": "Service",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "service",
+          "version",
+          "checks"
+        ],
+        "title": "ReadinessResponse",
+        "type": "object"
+      },
+      "RuleCondition": {
+        "description": "Single comparison inside a rule; mirrors the SDK parser schema.",
+        "properties": {
+          "metric": {
+            "title": "Metric",
+            "type": "string"
+          },
+          "operator": {
+            "enum": [
+              "eq",
+              "neq",
+              "gt",
+              "gte",
+              "lt",
+              "lte",
+              "contains",
+              "in"
+            ],
+            "title": "Operator",
+            "type": "string"
+          },
+          "threshold": {
+            "title": "Threshold"
+          }
+        },
+        "required": [
+          "metric",
+          "operator",
+          "threshold"
+        ],
+        "title": "RuleCondition",
+        "type": "object"
+      },
+      "RunDetail": {
+        "additionalProperties": true,
+        "description": "Full run record returned by the run-detail endpoints (COL-13).\n\nThe promoted columns are typed for the generated client; the original\n``AgentRunMetrics`` payload carries more (prompt, final output, per-tool\ndetail, per-call tokens, policy violations), so ``extra=\"allow\"`` keeps\nthem on the response. The handler returns the stored blob bytes verbatim\nwhen present, falling back to this projection of the index row otherwise.",
+        "properties": {
+          "agent_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Name"
+          },
+          "agent_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Version"
+          },
+          "cost_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost Usd"
+          },
+          "duration_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration Seconds"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "success": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Success"
+          },
+          "timestamp": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timestamp"
+          },
+          "tokens": {
+            "additionalProperties": true,
+            "default": {},
+            "title": "Tokens",
+            "type": "object"
+          },
+          "trace_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trace Id"
+          }
+        },
+        "required": [
+          "run_id"
+        ],
+        "title": "RunDetail",
+        "type": "object"
+      },
+      "RunListResponse": {
+        "description": "Paginated payload returned by ``GET /api/v1/runs``.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/RunSummary"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "page": {
+            "title": "Page",
+            "type": "integer"
+          },
+          "page_size": {
+            "title": "Page Size",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total",
+          "page",
+          "page_size"
+        ],
+        "title": "RunListResponse",
+        "type": "object"
+      },
+      "RunRecordIn": {
+        "additionalProperties": true,
+        "description": "A single ``AgentRunMetrics``-shaped run record.\n\nMirrors :meth:`argox.core.state.AgentRunMetrics.to_dict`. Only ``run_id``\nis required; everything else defaults so partial records still index. The\nCollector does not scrub content (PII redaction is the SDK's job) and\npreserves unknown fields on the immutable blob via ``extra=\"allow\"``.\n\n``trace_id`` is optional and top-level: the SDK exporter (EXP-09) sets it\nso the Query API can join a span back to its run. ``cost_usd`` is left\nunset at ingest and backfilled from ``model`` and the token totals\n(COL-17).",
+        "properties": {
+          "agent_name": {
+            "default": "",
+            "title": "Agent Name",
+            "type": "string"
+          },
+          "agent_version": {
+            "default": "",
+            "title": "Agent Version",
+            "type": "string"
+          },
+          "cost_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost Usd"
+          },
+          "duration_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration Seconds"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "success": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Success"
+          },
+          "timestamp": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timestamp"
+          },
+          "tokens": {
+            "$ref": "#/components/schemas/RunTokens"
+          },
+          "trace_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trace Id"
+          }
+        },
+        "required": [
+          "run_id"
+        ],
+        "title": "RunRecordIn",
+        "type": "object"
+      },
+      "RunSummary": {
+        "description": "Lightweight, per-run row for the dashboard list view (COL-13).\n\nThe flat index projection only: ``prompt`` and ``final_output`` live on\nthe blob and are deliberately excluded so a list response stays bounded\nregardless of run size. ``blob_path`` is an internal storage key and is\nnot exposed.",
+        "properties": {
+          "agent_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Name"
+          },
+          "agent_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Version"
+          },
+          "cost_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost Usd"
+          },
+          "duration_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration Seconds"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "success": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Success"
+          },
+          "timestamp": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timestamp"
+          },
+          "total_input_tokens": {
+            "default": 0,
+            "title": "Total Input Tokens",
+            "type": "integer"
+          },
+          "total_output_tokens": {
+            "default": 0,
+            "title": "Total Output Tokens",
+            "type": "integer"
+          },
+          "trace_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trace Id"
+          }
+        },
+        "required": [
+          "run_id"
+        ],
+        "title": "RunSummary",
+        "type": "object"
+      },
+      "RunTokens": {
+        "additionalProperties": true,
+        "description": "Token totals carried by a run record.\n\nExtra keys (e.g. ``total`` or ``by_api_call``) are preserved on the blob\nbut ignored by the index, which only promotes the input/output totals.",
+        "properties": {
+          "input": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Input",
+            "type": "integer"
+          },
+          "output": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Output",
+            "type": "integer"
+          }
+        },
+        "title": "RunTokens",
+        "type": "object"
+      },
+      "SpanDetail": {
+        "description": "One span inside a trace waterfall.",
+        "properties": {
+          "agent_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Name"
+          },
+          "agent_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Version"
+          },
+          "attributes": {
+            "additionalProperties": true,
+            "default": {},
+            "title": "Attributes",
+            "type": "object"
+          },
+          "duration_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration Ms"
+          },
+          "end_time": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "End Time"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "parent_span_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Span Id"
+          },
+          "policy_decision": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Policy Decision"
+          },
+          "run_cost": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Cost"
+          },
+          "run_success": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Success"
+          },
+          "span_id": {
+            "title": "Span Id",
+            "type": "string"
+          },
+          "start_time": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Start Time"
+          }
+        },
+        "required": [
+          "span_id"
+        ],
+        "title": "SpanDetail",
+        "type": "object"
+      },
+      "SuccessMetricsResponse": {
+        "description": "Aggregated run success rate over a trailing window.\n\n``success_rate`` is ``None`` when no runs reported an outcome inside the\nwindow, so an idle deployment is distinguishable from a failing one.",
+        "properties": {
+          "success_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Success Rate"
+          },
+          "successful_runs": {
+            "title": "Successful Runs",
+            "type": "integer"
+          },
+          "timeline": {
+            "items": {
+              "$ref": "#/components/schemas/SuccessTimeSeriesPoint"
+            },
+            "title": "Timeline",
+            "type": "array"
+          },
+          "top_blocked_tools": {
+            "items": {
+              "$ref": "#/components/schemas/BlockedToolPoint"
+            },
+            "title": "Top Blocked Tools",
+            "type": "array"
+          },
+          "total_runs": {
+            "title": "Total Runs",
+            "type": "integer"
+          },
+          "window_hours": {
+            "title": "Window Hours",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "window_hours",
+          "total_runs",
+          "successful_runs",
+          "timeline",
+          "top_blocked_tools"
+        ],
+        "title": "SuccessMetricsResponse",
+        "type": "object"
+      },
+      "SuccessTimeSeriesPoint": {
+        "properties": {
+          "bucket": {
+            "format": "date-time",
+            "title": "Bucket",
+            "type": "string"
+          },
+          "success_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Success Rate"
+          },
+          "successful_runs": {
+            "title": "Successful Runs",
+            "type": "integer"
+          },
+          "total_runs": {
+            "title": "Total Runs",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "bucket",
+          "total_runs",
+          "successful_runs"
+        ],
+        "title": "SuccessTimeSeriesPoint",
+        "type": "object"
+      },
+      "TraceDetailResponse": {
+        "description": "Full span waterfall returned by ``GET /api/v1/traces/{trace_id}``.\n\n``truncated`` is True when the trace exceeded the index's per-trace span\nceiling and ``spans`` was cut to keep the response bounded.",
+        "properties": {
+          "duration_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration Ms"
+          },
+          "spans": {
+            "items": {
+              "$ref": "#/components/schemas/SpanDetail"
+            },
+            "title": "Spans",
+            "type": "array"
+          },
+          "trace_id": {
+            "title": "Trace Id",
+            "type": "string"
+          },
+          "truncated": {
+            "default": false,
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "trace_id",
+          "spans"
+        ],
+        "title": "TraceDetailResponse",
+        "type": "object"
+      },
+      "TraceListResponse": {
+        "description": "Paginated payload returned by ``GET /api/v1/traces``.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/TraceSummary"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "limit": {
+            "title": "Limit",
+            "type": "integer"
+          },
+          "skip": {
+            "title": "Skip",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total",
+          "skip",
+          "limit"
+        ],
+        "title": "TraceListResponse",
+        "type": "object"
+      },
+      "TraceSummary": {
+        "description": "Aggregated, per-trace row for the dashboard list view.",
+        "properties": {
+          "agent_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Name"
+          },
+          "agent_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Version"
+          },
+          "decision": {
+            "title": "Decision",
+            "type": "string"
+          },
+          "end_time": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "End Time"
+          },
+          "span_count": {
+            "title": "Span Count",
+            "type": "integer"
+          },
+          "start_time": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Start Time"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "total_cost": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total Cost"
+          },
+          "total_duration_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total Duration Ms"
+          },
+          "trace_id": {
+            "title": "Trace Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "trace_id",
+          "span_count",
+          "status",
+          "decision"
+        ],
+        "title": "TraceSummary",
+        "type": "object"
+      },
+      "ValidationError": {
+        "properties": {
+          "ctx": {
+            "title": "Context",
+            "type": "object"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Error Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError",
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "description": "Server-side ingestion, indexing and policy distribution service for the Argox observability platform.",
+    "title": "Argox Collector",
+    "version": "0.1.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/api/v1/audit": {
+      "get": {
+        "description": "Return up to ``limit`` entries in sequence order, starting at ``offset``.\n\n``offset`` is a zero-based entry index so the whole log can be paged\nthrough, not only its first ``limit`` entries. A corrupt record stops the\nlisting with ``malformed=True`` instead of raising a 500 (mirroring\n``/verify``).",
+        "operationId": "list_entries",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 1000,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuditListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List audit entries",
+        "tags": [
+          "audit"
+        ]
+      },
+      "post": {
+        "description": "Append an event to the audit log and return the sealed entry.\n\n``actor`` is the authenticated principal, not a client-supplied value.",
+        "operationId": "append_entry",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AuditAppendRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuditEntryResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Append an audit entry",
+        "tags": [
+          "audit"
+        ]
+      }
+    },
+    "/api/v1/audit/verify": {
+      "get": {
+        "description": "Walk the hash chain and report the first broken link, if any.",
+        "operationId": "verify_chain",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuditVerifyResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Verify the audit hash chain",
+        "tags": [
+          "audit"
+        ]
+      }
+    },
+    "/api/v1/keys": {
+      "get": {
+        "description": "List every key's non-secret metadata, newest first.",
+        "operationId": "list_keys",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiKeyListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List API keys",
+        "tags": [
+          "keys"
+        ]
+      },
+      "post": {
+        "description": "Mint a new API key and return its raw secret once.",
+        "operationId": "create_key",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApiKeyCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiKeyCreateResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create an API key",
+        "tags": [
+          "keys"
+        ]
+      }
+    },
+    "/api/v1/keys/{key_id}": {
+      "delete": {
+        "description": "Revoke a key. Idempotent: revoking an unknown/already-revoked key is 404.",
+        "operationId": "revoke_key",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key_id",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "title": "Key Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Key revoked (no body)."
+          },
+          "404": {
+            "description": "No active key with that id."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Revoke an API key",
+        "tags": [
+          "keys"
+        ]
+      }
+    },
+    "/api/v1/metrics/cost": {
+      "get": {
+        "description": "Total run cost (USD) over the trailing window.",
+        "operationId": "get_metrics_cost",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "window_hours",
+            "required": false,
+            "schema": {
+              "default": 24,
+              "maximum": 720,
+              "minimum": 1,
+              "title": "Window Hours",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CostMetricsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Cost metrics",
+        "tags": [
+          "query"
+        ]
+      }
+    },
+    "/api/v1/metrics/latency": {
+      "get": {
+        "description": "Average and p95 root-span latency over the trailing window.",
+        "operationId": "get_metrics_latency",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "window_hours",
+            "required": false,
+            "schema": {
+              "default": 24,
+              "maximum": 720,
+              "minimum": 1,
+              "title": "Window Hours",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LatencyMetricsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Latency metrics",
+        "tags": [
+          "query"
+        ]
+      }
+    },
+    "/api/v1/metrics/success": {
+      "get": {
+        "description": "Run success rate over the trailing window.",
+        "operationId": "get_metrics_success",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "window_hours",
+            "required": false,
+            "schema": {
+              "default": 24,
+              "maximum": 720,
+              "minimum": 1,
+              "title": "Window Hours",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SuccessMetricsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Success rate metrics",
+        "tags": [
+          "query"
+        ]
+      }
+    },
+    "/api/v1/policies": {
+      "get": {
+        "description": "List policy summaries straight from the manifest, sorted by id.\n\nSorting makes pagination deterministic regardless of manifest insertion\norder, and serving from the manifest alone keeps the endpoint O(1) blob\nreads no matter how many policies exist.",
+        "operationId": "list_policies",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "skip",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Skip",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PolicyListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List policies",
+        "tags": [
+          "policies"
+        ]
+      },
+      "post": {
+        "description": "Create a new policy as version 1.",
+        "operationId": "create_policy",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PolicyCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PolicyResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create a policy",
+        "tags": [
+          "policies"
+        ]
+      }
+    },
+    "/api/v1/policies/bundle": {
+      "get": {
+        "description": "Merge the rules of every active policy into one SDK-consumable YAML.\n\nThe response is a valid ``PolicyDocument`` for the SDK parser. The ETag\nis the SHA-256 of the YAML body, so it only changes when the effective\nrule set changes; ``If-None-Match`` hits answer ``304``. This handler\nnever writes \u2014 GET stays idempotent and proxy-cacheable.",
+        "operationId": "get_bundle",
+        "responses": {
+          "200": {
+            "content": {
+              "application/yaml": {}
+            },
+            "description": "Merged PolicyDocument for the SDK parser."
+          },
+          "304": {
+            "description": "Bundle unchanged (If-None-Match matched)."
+          }
+        },
+        "summary": "Merged policy bundle (YAML)",
+        "tags": [
+          "policies"
+        ]
+      }
+    },
+    "/api/v1/policies/validate": {
+      "post": {
+        "description": "Validate policy YAML content against the policy schema without persisting.",
+        "operationId": "validate_policy",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PolicyValidateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PolicyValidateResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Validate policy YAML (dry-run)",
+        "tags": [
+          "policies"
+        ]
+      }
+    },
+    "/api/v1/policies/{policy_id}": {
+      "delete": {
+        "description": "Archive a policy by committing a new ``archived`` version.\n\nHistory is preserved \u2014 nothing is deleted. Archiving an already-archived\npolicy is idempotent: it returns the current head without writing a new\nversion, keeping the response shape identical to the first call.",
+        "operationId": "archive_policy",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "policy_id",
+            "required": true,
+            "schema": {
+              "pattern": "^[a-zA-Z0-9_-]+$",
+              "title": "Policy Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PolicyResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Archive a policy",
+        "tags": [
+          "policies"
+        ]
+      },
+      "get": {
+        "description": "Return the active version of a policy.\n\nA policy without an active version (draft or archived) is 404: clients\nmust never mistake a retired document for an enforceable one.",
+        "operationId": "get_active_policy",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "policy_id",
+            "required": true,
+            "schema": {
+              "pattern": "^[a-zA-Z0-9_-]+$",
+              "title": "Policy Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PolicyResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get active policy",
+        "tags": [
+          "policies"
+        ]
+      },
+      "put": {
+        "description": "Create version n+1 of an existing policy.\n\nThe version number is taken from the manifest read inside the CAS cycle,\nso two concurrent updates can never both commit the same number: the\nloser's manifest write fails and it retries against the new state.",
+        "operationId": "update_policy",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "policy_id",
+            "required": true,
+            "schema": {
+              "pattern": "^[a-zA-Z0-9_-]+$",
+              "title": "Policy Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PolicyUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PolicyResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update a policy",
+        "tags": [
+          "policies"
+        ]
+      }
+    },
+    "/api/v1/policies/{policy_id}/v{version}": {
+      "get": {
+        "description": "Return one specific committed version of a policy.\n\nThe lookup goes through the manifest, so blobs that were written but\nnever committed (lost CAS races) are not reachable here.",
+        "operationId": "get_policy_version",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "policy_id",
+            "required": true,
+            "schema": {
+              "pattern": "^[a-zA-Z0-9_-]+$",
+              "title": "Policy Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "version",
+            "required": true,
+            "schema": {
+              "minimum": 1,
+              "title": "Version",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PolicyResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get a specific policy version",
+        "tags": [
+          "policies"
+        ]
+      }
+    },
+    "/api/v1/runs": {
+      "get": {
+        "description": "List run summaries, newest first, with optional filters.\n\nRows are lightweight (no ``prompt``/``final_output``); ``from``/``to``\nbound the collector ingest time as a half-open ``[from, to)`` interval.",
+        "operationId": "list_runs",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "agent",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Agent"
+            }
+          },
+          {
+            "in": "query",
+            "name": "success",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Success"
+            }
+          },
+          {
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "From"
+            }
+          },
+          {
+            "in": "query",
+            "name": "to",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "To"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "minimum": 1,
+              "title": "Page",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page_size",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 1000,
+              "minimum": 1,
+              "title": "Page Size",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List runs",
+        "tags": [
+          "query"
+        ]
+      }
+    },
+    "/api/v1/runs/by-trace/{trace_id}": {
+      "get": {
+        "description": "Return the run record joined from a span's ``trace_id``.\n\nReturns 404 when no run was exported for the trace (the SDK's\n``HttpRunExporter`` was not wired), so a span without a run is\ndistinguishable from a missing trace.",
+        "operationId": "get_run_by_trace",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "trace_id",
+            "required": true,
+            "schema": {
+              "title": "Trace Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunDetail"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "description": "Run not found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get run detail by trace id",
+        "tags": [
+          "query"
+        ]
+      }
+    },
+    "/api/v1/runs/{run_id}": {
+      "get": {
+        "description": "Return the full run record for ``run_id`` (byte-equivalent blob).",
+        "operationId": "get_run",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunDetail"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "description": "Run not found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get run detail",
+        "tags": [
+          "query"
+        ]
+      }
+    },
+    "/api/v1/traces": {
+      "get": {
+        "description": "List trace summaries, newest first.",
+        "operationId": "list_traces",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "skip",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Skip",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 1000,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "trace_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Trace Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "agent_name",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Agent Name"
+            }
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "pattern": "^(ok|error)$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "in": "query",
+            "name": "decision",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "pattern": "^(allow|block|warn)$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Decision"
+            }
+          },
+          {
+            "in": "query",
+            "name": "sort",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "pattern": "^(cost|duration|spans|start_time):(asc|desc)$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Sort"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_hours",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 720,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Window Hours"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List traces",
+        "tags": [
+          "query"
+        ]
+      }
+    },
+    "/api/v1/traces/{trace_id}": {
+      "get": {
+        "description": "Return the full span waterfall of one trace.",
+        "operationId": "get_trace",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "trace_id",
+            "required": true,
+            "schema": {
+              "title": "Trace Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceDetailResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get trace detail",
+        "tags": [
+          "query"
+        ]
+      }
+    },
+    "/healthz": {
+      "get": {
+        "description": "Return ``ok`` when the process is alive and serving requests.",
+        "operationId": "healthz",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Liveness probe",
+        "tags": [
+          "health"
+        ]
+      }
+    },
+    "/readyz": {
+      "get": {
+        "description": "Report whether the service is ready to accept traffic.\n\nProbes the configured storage backend so orchestrators can drop the\nreplica from rotation when the blob layer is unreachable. Returns\n``503`` (still with the structured ``checks`` payload) on degradation\nso standard readiness probes react without parsing the body.\nAudit log checks will be added in later COL-* tickets.\n\nDeclared as a synchronous handler so FastAPI runs it in the thread\npool: the storage health check performs blocking network I/O on the\nAzure driver and would otherwise stall the event loop.",
+        "operationId": "readyz",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadinessResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadinessResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Readiness probe",
+        "tags": [
+          "health"
+        ]
+      }
+    },
+    "/v1/runs": {
+      "post": {
+        "description": "Accept one or a batch of run records and persist them.\n\nValidates the payload synchronously, then either delegates persistence to\na background task (``202``) or, when ``X-Argox-Durable: true`` is set, runs\nit in the threadpool and returns ``200`` only once committed.",
+        "operationId": "ingest_runs",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/RunRecordIn"
+                  },
+                  {
+                    "items": {
+                      "$ref": "#/components/schemas/RunRecordIn"
+                    },
+                    "type": "array"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Run record(s) persisted synchronously (sent with X-Argox-Durable: true)."
+          },
+          "202": {
+            "description": "Run record(s) accepted for asynchronous persistence."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "description": "Durable persistence failed; the batch was not committed."
+          }
+        },
+        "summary": "Agent run-summary ingest",
+        "tags": [
+          "runs"
+        ]
+      }
+    },
+    "/v1/traces": {
+      "post": {
+        "description": "Accept an OTLP ``ExportTraceServiceRequest`` and persist its spans.\n\nValidates the batch synchronously, then delegates the blob write and index\ninsert to a background task and returns ``202 Accepted``. When the request\ncarries ``X-Argox-Durable: true`` the persistence runs synchronously and the\nendpoint returns ``200 OK`` only once the data is committed.",
+        "operationId": "ingest_traces",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {},
+              "application/x-protobuf": {}
+            },
+            "description": "OTLP ExportTraceServiceResponse. Serialized as protobuf or JSON to match the request Content-Type."
+          },
+          "415": {
+            "description": "Unsupported Content-Type."
+          }
+        },
+        "summary": "OTLP/HTTP trace ingest",
+        "tags": [
+          "traces"
+        ]
+      }
+    }
+  }
+}

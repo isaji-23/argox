@@ -8,6 +8,162 @@ and resolves a non-trivial error.
 
 <!-- Add new entries directly below this line, newest first. -->
 
+## 2026-06-28 — Trace detail shows no Model/Cost and misses blocked tools  [CORE-10]
+- **Symptom:** after the dashboard was replaced with the redesigned SPA
+  (`fb96ba7`), trace detail showed Model and Cost as "—" and counted zero policy
+  blocks for tool blocks, even though the same data appeared before.
+- **Root cause:** the new SPA reads `run.model` / `run.cost_usd` from the run
+  record and derives blocks from `spans.policy_decision = 'block'`. Two SDK gaps
+  the old UI had papered over: (1) `AgentRunMetrics` never carried a `model`
+  field, so the `/v1/runs` payload had `model = null` and `enrich_run_cost` left
+  `cost_usd` NULL; the model only ever lived on the span as
+  `gen_ai.request.model`. (2) A policy-blocked tool is stripped before the run,
+  so it never emits an `execute_tool` span; the block was recorded only as a
+  metric counter and the root span's `argox.run.blocked_tools` attribute, neither
+  of which the span-based UI/metrics read.
+- **Fix:** add `model` to `AgentRunMetrics` + `to_dict`, mirror it from the
+  plugin (`metrics.model = model`) so the run record carries it and cost
+  backfills. Emit a zero-duration `execute_tool {name}` child span with
+  `argox.policy.decision=block` for each blocked tool, so both the trace
+  waterfall and `top_blocked_tools` (`spans WHERE policy_decision='block'`)
+  surface it.
+- **Guard:** `test_run_root_attributes.py` asserts the blocked-tool span +
+  decision attribute; `test_core_data_model.py` and `test_plugin_openai.py`
+  assert `model` flows into `to_dict` and `metrics.model`.
+
+## 2026-06-27 — Policy `alert` action had no observable effect  [POL-06]
+- **Symptom:** policies with `action: alert` did nothing — no violation in the
+  run record, no `alert` decision metric, no flag in the dashboard or the local
+  demo front. Only `block` rules ever showed up.
+- **Root cause:** `PolicyCache.evaluate` correctly returned
+  `PolicyResult.alert(...)`, which is `passed=True` with a `rule_id`. But
+  `ArgoxManager.run` branched only on `not result.passed` (the block path), so
+  alert results fell through to the `decision="ok"` branch and were discarded at
+  all three stages (input, tool filter, output).
+- **Fix:** in `core/manager.py`, after the block check, add an
+  `elif result.rule_id:` branch that appends the reason to
+  `metrics.policy_violations` and emits `record_policy_decision(decision=
+  "alert", ...)` without raising. Tools alerted this way stay in
+  `tools_available`. `PolicyResult.ok()` has an empty `rule_id`, so clean runs
+  are unaffected.
+- **Guard:** `test_manager.py::TestPolicy` gains alert-path cases for input,
+  output, and tool that assert the violation is recorded, the pass flags stay
+  `True`, and the run still succeeds.
+
+## 2026-06-25 — Dashboard Policies screen 401 under Collector auth  [DASH-07]
+- **Symptom:** `GET /api/v1/policies` returned `401 ()` in the deployed
+  dashboard while traces/runs/metrics loaded fine with the same key. Worked only
+  with auth disabled.
+- **Root cause:** the policy methods in `argox-dashboard/src/lib/api.ts` used a
+  bare `fetch()` with no `Authorization` header — unlike `apiFetch`, which all
+  other reads go through. No credential reached the Collector, so it was a 401
+  (missing credential), not a 403 (scope). A second, distinct gap: `policy-read`
+  is its own scope, separate from `read`, and the demo key was minted without it.
+- **Fix:** route every policy read/write through a new `policyFetch` wrapper that
+  attaches the stored read key (and supports bodies, a custom `Accept`, and the
+  401/403 handling). Mint the demo key with `policy-read` in `demo.sh`.
+- **Guard:** `pnpm run build` type-checks the client; the wrapper is the single
+  auth-bearing path so a future policy call cannot silently drop the header.
+
+## 2026-06-25 — Run Record always "No run record available" / by-trace 404  [EXP-10]
+- **Symptom:** `GET /api/v1/runs/by-trace/<trace_id>` returned `404 (Not Found)`
+  for every trace, including freshly ingested ones; the dashboard Run Record
+  panel showed "No run record available — Wire HttpRunExporter…". Worked with
+  the local Collector when auth was disabled, which masked the real cause.
+- **Root cause:** the Collector resolves by-trace purely on `runs.trace_id`
+  (`SELECT … FROM runs WHERE trace_id = ?`), but the run payload never carried a
+  trace id. `AgentRunMetrics` had no `trace_id` field and `to_dict()` omitted it,
+  so `HttpRunExporter` POSTed runs with `trace_id = NULL` — stored unlinked,
+  never matched. The "SDK exporter sets it" assumption in the runs router was
+  never fulfilled.
+- **Fix:** stamp `metrics.trace_id` in `ArgoxManager.run` from the active
+  `argox.agent.run` root span (`format(span.get_span_context().trace_id,
+  "032x")`, guarded against a zero id) and serialize it in `to_dict()`. Same
+  32-hex lowercase id the OTLP span exporter ships, so it joins.
+- **Guard:** `tests/test_run_root_attributes.py::test_run_metrics_trace_id_matches_span`
+  asserts the run's `trace_id` equals its span's and round-trips through
+  `to_dict()`.
+
+## 2026-06-24 — Collector image missing argox-core; charts show "No data"  [COL-20]
+- **Symptom:** Dashboard metrics charts all rendered "No data within this
+  window" while KPI cards still showed values. The deployed collector's
+  `/api/v1/metrics/cost` returned `{window_hours, total_cost, trace_count}` with
+  no `timeline`/`top_agents`, so the frontend's `?? []` guards produced empty
+  charts. Rebuilding the collector from current `dev` and rolling it out made the
+  Azure Container Apps revision Unhealthy; logs showed
+  `ModuleNotFoundError: No module named 'argox'` at
+  `routers/policies.py:41` (`from argox.policies.parser import PolicyParser`).
+- **Root cause:** The collector imports the sibling `argox-core` package but
+  never declared it as a dependency, and the Docker build context was the
+  `argox-collector/` subdirectory only, so `argox-core` never entered the image.
+  The previously deployed image worked solely because it predated both the import
+  and the metrics timeline fields. A second failure surfaced during recovery:
+  with DuckDB on Azure Files (single writer), a new collector revision could not
+  acquire the index lock until the old revision was deactivated.
+- **Fix:** PR #178 — declared `argox-core>=0.1.0` in the collector's
+  dependencies; build from the `argox-project/` parent context and install
+  `argox-core` before `argox-collector[azure]`; pointed `COLLECTOR_CTX` at the
+  parent and addressed the Dockerfile with `-f` in `deploy.sh` and `update.sh`.
+  Immediate production recovery: rolled the collector back to the last working
+  tag, then deactivated the stale revision to release the DuckDB lock.
+- **Guard:** `tests/test_app_import.py` imports `argox.policies.parser` and
+  `argox_collector.app`, failing the suite if `argox-core` is missing from the
+  environment before any image is built.
+
+## 2026-06-10 — NaN attribute values poison metrics and silently drop spans  [COL-04]
+- **Symptom:** Two failure modes found by audit, not in production: (1) an OTLP
+  double attribute carrying NaN (or a string `"nan"`) lands in `run_cost`, after
+  which `SUM(run_cost)` returns NaN and the `/api/v1/metrics/*` response fails
+  to JSON-encode (starlette serialises with `allow_nan=False`) → 500. (2) A NaN
+  inside the span `attributes` dict makes `json.dumps` emit a bare `NaN`
+  literal, which DuckDB's JSON column parser rejects at insert — the per-row
+  fallback then skips the row, so the span vanishes without any client error.
+- **Root cause:** `float("nan")` passes `float()` coercion and `json.dumps`
+  by default (`allow_nan=True` produces JSON-invalid output); nothing in the
+  ingest → index path checked finiteness. Additionally, attribute
+  serialisation ran during batch preparation, *before* the
+  `executemany`/per-row fallback, so a non-serializable attribute raised
+  `TypeError` and lost the entire batch with no row ever written.
+- **Fix:** PR #131 — `math.isfinite` guards in `_as_float` (ingest) and
+  `_finite_or_none` (index write path); `_encode_attributes` serialises with
+  `allow_nan=False` and degrades bad values to strings via `_json_safe`;
+  cost/latency aggregates filter `isfinite(...)` to neutralise rows written
+  before the fix.
+- **Guard:** `tests/test_index.py` (NaN attributes keep the row, non-finite
+  doubles stored as NULL, metrics ignore poisoned rows, unserializable
+  attributes don't drop the batch) and `tests/test_otlp_ingest.py`
+  (non-finite `argox.run.cost` dropped at ingest).
+
+## 2026-06-10 — OTel sidecar exports dropped: Collector rejects gzip bodies  [DEPLOY-01]
+- **Symptom:** OTel collector sidecar logs `Exporting failed. Dropping data. ... request to http://collector:8000/v1/traces responded with HTTP Status Code 400` while its own debug exporter shows the spans arriving fine; nothing reaches the Argox Collector.
+- **Root cause:** The `otlphttp` exporter compresses request bodies with gzip by default. The Collector's ingest endpoint parses the raw body as protobuf/JSON and does not decompress `Content-Encoding: gzip`, so the payload is malformed from its point of view → 400.
+- **Fix:** `compression: none` on the `otlphttp` exporter in `deploy/docker/otel/otel-collector-config.yaml`.
+- **Guard:** Comment next to the exporter config. Real fix would be gzip support on the ingest endpoint (many OTLP SDK exporters default to gzip) — open follow-up against COL-03.
+
+## 2026-06-10 — Azurite rejects azure-storage-blob requests: API version not supported  [DEPLOY-01]
+- **Symptom:** Collector `/readyz` degraded with `The API version 2026-06-06 is not supported by Azurite. Please upgrade Azurite to latest version and retry. ... ErrorCode:InvalidHeaderValue`.
+- **Root cause:** The `azure-storage-blob` version installed in the Collector image requests a service API version newer than the latest Azurite release understands. Azurite validates the `x-ms-version` header strictly by default.
+- **Fix:** Run Azurite with `--skipApiVersionCheck` (compose `command`). Documented workaround in the Azurite error message itself.
+- **Guard:** Flag is part of `deploy/docker/compose.yaml` with an explanatory comment; will recur for any new Azurite consumer that omits it.
+
+## 2026-06-10 — OTLP/JSON trace IDs: hex (spec) vs base64 (protobuf JSON mapping)  [DEPLOY-01]
+- **Symptom:** Posting `deploy/docker/seed/trace.json` to the OTel collector sidecar fails with `readSpan.traceId: parse trace_id:invalid length for ID ... "traceId": "AQIDBAUGBwgJCgsMDQ4PEA=="` — yet the same file is accepted by the Argox Collector.
+- **Root cause:** The OTLP/JSON spec deviates from proto3 JSON: `traceId`/`spanId` must be **hex**. The Argox Collector ingests JSON via `google.protobuf.json_format`, which implements plain proto3 JSON (**base64** bytes). The two JSON dialects are mutually incompatible for byte fields.
+- **Fix:** Send protobuf (SDK default wire format) when going through the sidecar; the seed file targets the Collector directly. Noted in `deploy/docker/README.md`.
+- **Guard:** README note. Follow-up: accept hex IDs in the Collector's JSON ingest (COL-03 parser) for OTLP-spec compliance.
+
+## 2026-06-10 — Metrics window skewed by session time zone in DuckDB  [COL-06]
+- **Symptom:** Trailing-window metrics (`/api/v1/metrics/*`) silently included or excluded the wrong spans depending on the host's time zone: a 24h window evaluated on a UTC+2 machine shifted its cutoff by two hours. Found in PR #117's queries (`WHERE start_time >= CURRENT_TIMESTAMP - INTERVAL ...`) while reimplementing for PR #127.
+- **Root cause:** Span timestamps are stored as **naive UTC** (`_to_naive_utc` strips tzinfo before insert), but DuckDB's `CURRENT_TIMESTAMP` is a `TIMESTAMPTZ` evaluated in the session time zone. Comparing the two casts implicitly and offsets the window by the local UTC offset.
+- **Fix:** Compute the cutoff in Python (`_window_cutoff`): `datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=window_hours)` and bind it as a plain `TIMESTAMP` parameter, so both sides of the comparison are naive UTC.
+- **Guard:** `test_index_metrics_cost_respects_window` inserts a span 3 days old and asserts it is excluded at `window_hours=24` but included at `720`. General rule: never mix SQL `now()`/`CURRENT_TIMESTAMP` with the naive-UTC columns of this index.
+
+## 2026-06-09 — PostCSS error when using `tailwindcss` as a legacy plugin  [DASH-01]
+- **Symptom:** `Internal server error: [postcss] It looks like you're trying to use tailwindcss directly as a PostCSS plugin...` during `npm run dev`.
+- **Root cause:** Tailwind CSS v4 is installed, but the CSS was using legacy `@tailwind base;` etc. directives and the PostCSS config was referencing `@tailwindcss/postcss` while the CSS entry point hadn't been migrated to the v4 `@import "tailwindcss";` pattern.
+- **Fix:** Replaced `@tailwind` directives with `@import "tailwindcss";` in `argox-dashboard/src/index.css`.
+- **Guard:** Verified that `npx vite build` (which triggers PostCSS) completes successfully and generates valid CSS.
+
 ## 2026-06-09 — Durable ingest acknowledged batches it had actually lost  [COL-03]
 - **Symptom:** A `POST /v1/traces` with `X-Argox-Durable: true` returned 200 even when the blob write or DuckDB insert failed (disk full, Azure 5xx). The client believed the batch was committed; it was gone. The docstring/ADR promised "200 only once committed".
 - **Root cause:** `_persist` wrapped its whole body in `except Exception: logger.exception(...)` and never re-raised. That is correct for the background (fire-and-forget) path — the client was already acknowledged — but the durable path reused the same swallowing function and then returned 200 unconditionally, so a failure could not reach the response.

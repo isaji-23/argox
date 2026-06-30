@@ -11,6 +11,7 @@ from argox_collector.storage.azure import AzureBlobStorageBackend
 from argox_collector.storage.base import (
     BlobMetadata,
     BlobNotFoundError,
+    ConditionNotMetError,
     StorageBackend,
     StorageError,
     StoredBlob,
@@ -22,6 +23,7 @@ __all__ = [
     "AzureBlobStorageBackend",
     "BlobMetadata",
     "BlobNotFoundError",
+    "ConditionNotMetError",
     "LocalStorageBackend",
     "StorageBackend",
     "StorageError",

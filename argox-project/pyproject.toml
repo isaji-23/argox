@@ -6,6 +6,17 @@ line-length = 88
 select = ["E", "F", "I", "N", "UP", "B"]
 ignore = ["E501"]
 
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI's dependency-injection idiom puts these calls in argument defaults on
+# purpose; they are evaluated once at import, not per call, so B008 does not apply.
+extend-immutable-calls = [
+    "fastapi.Depends",
+    "fastapi.Query",
+    "fastapi.Path",
+    "argox_collector.auth.require_scope",
+    "argox_collector.auth.dependencies.require_scope",
+]
+
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"

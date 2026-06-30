@@ -24,6 +24,7 @@ from argox.interfaces.plugin import ArgoxPlugin, ToolArgsRunner
 from argox.interfaces.policy import PolicyClient
 from argox.interfaces.processor import ArgoxProcessor
 from argox.semconv.attributes import (
+    ARGOX_AGENT_NAME,
     ARGOX_POLICY_DECISION,
     ARGOX_POLICY_RULE_ID,
     ARGOX_PROCESSOR_APPLIED,
@@ -32,6 +33,7 @@ from argox.semconv.attributes import (
     ARGOX_PROCESSOR_STRICT,
     ARGOX_PROCESSOR_TOOL_NAME,
     ARGOX_RUN_BLOCKED_TOOLS,
+    ARGOX_RUN_SUCCESS,
     EVENT_PROCESSOR_APPLIED,
     EVENT_PROCESSOR_ERROR,
     SPAN_AGENT_RUN,
@@ -39,6 +41,11 @@ from argox.semconv.attributes import (
 
 _GEN_AI_INPUT_TOKENS = "gen_ai.usage.input_tokens"
 _GEN_AI_OUTPUT_TOKENS = "gen_ai.usage.output_tokens"
+# GenAI tool-span conventions, mirrored from argox-plugin-openai so a blocked
+# tool's span matches the shape of a real execute_tool span.
+_GEN_AI_OPERATION_NAME = "gen_ai.operation.name"
+_GEN_AI_TOOL_NAME = "gen_ai.tool.name"
+_OPERATION_EXECUTE_TOOL = "execute_tool"
 
 
 class ArgoxManager:
@@ -163,11 +170,31 @@ class ArgoxManager:
             metrics.phase_timings = {key: 0.0 for key in self._PHASE_KEYS}
         ctx = RunContext(run_id=metrics.run_id, agent_name=metrics.agent_name, metadata=metadata or {})
 
-        original_tools = _snapshot_tools(agent)
+        # Instrument a per-run copy of the agent instead of mutating the shared
+        # instance. The same ``Agent`` object is commonly driven by concurrent
+        # ``run()`` calls (singleton agent + concurrent requests); mutating its
+        # ``tools``/``hooks`` in place races across runs, leaking tool wrappers
+        # and recording one request's tool data into another's metrics. The copy
+        # gives each run its own ``tools`` list and ``hooks`` binding, so the
+        # shared agent is never touched (#153). If the agent cannot be copied,
+        # ``_prepare_run_agent`` falls back to instrumenting the shared instance
+        # and returns a restore callable that resets ``tools`` in the ``finally``,
+        # so even that path never leaks a wrapped tool list past the run.
+        run_agent, restore_run_agent = _prepare_run_agent(agent)
         applied_processors: list[str] = []
         tracer = trace.get_tracer("argox")
 
         with tracer.start_as_current_span(SPAN_AGENT_RUN) as span:
+            # Promoted by the Collector into the queryable agent name; set early so
+            # it is present even if the run raises before completion.
+            span.set_attribute(ARGOX_AGENT_NAME, metrics.agent_name)
+            # Link the run to its trace so the Collector's by-trace join
+            # (runs.trace_id = spans.trace_id) resolves; this id matches what the
+            # OTLP span exporter ships for the same span. Guarded because a
+            # sampled-out / non-recording span carries a zero trace id.
+            span_ctx = span.get_span_context()
+            if span_ctx.trace_id:
+                metrics.trace_id = format(span_ctx.trace_id, "032x")
             try:
                 # 1. Process input
                 with self._phase(metrics, "processors_input"):
@@ -185,26 +212,50 @@ class ArgoxManager:
                         _record_policy_block(span, result.rule_id, "input policy blocked")
                         record_policy_decision(decision="block", rule_id=result.rule_id)
                         raise PermissionError(f"[POLICY:{result.rule_id}] {result.reason}")
-                    record_policy_decision(decision="ok", rule_id=None)
+                    if result.rule_id:
+                        # Alert: a rule matched but does not block. Record the
+                        # violation and let the run continue (passed stays True).
+                        metrics.policy_violations.append(result.reason)
+                        record_policy_decision(decision="alert", rule_id=result.rule_id)
+                    else:
+                        record_policy_decision(decision="ok", rule_id=None)
 
                 # 3. Filter tools via policy
-                raw_tools = _extract_tool_names(agent) if tools is None else tools
+                raw_tools = _extract_tool_names(run_agent) if tools is None else tools
                 if self._policy is not None and raw_tools:
                     with self._phase(metrics, "tool_filter"):
                         for tool_name in raw_tools:
                             tool_result = await self._policy.is_tool_allowed(tool_name)
                             if tool_result.passed:
                                 metrics.tools_available.append(tool_name)
-                                record_policy_decision(decision="ok", rule_id=None)
+                                if tool_result.rule_id:
+                                    # Alert: tool stays available but is flagged.
+                                    metrics.policy_violations.append(tool_result.reason)
+                                    record_policy_decision(
+                                        decision="alert", rule_id=tool_result.rule_id
+                                    )
+                                else:
+                                    record_policy_decision(decision="ok", rule_id=None)
                             else:
                                 metrics.tools_blocked.append({"name": tool_name, "reason": tool_result.reason})
                                 record_policy_decision(decision="block", rule_id=tool_result.rule_id)
+                                # Emit a child span for the blocked tool so the
+                                # decision is queryable per tool (the Collector
+                                # only indexes policy decisions from spans). A
+                                # stripped tool never produces an execute_tool
+                                # span otherwise, so the block would be invisible
+                                # in the trace waterfall and the blocked-tool
+                                # metrics.
+                                _record_blocked_tool_span(
+                                    tracer, tool_name, tool_result.rule_id,
+                                    tool_result.reason,
+                                )
                     if metrics.tools_blocked:
                         span.set_attribute(
                             ARGOX_RUN_BLOCKED_TOOLS,
                             [t["name"] for t in metrics.tools_blocked],
                         )
-                    _apply_tool_filter(agent, metrics.tools_available)
+                    _apply_tool_filter(run_agent, metrics.tools_available)
                 else:
                     metrics.tools_available.extend(raw_tools)
 
@@ -221,7 +272,7 @@ class ArgoxManager:
                     tool_args_runner = _tool_args_runner
 
                 instrumented = plugin.instrument(
-                    agent, metrics, tool_args_runner=tool_args_runner,
+                    run_agent, metrics, tool_args_runner=tool_args_runner,
                 )
                 with self._phase(metrics, "agent_exec"):
                     raw_result = await runner(instrumented, processed_prompt)
@@ -252,7 +303,12 @@ class ArgoxManager:
                         _record_policy_block(span, result.rule_id, "output policy blocked")
                         record_policy_decision(decision="block", rule_id=result.rule_id)
                         raise PermissionError(f"[POLICY:{result.rule_id}] {result.reason}")
-                    record_policy_decision(decision="ok", rule_id=None)
+                    if result.rule_id:
+                        # Alert: output flagged but not blocked; run succeeds.
+                        metrics.policy_violations.append(result.reason)
+                        record_policy_decision(decision="alert", rule_id=result.rule_id)
+                    else:
+                        record_policy_decision(decision="ok", rule_id=None)
 
                 metrics.final_output = output
                 metrics.success = True
@@ -260,12 +316,19 @@ class ArgoxManager:
                 return output
 
             finally:
+                # Promoted by the Collector into ``spans.run_success`` for the
+                # success-rate card. ``metrics.success`` stays False on any error
+                # path, including a policy block, so a blocked run records False.
+                span.set_attribute(ARGOX_RUN_SUCCESS, metrics.success)
                 if applied_processors:
                     span.set_attribute(
                         ARGOX_PROCESSOR_APPLIED,
                         list(dict.fromkeys(applied_processors)),
                     )
-                _restore_tools(agent, original_tools)
+                # No-op when the agent was cloned; restores tools only on the
+                # uncopyable-agent fallback path so the shared instance is left
+                # as the caller passed it.
+                restore_run_agent()
                 if metrics.end_time is None:
                     metrics.end_time = time.time()
                 record_run_duration(
@@ -416,6 +479,27 @@ def _record_policy_block(span: Span, rule_id: str, message: str) -> None:
     span.set_status(Status(StatusCode.ERROR, message))
 
 
+def _record_blocked_tool_span(
+    tracer: trace.Tracer, tool_name: str, rule_id: str, reason: str,
+) -> None:
+    """Emit a zero-duration child span recording a policy-blocked tool.
+
+    A blocked tool is stripped before the run, so it never produces an
+    ``execute_tool`` span of its own. Emitting one here — named like the tool's
+    real span and carrying ``argox.policy.decision=block`` — lets the Collector
+    index the decision per tool, so the trace waterfall and the blocked-tool
+    metrics surface it. Created under the active ``argox.agent.run`` span, so it
+    nests as a child of the run.
+    """
+    with tracer.start_as_current_span(f"{_OPERATION_EXECUTE_TOOL} {tool_name}") as span:
+        span.set_attribute(_GEN_AI_OPERATION_NAME, _OPERATION_EXECUTE_TOOL)
+        span.set_attribute(_GEN_AI_TOOL_NAME, tool_name)
+        span.set_attribute(ARGOX_POLICY_DECISION, "block")
+        if rule_id:
+            span.set_attribute(ARGOX_POLICY_RULE_ID, rule_id)
+        span.set_status(Status(StatusCode.ERROR, f"tool blocked by policy: {reason}"))
+
+
 def _extract_tool_names(agent: Any) -> list[str]:
     """Pull tool names from an agent object that exposes a ``.tools`` attribute."""
     raw = getattr(agent, "tools", [])
@@ -428,17 +512,47 @@ def _extract_tool_names(agent: Any) -> list[str]:
     return names
 
 
-def _snapshot_tools(agent: Any) -> list | None:
-    """Return a shallow copy of agent.tools, or None if the attribute is absent."""
-    if not hasattr(agent, "tools"):
-        return None
-    return list(agent.tools)
+def _prepare_run_agent(agent: Any) -> tuple[Any, Callable[[], None]]:
+    """Return the agent to instrument for this run and a restore callable.
+
+    Instrumentation (policy tool-filtering and the plugin's ``hooks``/``tools``
+    rewrite) must not mutate the shared agent: the same instance is routinely
+    driven by concurrent ``run()`` calls, where in-place mutation races and
+    cross-contaminates runs (#153). The normal path returns a per-run shallow
+    copy that owns its own ``tools`` list, so a run's filtering and tool-wrapping
+    never reach the original or a sibling run, and the returned restore callable
+    is a no-op.
+
+    A shallow copy is sufficient: the manager and plugins only *rebind*
+    ``tools`` and ``hooks`` on the clone (never mutate shared nested objects in
+    place), and the plugin wraps tools onto copies of the originals.
+
+    Fallback: if the agent cannot be copied, the shared instance is instrumented
+    in place and the restore callable snapshots and resets ``agent.tools`` so the
+    wrapped/filtered tool list does not leak past the run. This matches the
+    pre-clone snapshot-and-restore semantics — it does not protect a *concurrent*
+    run on the same uncopyable agent, but a single run never leaks.
+    """
+    try:
+        clone = copy.copy(agent)
+    except Exception:
+        snapshot = list(agent.tools) if hasattr(agent, "tools") else None
+
+        def _restore() -> None:
+            if snapshot is not None:
+                agent.tools = snapshot
+
+        return agent, _restore
+    if hasattr(agent, "tools"):
+        try:
+            clone.tools = list(agent.tools)
+        except Exception:
+            pass
+    return clone, _noop
 
 
-def _restore_tools(agent: Any, snapshot: list | None) -> None:
-    """Restore agent.tools to its pre-run state."""
-    if snapshot is not None:
-        agent.tools = snapshot
+def _noop() -> None:
+    """Restore callable used when the agent was cloned (nothing to restore)."""
 
 
 def _apply_tool_filter(agent: Any, allowed: list[str]) -> None:
