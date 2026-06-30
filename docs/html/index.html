@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Argox — Explicadores visuales</title>
+<style>
+  :root {
+    --ink: #16181d;
+    --muted: #5c6370;
+    --line: #e6e8ec;
+    --bg: #fbfbfc;
+    --card: #ffffff;
+    --accent: #2f6df0;
+    --accent-soft: #eaf1fe;
+    --warn: #b25b00;
+    --warn-soft: #fff4e5;
+    --good: #1a7f4b;
+    --good-soft: #e9f7ef;
+    --code-bg: #0f1320;
+    --code-ink: #e7ecf5;
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 16px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  header.hero {
+    border-bottom: 1px solid var(--line);
+    background: radial-gradient(1200px 300px at 15% -40%, var(--accent-soft), transparent 60%), var(--card);
+    padding: 64px 24px 48px;
+  }
+  .wrap { max-width: 920px; margin: 0 auto; }
+  .eyebrow { font: 600 12px/1 var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--accent); margin: 0 0 14px; }
+  h1 { font-size: 2.6rem; line-height: 1.1; margin: 0 0 12px; letter-spacing: -.02em; }
+  .lede { font-size: 1.14rem; color: var(--muted); max-width: 62ch; margin: 0; }
+  main { padding: 40px 24px 80px; }
+  h2 { font-size: 1.4rem; letter-spacing: -.01em; margin: 0 0 16px; }
+  p { margin: 12px 0; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code { font: .88em var(--mono); background: #eef0f4; padding: .12em .4em; border-radius: 5px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; margin: 20px 0 32px; }
+  a.card {
+    display: block; background: var(--card); border: 1px solid var(--line); border-radius: 14px;
+    padding: 22px 22px; color: inherit; text-decoration: none; transition: border-color .15s, transform .15s, box-shadow .15s;
+  }
+  a.card:hover { border-color: var(--accent); transform: translateY(-2px); box-shadow: 0 8px 24px rgba(47,109,240,.08); text-decoration: none; }
+  .card .num { font: 600 .8rem var(--mono); color: var(--accent); letter-spacing: .06em; }
+  .card h3 { margin: 8px 0 6px; font-size: 1.12rem; }
+  .card p { margin: 0; font-size: .92rem; color: var(--muted); }
+  .callout { border-radius: 12px; padding: 14px 18px; margin: 18px 0; border: 1px solid; font-size: .95rem; }
+  .callout.note { background: var(--accent-soft); border-color: #cfe0fd; }
+  .callout.note strong { color: var(--accent); }
+  footer { color: var(--muted); font-size: .85rem; padding: 32px 24px; text-align: center; border-top: 1px solid var(--line); }
+  .kbd { font: .82em var(--mono); border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 6px; padding: 1px 6px; background: #fff; }
+  /* dark mode toggle */
+  .theme-toggle { position: fixed; top: 14px; right: 16px; z-index: 20; font: 600 12px var(--mono); color: var(--accent); background: var(--card); border: 1px solid var(--line); border-radius: 999px; padding: 7px 13px; cursor: pointer; box-shadow: 0 2px 8px rgba(0,0,0,.06); }
+  .theme-toggle:hover { border-color: var(--accent); }
+  :root[data-theme="dark"] { --ink:#e7ecf5; --muted:#9aa4b2; --line:#2a2f3a; --bg:#0e1119; --card:#161b27; --accent:#6ea0ff; --accent-soft:#1b2740; --warn:#e0a458; --warn-soft:#2c2316; --good:#5cd29a; --good-soft:#13241c; --code-bg:#0a0d16; --code-ink:#e7ecf5; }
+  [data-theme="dark"] code { background:#222a3a; color:#cdd6e8; }
+  [data-theme="dark"] pre code { background:none; }
+  [data-theme="dark"] nav.toc { background: rgba(14,17,25,.86); }
+  [data-theme="dark"] .diagram { background:#f5f7fb; }
+  [data-theme="dark"] .theme-toggle { box-shadow: 0 2px 8px rgba(0,0,0,.5); }
+</style>
+<script>
+(function(){var K='argox-theme',r=document.documentElement;var s=localStorage.getItem(K);var t=s||((window.matchMedia&&matchMedia('(prefers-color-scheme:dark)').matches)?'dark':'light');r.setAttribute('data-theme',t);function lbl(){var b=document.getElementById('themeToggle');if(b)b.textContent=r.getAttribute('data-theme')==='dark'?'☀ Claro':'☾ Oscuro';}window.__argoxTheme=function(){var n=r.getAttribute('data-theme')==='dark'?'light':'dark';r.setAttribute('data-theme',n);localStorage.setItem(K,n);lbl();};document.addEventListener('DOMContentLoaded',lbl);})();
+</script>
+</head>
+<body>
+
+<button id="themeToggle" class="theme-toggle" type="button" onclick="__argoxTheme()" aria-label="Cambiar modo claro/oscuro">☾ Oscuro</button>
+
+<header class="hero">
+  <div class="wrap">
+    <p class="eyebrow">Argox · Documentación</p>
+    <h1>Explicadores visuales</h1>
+    <p class="lede">Cuatro páginas autónomas que explican los conceptos más densos de Argox
+      con diagramas, en lugar de solo texto. Complementan la documentación Markdown de
+      <code>docs/</code>: aquí ves <em>cómo fluye</em>, allí lees el detalle exacto.</p>
+  </div>
+</header>
+
+<main class="wrap">
+  <h2>Elige un tema</h2>
+  <div class="grid">
+    <a class="card" href="policies.html">
+      <span class="num">01 · GOBERNANZA</span>
+      <h3>Sistema de políticas</h3>
+      <p>Anatomía de una política, los 3 triggers, 8 operadores y 3 acciones, la precedencia
+        block&nbsp;&gt;&nbsp;alert&nbsp;&gt;&nbsp;ok y los 3 puntos de enforcement.</p>
+    </a>
+    <a class="card" href="run-lifecycle.html">
+      <span class="num">02 · SDK</span>
+      <h3>Ciclo de vida del run</h3>
+      <p>Las 7 fases de <code>ArgoxManager.run()</code> dentro del span <code>argox.agent.run</code>,
+        y qué graba cada una.</p>
+    </a>
+    <a class="card" href="architecture.html">
+      <span class="num">03 · SISTEMA</span>
+      <h3>Arquitectura global</h3>
+      <p>SDK → Collector → Dashboard, la frontera de confianza y los contratos que los unen.</p>
+    </a>
+    <a class="card" href="ingest.html">
+      <span class="num">04 · COLLECTOR</span>
+      <h3>Ingesta del Collector</h3>
+      <p>Las dos rutas: trazas OTLP <code>/v1/traces</code> y runs <code>/v1/runs</code>;
+        decode → flatten → enrich → persist; durable vs async.</p>
+    </a>
+  </div>
+
+  <div class="callout note">
+    <strong>Complemento, no sustituto.</strong> Estos HTML son apoyo visual. La referencia
+    textual completa y exhaustiva está en los <code>.md</code> de
+    <a href="../README.md">docs/</a> (SDK, Collector, políticas y dashboard).
+  </div>
+</main>
+
+<footer>
+  Argox · explicadores visuales · self-contained, abren sin conexión · pareja de
+  <span class="kbd">docs/*.md</span>
+</footer>
+
+</body>
+</html>
